@@ -1,0 +1,32 @@
+# TODO - Piattaforma Gestione Magazzino Sucketo
+
+## Database e Schema
+- [x] Progettare schema database per rivenditori, prodotti, inventario, movimenti stock e alert
+- [x] Implementare tabelle con relazioni e indici ottimizzati
+- [x] Aggiungere campi specifici per prodotti alimentari (scadenza, lotto, certificazioni)
+
+## Backend API e Sincronizzazione
+- [x] Implementare gestione anagrafica rivenditori con credenziali API
+- [ ] Creare sistema di sincronizzazione con Fatture in Cloud (OAuth2)
+- [x] Sviluppare endpoint per prodotti e movimenti stock
+- [x] Implementare log completo movimenti magazzino
+- [x] Creare sistema di alert automatici per scorte minime e scadenze
+
+## Dashboard e Interfaccia
+- [x] Progettare layout dashboard con sidebar navigation
+- [x] Implementare dashboard principale con KPI aggregati e grafici
+- [ ] Creare pagina dettaglio singolo rivenditore
+- [x] Sviluppare gestione anagrafica prodotti centralizzata
+- [x] Implementare visualizzazione alert con gestione stato
+
+## Reportistica e Alert
+- [x] Creare pagina alert con visualizzazione e gestione stato
+- [ ] Implementare reportistica vendite per prodotto/rivenditore
+- [ ] Implementare analisi trend e suggerimenti riordino
+- [ ] Sviluppare sistema automatico generazione alert
+- [ ] Aggiungere notifiche email per alert critici
+
+## Test e Documentazione
+- [x] Scrivere test per procedure critiche
+- [ ] Creare documentazione tecnica
+- [ ] Preparare guida utente

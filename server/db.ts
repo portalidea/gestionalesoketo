@@ -1,6 +1,21 @@
-import { eq } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
+import { 
+  InsertUser, 
+  users,
+  retailers,
+  InsertRetailer,
+  products,
+  InsertProduct,
+  inventory,
+  InsertInventory,
+  stockMovements,
+  InsertStockMovement,
+  alerts,
+  InsertAlert,
+  syncLogs,
+  InsertSyncLog
+} from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -89,4 +104,211 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-// TODO: add feature queries here as your schema grows.
+// ============= RETAILERS =============
+
+export async function getAllRetailers() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(retailers).orderBy(retailers.name);
+}
+
+export async function getRetailerById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(retailers).where(eq(retailers.id, id)).limit(1);
+  return result[0];
+}
+
+export async function createRetailer(data: InsertRetailer) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(retailers).values(data);
+  return result;
+}
+
+export async function updateRetailer(id: number, data: Partial<InsertRetailer>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(retailers).set(data).where(eq(retailers.id, id));
+}
+
+export async function deleteRetailer(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(retailers).where(eq(retailers.id, id));
+}
+
+// ============= PRODUCTS =============
+
+export async function getAllProducts() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(products).orderBy(products.name);
+}
+
+export async function getProductById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(products).where(eq(products.id, id)).limit(1);
+  return result[0];
+}
+
+export async function getProductBySku(sku: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(products).where(eq(products.sku, sku)).limit(1);
+  return result[0];
+}
+
+export async function createProduct(data: InsertProduct) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(products).values(data);
+  return result;
+}
+
+export async function updateProduct(id: number, data: Partial<InsertProduct>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(products).set(data).where(eq(products.id, id));
+}
+
+export async function deleteProduct(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(products).where(eq(products.id, id));
+}
+
+// ============= INVENTORY =============
+
+export async function getInventoryByRetailer(retailerId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(inventory).where(eq(inventory.retailerId, retailerId));
+}
+
+export async function getInventoryItem(retailerId: number, productId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db
+    .select()
+    .from(inventory)
+    .where(and(eq(inventory.retailerId, retailerId), eq(inventory.productId, productId)))
+    .limit(1);
+  return result[0];
+}
+
+export async function upsertInventory(data: InsertInventory) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  
+  const existing = await getInventoryItem(data.retailerId, data.productId);
+  if (existing) {
+    await db.update(inventory)
+      .set({ ...data, lastUpdated: new Date() })
+      .where(eq(inventory.id, existing.id));
+    return existing.id;
+  } else {
+    const result = await db.insert(inventory).values(data);
+    return result[0].insertId;
+  }
+}
+
+// ============= STOCK MOVEMENTS =============
+
+export async function createStockMovement(data: InsertStockMovement) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(stockMovements).values(data);
+  return result;
+}
+
+export async function getStockMovementsByRetailer(retailerId: number, limit = 100) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(stockMovements)
+    .where(eq(stockMovements.retailerId, retailerId))
+    .orderBy(desc(stockMovements.timestamp))
+    .limit(limit);
+}
+
+export async function getStockMovementsByProduct(productId: number, limit = 100) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(stockMovements)
+    .where(eq(stockMovements.productId, productId))
+    .orderBy(desc(stockMovements.timestamp))
+    .limit(limit);
+}
+
+// ============= ALERTS =============
+
+export async function getActiveAlerts() {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(alerts)
+    .where(eq(alerts.status, "ACTIVE"))
+    .orderBy(desc(alerts.createdAt));
+}
+
+export async function getAlertsByRetailer(retailerId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(alerts)
+    .where(eq(alerts.retailerId, retailerId))
+    .orderBy(desc(alerts.createdAt));
+}
+
+export async function createAlert(data: InsertAlert) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(alerts).values(data);
+  return result;
+}
+
+export async function updateAlertStatus(
+  id: number,
+  status: "ACTIVE" | "ACKNOWLEDGED" | "RESOLVED",
+  userId?: number
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  
+  const updateData: any = { status };
+  if (status === "ACKNOWLEDGED") {
+    updateData.acknowledgedAt = new Date();
+    updateData.acknowledgedBy = userId;
+  } else if (status === "RESOLVED") {
+    updateData.resolvedAt = new Date();
+  }
+  
+  await db.update(alerts).set(updateData).where(eq(alerts.id, id));
+}
+
+// ============= SYNC LOGS =============
+
+export async function createSyncLog(data: InsertSyncLog) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(syncLogs).values(data);
+  return result;
+}
+
+export async function getSyncLogsByRetailer(retailerId: number, limit = 50) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(syncLogs)
+    .where(eq(syncLogs.retailerId, retailerId))
+    .orderBy(desc(syncLogs.startedAt))
+    .limit(limit);
+}
