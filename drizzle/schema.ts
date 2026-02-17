@@ -39,11 +39,13 @@ export const retailers = mysqlTable("retailers", {
   phone: varchar("phone", { length: 50 }),
   email: varchar("email", { length: 320 }),
   contactPerson: varchar("contactPerson", { length: 255 }),
-  // Credenziali per integrazione Fatture in Cloud
+  // Credenziali per integrazione Fatture in Cloud OAuth2
   fattureInCloudCompanyId: varchar("fattureInCloudCompanyId", { length: 100 }),
-  fattureInCloudApiKey: text("fattureInCloudApiKey"),
+  fattureInCloudAccessToken: text("fattureInCloudAccessToken"),
+  fattureInCloudRefreshToken: text("fattureInCloudRefreshToken"),
+  fattureInCloudTokenExpiresAt: timestamp("fattureInCloudTokenExpiresAt"),
   lastSyncAt: timestamp("lastSyncAt"),
-  syncEnabled: int("syncEnabled").default(1).notNull(), // 1 = enabled, 0 = disabled
+  syncEnabled: int("syncEnabled").default(0).notNull(), // 1 = enabled, 0 = disabled
   notes: text("notes"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

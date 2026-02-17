@@ -15,6 +15,13 @@
       "when": 1771328965215,
       "tag": "0001_skinny_screwball",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1771359963245,
+      "tag": "0002_special_millenium_guard",
+      "breakpoints": true
     }
   ]
 }

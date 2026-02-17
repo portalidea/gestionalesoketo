@@ -31,13 +31,14 @@ import {
 import { useRoute, useLocation } from "wouter";
 import { format } from "date-fns";
 import { it } from "date-fns/locale";
+import { FattureInCloudSync } from "@/components/FattureInCloudSync";
 
 export default function RetailerDetail() {
   const [, params] = useRoute("/retailers/:id");
   const [, setLocation] = useLocation();
   const retailerId = params?.id ? parseInt(params.id) : 0;
 
-  const { data, isLoading } = trpc.retailers.getDetails.useQuery(
+  const { data, isLoading, refetch } = trpc.retailers.getDetails.useQuery(
     { id: retailerId },
     { enabled: retailerId > 0 }
   );
@@ -248,6 +249,7 @@ export default function RetailerDetail() {
           <TabsList>
             <TabsTrigger value="inventory">Inventario</TabsTrigger>
             <TabsTrigger value="movements">Movimenti Stock</TabsTrigger>
+            <TabsTrigger value="sync">Sincronizzazione</TabsTrigger>
           </TabsList>
 
           <TabsContent value="inventory" className="space-y-4">
@@ -446,6 +448,15 @@ export default function RetailerDetail() {
                 </CardContent>
               </Card>
             )}
+          </TabsContent>
+
+          <TabsContent value="sync" className="space-y-4">
+            <FattureInCloudSync
+              retailerId={retailerId}
+              isConnected={!!retailer.fattureInCloudAccessToken}
+              lastSyncAt={retailer.lastSyncAt}
+              onSyncComplete={() => refetch()}
+            />
           </TabsContent>
         </Tabs>
       </div>

@@ -376,6 +376,53 @@ export const appRouter = router({
       };
     }),
   }),
+
+  // ============= FATTURE IN CLOUD SYNC =============
+  sync: router({
+    // Avvia sincronizzazione manuale per un rivenditore
+    syncRetailer: protectedProcedure
+      .input(z.object({ retailerId: z.number() }))
+      .mutation(async ({ input }) => {
+        const { syncRetailerData } = await import("./fattureincloud-sync");
+        return await syncRetailerData(input.retailerId);
+      }),
+
+    // Ottieni URL per OAuth
+    getAuthUrl: protectedProcedure
+      .input(z.object({ retailerId: z.number() }))
+      .query(async ({ input }) => {
+        const { getAuthorizationUrl, getOAuthConfig } = await import("./fattureincloud-oauth");
+        const config = getOAuthConfig();
+        
+        if (!config) {
+          throw new Error("OAuth configuration not available. Please configure FATTUREINCLOUD_CLIENT_ID, FATTUREINCLOUD_CLIENT_SECRET, and FATTUREINCLOUD_REDIRECT_URI in environment variables.");
+        }
+
+        const state = JSON.stringify({ retailerId: input.retailerId });
+        return { url: getAuthorizationUrl(config, state) };
+      }),
+
+    // Disconnetti account Fatture in Cloud
+    disconnect: protectedProcedure
+      .input(z.object({ retailerId: z.number() }))
+      .mutation(async ({ input }) => {
+        await db.updateRetailer(input.retailerId, {
+          fattureInCloudCompanyId: null,
+          fattureInCloudAccessToken: null,
+          fattureInCloudRefreshToken: null,
+          fattureInCloudTokenExpiresAt: null,
+          syncEnabled: 0,
+        });
+        return { success: true };
+      }),
+
+    // Ottieni log sincronizzazioni
+    getLogs: protectedProcedure
+      .input(z.object({ retailerId: z.number(), limit: z.number().optional() }))
+      .query(async ({ input }) => {
+        return await db.getSyncLogsByRetailer(input.retailerId, input.limit || 20);
+      }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;

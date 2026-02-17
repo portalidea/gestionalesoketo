@@ -38,3 +38,13 @@
 - [x] Aggiungere tabella inventario con quantità e scadenze
 - [x] Implementare sezione movimenti magazzino con tabs
 - [x] Aggiungere statistiche specifiche del rivenditore
+
+## Sincronizzazione Fatture in Cloud
+- [x] Configurare variabili ambiente per OAuth2 Fatture in Cloud
+- [x] Implementare flusso OAuth2 per autenticazione rivenditori
+- [x] Creare endpoint per sincronizzazione prodotti da Fatture in Cloud
+- [x] Implementare sincronizzazione inventario e movimenti stock
+- [x] Sviluppare webhook per ricevere aggiornamenti automatici
+- [x] Aggiungere interfaccia UI per connessione/disconnessione account
+- [x] Implementare log sincronizzazioni con stato e errori
+- [ ] Creare job schedulato per sincronizzazione periodica
