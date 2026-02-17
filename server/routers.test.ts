@@ -92,7 +92,7 @@ describe("Products Management", () => {
     const caller = appRouter.createCaller(ctx);
 
     const newProduct = {
-      sku: "TEST-001",
+      sku: `TEST-${Date.now()}`,
       name: "Pane Keto Test",
       category: "Pane",
       isLowCarb: 1,

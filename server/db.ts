@@ -123,7 +123,8 @@ export async function createRetailer(data: InsertRetailer) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const result = await db.insert(retailers).values(data);
-  return result;
+  const insertId = Number(result[0].insertId);
+  return await getRetailerById(insertId);
 }
 
 export async function updateRetailer(id: number, data: Partial<InsertRetailer>) {
@@ -164,7 +165,8 @@ export async function createProduct(data: InsertProduct) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const result = await db.insert(products).values(data);
-  return result;
+  const insertId = Number(result[0].insertId);
+  return await getProductById(insertId);
 }
 
 export async function updateProduct(id: number, data: Partial<InsertProduct>) {

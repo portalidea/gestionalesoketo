@@ -30,3 +30,11 @@
 - [x] Scrivere test per procedure critiche
 - [ ] Creare documentazione tecnica
 - [ ] Preparare guida utente
+
+## Pagina Dettaglio Rivenditore
+- [x] Creare endpoint backend per dettaglio rivenditore con inventario
+- [x] Implementare query per movimenti stock del rivenditore
+- [x] Sviluppare pagina dettaglio con informazioni rivenditore
+- [x] Aggiungere tabella inventario con quantità e scadenze
+- [x] Implementare sezione movimenti magazzino con tabs
+- [x] Aggiungere statistiche specifiche del rivenditore

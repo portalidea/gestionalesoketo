@@ -30,6 +30,80 @@ export const appRouter = router({
         return await db.getRetailerById(input.id);
       }),
 
+    getDetails: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        const retailer = await db.getRetailerById(input.id);
+        if (!retailer) return null;
+
+        const inventoryItems = await db.getInventoryByRetailer(input.id);
+        const recentMovements = await db.getStockMovementsByRetailer(input.id, 50);
+        const retailerAlerts = await db.getAlertsByRetailer(input.id);
+
+        // Arricchisci inventario con dati prodotto
+        const enrichedInventory = await Promise.all(
+          inventoryItems.map(async (item) => {
+            const product = await db.getProductById(item.productId);
+            return {
+              ...item,
+              product,
+            };
+          })
+        );
+
+        // Arricchisci movimenti con dati prodotto
+        const enrichedMovements = await Promise.all(
+          recentMovements.map(async (movement) => {
+            const product = await db.getProductById(movement.productId);
+            return {
+              ...movement,
+              product,
+            };
+          })
+        );
+
+        // Calcola statistiche rivenditore
+        let totalValue = 0;
+        let lowStockCount = 0;
+        let expiringCount = 0;
+
+        for (const item of enrichedInventory) {
+          if (item.product?.unitPrice) {
+            const price = parseFloat(item.product.unitPrice);
+            if (!isNaN(price)) {
+              totalValue += price * item.quantity;
+            }
+          }
+
+          if (item.product && item.quantity < (item.product.minStockThreshold || 10)) {
+            lowStockCount++;
+          }
+
+          if (item.expirationDate) {
+            const daysUntilExpiry = Math.floor(
+              (new Date(item.expirationDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+            );
+            if (daysUntilExpiry <= 30 && daysUntilExpiry > 0) {
+              expiringCount++;
+            }
+          }
+        }
+
+        return {
+          retailer,
+          inventory: enrichedInventory,
+          recentMovements: enrichedMovements,
+          alerts: retailerAlerts,
+          stats: {
+            totalValue: totalValue.toFixed(2),
+            totalItems: inventoryItems.length,
+            lowStockCount,
+            expiringCount,
+            activeAlertsCount: retailerAlerts.filter(a => a.status === 'ACTIVE').length,
+          },
+        };
+      }),
+
     create: protectedProcedure
       .input(z.object({
         name: z.string().min(1),
