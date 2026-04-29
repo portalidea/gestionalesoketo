@@ -12,8 +12,10 @@
  *  - Niente Vite middleware: Vercel serve direttamente i file statici
  *    da `dist/public` (vedi `outputDirectory` in vercel.json).
  *  - Niente static fallback: gestito da Vercel via rewrite SPA.
+ *  - Niente import di `server/_core/loadEnv`: Vercel inietta le env
+ *    vars dal pannello Project Settings; dotenv serve solo in dev e
+ *    viene caricato da `server/_core/index.ts`.
  */
-import "../server/_core/loadEnv";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import express from "express";
 import { createContext } from "../server/_core/context";
