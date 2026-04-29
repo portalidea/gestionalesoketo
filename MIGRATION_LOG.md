@@ -8,6 +8,96 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-04-29 — Step 3 — Migrazione Auth: Manus OAuth → Supabase Auth
+
+### Scenario scelto
+
+**Scenario 2 — multi-user admin senza per-retailer scoping**.
+Solo operatori SoKeto fanno login (admin/operator/viewer). I 13 retailers
+restano pura anagrafica, senza login proprio. Multi-tenant per i retailers
+è rimandato a Fase B (futura).
+
+### Schema + database
+
+- `users.role` enum riformato: `['user', 'admin']` → `['admin', 'operator', 'viewer']`. Default ora è `operator`.
+- `users` table: rimossi `openId`, `loginMethod`, `lastSignedIn`. `id` ora è UUID PRIMARY KEY senza default (popolato dal trigger). `email` ora è NOT NULL UNIQUE.
+- Nuova migration `0001_auth_supabase.sql` (drizzle-generata) per il refactor della tabella.
+- Nuova migration manuale `0002_auth_supabase_integration.sql` con:
+  - FK `public.users.id → auth.users.id ON DELETE CASCADE`.
+  - Trigger `on_auth_user_created` che chiama `public.handle_new_user()`: a ogni signup su `auth.users` crea la riga in `public.users` con role default `operator` e nome derivato da `raw_user_meta_data.name` o dalla parte locale dell'email.
+  - Helper SQL `public.current_user_role()` (SECURITY DEFINER, evita ricorsione RLS).
+  - RLS abilitato su tutte le 7 tabelle.
+  - Policy `users`: SELECT/UPDATE self-or-admin; INSERT/DELETE solo admin.
+  - Policy app tables (`retailers`, `products`, `inventory`, `stockMovements`, `alerts`, `syncLogs`): SELECT a qualunque utente authenticated; INSERT/UPDATE/DELETE solo `admin` o `operator` (viewer read-only).
+
+Nota: il backend usa il ruolo postgres del pooler (BYPASSRLS), quindi le policy non bloccano l'app server-side. Sono protezione defense-in-depth per accessi diretti via Supabase JS client (futuri scenari).
+
+### Server refactor
+
+- **Eliminati** (non più usati in prod, helper Manus): `server/storage.ts`, `server/_core/oauth.ts`, `server/_core/sdk.ts`, `server/_core/cookies.ts`, `server/_core/dataApi.ts`, `server/_core/llm.ts`, `server/_core/imageGeneration.ts`, `server/_core/notification.ts`, `server/_core/voiceTranscription.ts`, `server/_core/map.ts`, `server/_core/types/manusTypes.ts`, `server/_core/types/cookie.d.ts`, `client/src/components/Map.tsx`.
+- **Nuovo**: `server/_core/supabase.ts` — admin client con service_role key per operazioni admin (invite/delete user).
+- **Riscritto** `server/_core/context.ts`: estrae `Bearer <jwt>` da `Authorization` header, verifica con `SUPABASE_JWT_SECRET` (HS256), carica profilo da `public.users`. Niente più cookie, niente più `sdk.authenticateRequest`.
+- **Esteso** `server/_core/trpc.ts`: aggiunto `writerProcedure` (admin/operator, esclude viewer) tra `protectedProcedure` e `adminProcedure`. Tutte le mutation applicative ora usano `writerProcedure`; le sole-admin (`users.invite/updateRole/delete`, `system.notifyOwner` rimosso) restano su `adminProcedure`.
+- `server/_core/env.ts`: rimosse vars Manus (`appId`, `cookieSecret`, `oAuthServerUrl`, `ownerOpenId`, `forgeApiUrl`, `forgeApiKey`). Aggiunte: `supabase.{url,anonKey,serviceRoleKey,jwtSecret}`, `ownerEmail`, `fattureInCloud.*`. Fail-fast all'avvio se mancano variabili required.
+- `server/_core/systemRouter.ts`: rimosso `notifyOwner` (dipendeva da Manus Forge); resta solo `health`.
+- `server/_core/index.ts`: rimosso `registerOAuthRoutes`.
+- `server/db.ts`: rimossa `upsertUser` (gestita ora dal trigger), `getUserByOpenId`. Aggiunte `getUserById`, `getAllUsers`, `updateUserRole`, `deleteUser`.
+
+### Routers
+
+- `server/routers.ts` riscritto con tipi `z.string().uuid()` per tutti gli `id` di tabelle UUID. Mutation passate da `protectedProcedure` a `writerProcedure` (escludono viewer).
+- Nuovo router `users` (admin-only): `list`, `invite` (manda magic link via `supabaseAdmin.auth.admin.inviteUserByEmail`), `updateRole`, `delete`.
+- `auth.logout` rimosso: il logout è gestito client-side da `supabase.auth.signOut()`. Resta solo `auth.me`.
+
+### Client refactor
+
+- Installato `@supabase/supabase-js`.
+- Nuovo `client/src/lib/supabase.ts` con `createClient` PKCE flow + `detectSessionInUrl`.
+- Nuova pagina `/login` (`pages/Login.tsx`): form email → `supabase.auth.signInWithOtp({ shouldCreateUser: false })` → conferma "controlla la tua email".
+- Nuova pagina `/auth/callback` (`pages/AuthCallback.tsx`): polling breve su `getSession()`, redirect a `/` quando la sessione è creata.
+- Nuova pagina `/settings/team` (`pages/Team.tsx`, admin-only): lista utenti, invito email, cambio ruolo, delete.
+- `useAuth` riscritto: subscribe a `supabase.auth.onAuthStateChange`, query tRPC `auth.me` solo se sessione presente, redirect automatico a `/login` se richiesto.
+- `main.tsx`: tRPC client ora aggiunge `Authorization: Bearer <jwt>` a ogni richiesta tramite `headers()` dinamico. Niente più `credentials: 'include'`.
+- `client/src/const.ts`: rimosso `getLoginUrl` Manus, sostituito da `LOGIN_PATH = '/login'`.
+- `App.tsx`: route `/login`, `/auth/callback`, `/settings/team`.
+- `DashboardLayout`: `useAuth({ redirectOnUnauthenticated: true })`, voce "Team" nel menu solo per admin.
+- `RetailerDetail`: `parseInt(params.id)` → uso diretto della stringa UUID.
+- `FattureInCloudSync`: `retailerId: number` → `string`.
+
+### Vite/build cleanup
+
+- `vite.config.ts`: rimossi plugin `@builder.io/vite-plugin-jsx-loc`, `vite-plugin-manus-runtime`, custom `vitePluginManusDebugCollector`, `allowedHosts` Manus. Pulito e minimale.
+- `package.json`: rimossi `@builder.io/vite-plugin-jsx-loc`, `vite-plugin-manus-runtime`, e il pacchetto residuo `add` (refuso storico).
+
+### Provisioning admin
+
+- Nuovo script `scripts/create-admin.ts`: crea utente Supabase via Admin API (idempotente), promuove a `admin` in `public.users`, manda magic link automatico. Eseguibile con `pnpm exec tsx scripts/create-admin.ts info@soketo.it`.
+
+### Stato DB post-migration
+
+```
+users           id=uuid, email NOT NULL UNIQUE, role enum admin/operator/viewer
+RLS abilitato:  users, retailers, products, inventory, stockMovements, alerts, syncLogs (7/7)
+trigger:        on_auth_user_created su auth.users → public.handle_new_user
+user_role:      admin, operator, viewer
+```
+
+### Punti di attenzione
+
+1. **Configurazione Supabase Dashboard NECESSARIA**:
+   - Auth → Providers: assicurarsi che "Email" sia abilitato e che "Confirm email" sia attivo (per magic link). Disabilitare social provider (non li usiamo).
+   - Auth → URL Configuration: aggiungere `http://localhost:3000/auth/callback` e l'URL di production agli "Additional redirect URLs".
+   - Auth → Email Templates: tradurre i template "Magic Link" in italiano (Subject + Body). Default è inglese.
+   - Auth → User Management: NON consentire signup pubblico (`Disable signups: ON`) — gli utenti devono essere invitati da admin via `/settings/team`.
+
+2. **Bootstrap admin**: dopo il deploy o appena pronto in locale, eseguire `pnpm exec tsx scripts/create-admin.ts info@soketo.it`. Il primo admin entra via magic link, poi può invitare altri da `/settings/team`.
+
+3. **Cookie HttpOnly → localStorage**: la sessione Supabase JS è in localStorage (default). Per migliore sicurezza in futuro si può migrare a `@supabase/ssr` con cookie HttpOnly + middleware Express per il refresh.
+
+4. **MIGRATION_PLAN sezione FIC**: il `redirectUri` Fatture in Cloud va aggiornato al cutover col nuovo dominio Vercel.
+
+---
+
 ## 2026-04-29 — Step 2 — Schema + dati MySQL → Postgres/Supabase
 
 ### File modificati / creati

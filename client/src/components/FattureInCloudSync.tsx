@@ -17,7 +17,7 @@ import { format } from "date-fns";
 import { it } from "date-fns/locale";
 
 interface FattureInCloudSyncProps {
-  retailerId: number;
+  retailerId: string;
   isConnected: boolean;
   lastSyncAt?: Date | null;
   onSyncComplete?: () => void;

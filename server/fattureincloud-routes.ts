@@ -25,11 +25,14 @@ router.get("/fattureincloud/callback", async (req, res) => {
       return res.status(400).send("Missing state parameter");
     }
 
-    // Parse state per ottenere retailerId
-    let retailerId: number;
+    // Parse state per ottenere retailerId (UUID)
+    let retailerId: string;
     try {
       const stateData = JSON.parse(state);
       retailerId = stateData.retailerId;
+      if (typeof retailerId !== "string" || retailerId.length === 0) {
+        throw new Error("retailerId missing");
+      }
     } catch (error) {
       return res.status(400).send("Invalid state parameter");
     }

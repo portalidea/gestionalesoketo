@@ -2,7 +2,6 @@ import { eq, and, desc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
-  InsertUser,
   users,
   retailers,
   InsertRetailer,
@@ -17,7 +16,6 @@ import {
   syncLogs,
   InsertSyncLog,
 } from "../drizzle/schema";
-import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _client: ReturnType<typeof postgres> | null = null;
@@ -39,78 +37,37 @@ export async function getDb() {
   return _db;
 }
 
-export async function upsertUser(user: InsertUser): Promise<void> {
-  if (!user.openId) {
-    throw new Error("User openId is required for upsert");
-  }
+// ============= USERS =============
 
+export async function getUserById(id: string) {
   const db = await getDb();
-  if (!db) {
-    console.warn("[Database] Cannot upsert user: database not available");
-    return;
-  }
-
-  try {
-    const values: InsertUser = {
-      openId: user.openId,
-    };
-    const updateSet: Record<string, unknown> = {};
-
-    const textFields = ["name", "email", "loginMethod"] as const;
-    type TextField = (typeof textFields)[number];
-
-    const assignNullable = (field: TextField) => {
-      const value = user[field];
-      if (value === undefined) return;
-      const normalized = value ?? null;
-      values[field] = normalized;
-      updateSet[field] = normalized;
-    };
-
-    textFields.forEach(assignNullable);
-
-    if (user.lastSignedIn !== undefined) {
-      values.lastSignedIn = user.lastSignedIn;
-      updateSet.lastSignedIn = user.lastSignedIn;
-    }
-    if (user.role !== undefined) {
-      values.role = user.role;
-      updateSet.role = user.role;
-    } else if (user.openId === ENV.ownerOpenId) {
-      values.role = "admin";
-      updateSet.role = "admin";
-    }
-
-    if (!values.lastSignedIn) {
-      values.lastSignedIn = new Date();
-    }
-
-    if (Object.keys(updateSet).length === 0) {
-      updateSet.lastSignedIn = new Date();
-    }
-    // updatedAt non si aggiorna automaticamente in Postgres: settiamolo esplicitamente.
-    updateSet.updatedAt = new Date();
-
-    await db.insert(users).values(values).onConflictDoUpdate({
-      target: users.openId,
-      set: updateSet,
-    });
-  } catch (error) {
-    console.error("[Database] Failed to upsert user:", error);
-    throw error;
-  }
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+  return result[0];
 }
 
-export async function getUserByOpenId(openId: string) {
+export async function getAllUsers() {
   const db = await getDb();
-  if (!db) {
-    console.warn("[Database] Cannot get user: database not available");
-    return undefined;
-  }
+  if (!db) return [];
+  return db.select().from(users).orderBy(users.email);
+}
 
-  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+export async function updateUserRole(id: string, role: "admin" | "operator" | "viewer") {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(users)
+    .set({ role, updatedAt: new Date() })
+    .where(eq(users.id, id));
+}
 
-  return result.length > 0 ? result[0] : undefined;
+export async function deleteUser(id: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  // Cancellando da auth.users il trigger CASCADE rimuove anche public.users.
+  // Qui gestiamo solo public.users; la rimozione da auth deve passare per
+  // supabaseAdmin.auth.admin.deleteUser nel router.
+  await db.delete(users).where(eq(users.id, id));
 }
 
 // ============= RETAILERS =============

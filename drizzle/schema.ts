@@ -4,31 +4,25 @@ import { integer, pgEnum, pgTable, text, timestamp, uuid, varchar } from "drizzl
 /**
  * Postgres enums (definiti separatamente, riutilizzabili).
  */
-export const userRoleEnum = pgEnum("user_role", ["user", "admin"]);
+export const userRoleEnum = pgEnum("user_role", ["admin", "operator", "viewer"]);
 export const stockMovementTypeEnum = pgEnum("stock_movement_type", ["IN", "OUT", "ADJUSTMENT"]);
 export const alertTypeEnum = pgEnum("alert_type", ["LOW_STOCK", "EXPIRING", "EXPIRED"]);
 export const alertStatusEnum = pgEnum("alert_status", ["ACTIVE", "ACKNOWLEDGED", "RESOLVED"]);
 export const syncStatusEnum = pgEnum("sync_status", ["SUCCESS", "FAILED", "PARTIAL"]);
 
 /**
- * Core user table.
- *
- * id usa uuid per allinearsi a Supabase Auth (auth.users.id è uuid).
- * In step successivo: id verrà valorizzato dal Supabase Auth trigger,
- * e openId sarà rimosso a favore di una FK verso auth.users.
+ * Profilo applicativo dell'operatore SoKeto.
+ * `id` è 1:1 con `auth.users.id` di Supabase Auth: la riga viene creata da un trigger
+ * (vedi migration `0002_auth_supabase_integration.sql`) al primo login con magic link.
+ * Niente openId/loginMethod legacy: l'identità è gestita interamente da Supabase Auth.
  */
 export const users = pgTable("users", {
-  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  // Manus OAuth identifier — mantenuto temporaneamente per compat dump.
-  // Verrà rimosso quando il flusso Auth migrerà su Supabase.
-  openId: varchar("openId", { length: 64 }).notNull().unique(),
+  id: uuid("id").primaryKey(),
+  email: varchar("email", { length: 320 }).notNull().unique(),
   name: text("name"),
-  email: varchar("email", { length: 320 }),
-  loginMethod: varchar("loginMethod", { length: 64 }),
-  role: userRoleEnum("role").default("user").notNull(),
+  role: userRoleEnum("role").default("operator").notNull(),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
-  lastSignedIn: timestamp("lastSignedIn", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export type User = typeof users.$inferSelect;

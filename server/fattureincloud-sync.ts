@@ -24,7 +24,7 @@ export interface SyncResult {
 /**
  * Sincronizza tutti i dati per un rivenditore
  */
-export async function syncRetailerData(retailerId: number): Promise<SyncResult> {
+export async function syncRetailerData(retailerId: string): Promise<SyncResult> {
   const result: SyncResult = {
     success: false,
     productsSync: 0,
@@ -144,7 +144,7 @@ export async function syncRetailerData(retailerId: number): Promise<SyncResult> 
  * Sincronizza prodotti da Fatture in Cloud
  */
 async function syncProducts(
-  retailerId: number,
+  retailerId: string,
   companyId: number,
   accessToken: string
 ): Promise<number> {
@@ -185,7 +185,7 @@ async function syncProducts(
  * Sincronizza inventario da Fatture in Cloud
  */
 async function syncInventory(
-  retailerId: number,
+  retailerId: string,
   companyId: number,
   accessToken: string
 ): Promise<number> {
@@ -222,7 +222,7 @@ async function syncInventory(
  * Sincronizza movimenti stock da documenti
  */
 async function syncMovements(
-  retailerId: number,
+  retailerId: string,
   companyId: number,
   accessToken: string,
   startDate: string,

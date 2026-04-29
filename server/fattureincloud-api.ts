@@ -141,7 +141,7 @@ export function mapFICProductToInternal(ficProduct: FICProduct) {
  */
 export function extractStockMovementsFromDocuments(
   documents: FICDocument[],
-  retailerId: number
+  _retailerId: string
 ): Array<{
   productCode: string;
   productName: string;

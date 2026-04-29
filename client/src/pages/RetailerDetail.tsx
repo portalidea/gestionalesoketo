@@ -36,11 +36,11 @@ import { FattureInCloudSync } from "@/components/FattureInCloudSync";
 export default function RetailerDetail() {
   const [, params] = useRoute("/retailers/:id");
   const [, setLocation] = useLocation();
-  const retailerId = params?.id ? parseInt(params.id) : 0;
+  const retailerId = params?.id ?? "";
 
   const { data, isLoading, refetch } = trpc.retailers.getDetails.useQuery(
     { id: retailerId },
-    { enabled: retailerId > 0 }
+    { enabled: retailerId.length > 0 }
   );
 
   if (isLoading) {
