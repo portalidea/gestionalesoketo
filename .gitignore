@@ -6,8 +6,6 @@
 dist/
 build/
 *.dist
-# Vercel serverless function bundle (built by `pnpm build:api`)
-api/index.js
 
 # Environment variables
 .env

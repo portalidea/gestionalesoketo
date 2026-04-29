@@ -5,8 +5,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "NODE_ENV=development tsx watch server/_core/index.ts",
-    "build": "vite build && pnpm build:api",
-    "build:api": "esbuild server/vercel-entry.ts --bundle --platform=node --target=node20 --format=esm --packages=external --alias:@shared=./shared --outfile=api/index.js",
+    "build": "vite build",
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run",

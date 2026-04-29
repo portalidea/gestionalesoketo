@@ -4,8 +4,10 @@
   "outputDirectory": "dist/public",
   "framework": null,
   "functions": {
-    "api/index.js": {
-      "maxDuration": 60
+    "api/index.ts": {
+      "maxDuration": 60,
+      "includeFiles": "{server,shared,drizzle}/**",
+      "excludeFiles": "**/*.test.ts"
     }
   },
   "rewrites": [
