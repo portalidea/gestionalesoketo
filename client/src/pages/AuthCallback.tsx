@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import type { Session } from "@supabase/supabase-js";
 import { useEffect, useRef, useState } from "react";
 
 type LogLevel = "info" | "warn" | "error" | "success";
@@ -9,7 +10,8 @@ interface LogEntry {
   timestamp: string;
 }
 
-const REDIRECT_DELAY_MS = 5000;
+const REDIRECT_DELAY_MS = 1500;
+const SIGNED_IN_TIMEOUT_MS = 4000;
 
 export default function AuthCallback() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -39,6 +41,57 @@ export default function AuthCallback() {
     );
   };
 
+  const waitForSignedInOrSession = async (): Promise<Session | null> => {
+    const { data } = await supabase.auth.getSession();
+    if (data.session) {
+      appendLog(
+        "success",
+        `getSession() conferma sessione persistita. user.id=${data.session.user.id}`,
+      );
+      return data.session;
+    }
+
+    appendLog(
+      "warn",
+      "getSession() non restituisce ancora la sessione: aspetto evento SIGNED_IN…",
+    );
+
+    return new Promise<Session | null>((resolve) => {
+      let resolved = false;
+      const settle = (value: Session | null) => {
+        if (resolved) return;
+        resolved = true;
+        try {
+          listener?.data.subscription.unsubscribe();
+        } catch {
+          // ignore
+        }
+        clearTimeout(timer);
+        resolve(value);
+      };
+
+      const listener = supabase.auth.onAuthStateChange(
+        (event, newSession) => {
+          appendLog(
+            "info",
+            `onAuthStateChange → event="${event}" hasSession=${Boolean(newSession)}`,
+          );
+          if (event === "SIGNED_IN" && newSession) {
+            settle(newSession);
+          }
+        },
+      );
+
+      const timer = setTimeout(() => {
+        appendLog(
+          "warn",
+          `Timeout ${SIGNED_IN_TIMEOUT_MS}ms in attesa di SIGNED_IN — proseguo comunque.`,
+        );
+        settle(null);
+      }, SIGNED_IN_TIMEOUT_MS);
+    });
+  };
+
   useEffect(() => {
     cancelledRef.current = false;
 
@@ -47,30 +100,6 @@ export default function AuthCallback() {
       const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
 
       appendLog("info", `URL completo: ${window.location.href}`);
-
-      const queryEntries = Array.from(url.searchParams.entries());
-      if (queryEntries.length === 0) {
-        appendLog("info", "Query string: (vuota)");
-      } else {
-        appendLog(
-          "info",
-          `Query params: ${queryEntries
-            .map(([k, v]) => `${k}=${v.length > 60 ? v.slice(0, 60) + "…" : v})`)
-            .join(", ")}`,
-        );
-      }
-
-      const hashEntries = Array.from(hashParams.entries());
-      if (hashEntries.length === 0) {
-        appendLog("info", "Hash fragment: (vuoto)");
-      } else {
-        appendLog(
-          "info",
-          `Hash params: ${hashEntries
-            .map(([k, v]) => `${k}=${v.length > 60 ? v.slice(0, 60) + "…" : v})`)
-            .join(", ")}`,
-        );
-      }
 
       const errorParam =
         url.searchParams.get("error") ?? hashParams.get("error");
@@ -109,7 +138,7 @@ export default function AuthCallback() {
               `Dettagli errore: ${JSON.stringify(exchangeError, Object.getOwnPropertyNames(exchangeError))}`,
             );
           } catch {
-            // ignore stringify failures
+            // ignore
           }
           scheduleRedirect("/login");
           return;
@@ -118,7 +147,7 @@ export default function AuthCallback() {
         if (!data.session) {
           appendLog(
             "error",
-            "exchangeCodeForSession non ha restituito errori, ma data.session è null/undefined.",
+            "exchangeCodeForSession non ha errori ma data.session è null/undefined.",
           );
           scheduleRedirect("/login");
           return;
@@ -126,8 +155,13 @@ export default function AuthCallback() {
 
         appendLog(
           "success",
-          `Sessione creata. user.id=${data.session.user.id} email=${data.session.user.email ?? "(none)"} expires_at=${data.session.expires_at ?? "n/a"}`,
+          `Exchange OK. user.id=${data.session.user.id} email=${data.session.user.email ?? "(none)"} expires_at=${data.session.expires_at ?? "n/a"}`,
         );
+
+        // Aspettiamo che la sessione sia visibile a getSession() / che arrivi
+        // SIGNED_IN, così sappiamo che il pickup post-reload è solido.
+        await waitForSignedInOrSession();
+
         scheduleRedirect("/");
         return;
       }
