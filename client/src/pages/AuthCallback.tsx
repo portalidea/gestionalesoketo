@@ -8,31 +8,85 @@ export default function AuthCallback() {
   useEffect(() => {
     let cancelled = false;
 
-    const finalize = async () => {
-      // Supabase JS con detectSessionInUrl + flowType pkce gestisce
-      // automaticamente l'exchange. Aspettiamo che venga creata la sessione.
+    const run = async () => {
       const url = new URL(window.location.href);
-      const errorDescription = url.searchParams.get("error_description");
+      const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
+
+      // 1. Errore esplicito da Supabase (in query o nel fragment).
+      const errorDescription =
+        url.searchParams.get("error_description") ??
+        hashParams.get("error_description");
       if (errorDescription) {
+        console.error("[Auth callback] Supabase returned error:", {
+          error: url.searchParams.get("error") ?? hashParams.get("error"),
+          error_description: errorDescription,
+          full_url: window.location.href,
+        });
         if (!cancelled) setError(errorDescription);
         return;
       }
 
-      // Polling breve in caso il listener async non abbia ancora completato.
-      for (let attempt = 0; attempt < 20; attempt++) {
-        const { data } = await supabase.auth.getSession();
-        if (data.session) {
-          if (!cancelled) {
-            window.location.replace("/");
-          }
+      // 2. PKCE flow (default per signInWithOtp): ?code=xxx in query.
+      const code = url.searchParams.get("code");
+      if (code) {
+        console.log("[Auth callback] Exchanging PKCE code for session…");
+        const { data, error: exchangeError } =
+          await supabase.auth.exchangeCodeForSession(code);
+        if (exchangeError) {
+          console.error("[Auth callback] exchangeCodeForSession failed:", {
+            message: exchangeError.message,
+            status: (exchangeError as { status?: number }).status,
+            name: exchangeError.name,
+            full: exchangeError,
+          });
+          if (!cancelled) setError(exchangeError.message);
           return;
         }
-        await new Promise((r) => setTimeout(r, 150));
+        if (!data.session) {
+          console.error("[Auth callback] No session returned after exchange.");
+          if (!cancelled) setError("Sessione non creata dopo lo scambio del codice.");
+          return;
+        }
+        if (!cancelled) {
+          console.log("[Auth callback] Session established, redirecting /");
+          window.location.replace("/");
+        }
+        return;
       }
-      if (!cancelled) setError("Sessione non ottenuta. Riprova dal link nell'email.");
+
+      // 3. Implicit / hash flow: #access_token=xxx (es. recovery flow vecchio).
+      if (hashParams.get("access_token")) {
+        console.log("[Auth callback] Hash-based session, waiting for SDK to pick it up");
+        for (let attempt = 0; attempt < 20; attempt++) {
+          const { data } = await supabase.auth.getSession();
+          if (data.session) {
+            if (!cancelled) window.location.replace("/");
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 150));
+        }
+        if (!cancelled) {
+          setError("Sessione non ottenuta dal token nel fragment URL.");
+        }
+        return;
+      }
+
+      // 4. Nessun parametro utile.
+      console.error("[Auth callback] No code or token in URL:", window.location.href);
+      if (!cancelled) {
+        setError(
+          "Nessun codice di autenticazione trovato nell'URL. Apri il link più recente dall'email.",
+        );
+      }
     };
 
-    finalize();
+    run().catch((err) => {
+      console.error("[Auth callback] unexpected error:", err);
+      if (!cancelled) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    });
+
     return () => {
       cancelled = true;
     };
@@ -43,7 +97,7 @@ export default function AuthCallback() {
       {error ? (
         <div className="max-w-md text-center space-y-4 px-6">
           <h1 className="text-lg font-medium">Login non riuscito</h1>
-          <p className="text-sm text-muted-foreground">{error}</p>
+          <p className="text-sm text-muted-foreground break-words">{error}</p>
           <a href="/login" className="text-sm text-primary underline">
             Torna alla pagina di login
           </a>
