@@ -1,7 +1,8 @@
 import { eq, and, desc } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
-import { 
-  InsertUser, 
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+import {
+  InsertUser,
   users,
   retailers,
   InsertRetailer,
@@ -14,17 +15,22 @@ import {
   alerts,
   InsertAlert,
   syncLogs,
-  InsertSyncLog
+  InsertSyncLog,
 } from "../drizzle/schema";
-import { ENV } from './_core/env';
+import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
+let _client: ReturnType<typeof postgres> | null = null;
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      _client = postgres(process.env.DATABASE_URL, {
+        prepare: false, // pgbouncer (Supabase pooler) compat
+        max: 1,
+      });
+      _db = drizzle(_client);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -71,8 +77,8 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = user.role;
       updateSet.role = user.role;
     } else if (user.openId === ENV.ownerOpenId) {
-      values.role = 'admin';
-      updateSet.role = 'admin';
+      values.role = "admin";
+      updateSet.role = "admin";
     }
 
     if (!values.lastSignedIn) {
@@ -82,8 +88,11 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     if (Object.keys(updateSet).length === 0) {
       updateSet.lastSignedIn = new Date();
     }
+    // updatedAt non si aggiorna automaticamente in Postgres: settiamolo esplicitamente.
+    updateSet.updatedAt = new Date();
 
-    await db.insert(users).values(values).onDuplicateKeyUpdate({
+    await db.insert(users).values(values).onConflictDoUpdate({
+      target: users.openId,
       set: updateSet,
     });
   } catch (error) {
@@ -112,7 +121,7 @@ export async function getAllRetailers() {
   return db.select().from(retailers).orderBy(retailers.name);
 }
 
-export async function getRetailerById(id: number) {
+export async function getRetailerById(id: string) {
   const db = await getDb();
   if (!db) return undefined;
   const result = await db.select().from(retailers).where(eq(retailers.id, id)).limit(1);
@@ -122,18 +131,20 @@ export async function getRetailerById(id: number) {
 export async function createRetailer(data: InsertRetailer) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(retailers).values(data);
-  const insertId = Number(result[0].insertId);
-  return await getRetailerById(insertId);
+  const [row] = await db.insert(retailers).values(data).returning();
+  return row;
 }
 
-export async function updateRetailer(id: number, data: Partial<InsertRetailer>) {
+export async function updateRetailer(id: string, data: Partial<InsertRetailer>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(retailers).set(data).where(eq(retailers.id, id));
+  await db
+    .update(retailers)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(retailers.id, id));
 }
 
-export async function deleteRetailer(id: number) {
+export async function deleteRetailer(id: string) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(retailers).where(eq(retailers.id, id));
@@ -147,7 +158,7 @@ export async function getAllProducts() {
   return db.select().from(products).orderBy(products.name);
 }
 
-export async function getProductById(id: number) {
+export async function getProductById(id: string) {
   const db = await getDb();
   if (!db) return undefined;
   const result = await db.select().from(products).where(eq(products.id, id)).limit(1);
@@ -164,18 +175,20 @@ export async function getProductBySku(sku: string) {
 export async function createProduct(data: InsertProduct) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(products).values(data);
-  const insertId = Number(result[0].insertId);
-  return await getProductById(insertId);
+  const [row] = await db.insert(products).values(data).returning();
+  return row;
 }
 
-export async function updateProduct(id: number, data: Partial<InsertProduct>) {
+export async function updateProduct(id: string, data: Partial<InsertProduct>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(products).set(data).where(eq(products.id, id));
+  await db
+    .update(products)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(products.id, id));
 }
 
-export async function deleteProduct(id: number) {
+export async function deleteProduct(id: string) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(products).where(eq(products.id, id));
@@ -183,13 +196,13 @@ export async function deleteProduct(id: number) {
 
 // ============= INVENTORY =============
 
-export async function getInventoryByRetailer(retailerId: number) {
+export async function getInventoryByRetailer(retailerId: string) {
   const db = await getDb();
   if (!db) return [];
   return db.select().from(inventory).where(eq(inventory.retailerId, retailerId));
 }
 
-export async function getInventoryItem(retailerId: number, productId: number) {
+export async function getInventoryItem(retailerId: string, productId: string) {
   const db = await getDb();
   if (!db) return undefined;
   const result = await db
@@ -203,16 +216,17 @@ export async function getInventoryItem(retailerId: number, productId: number) {
 export async function upsertInventory(data: InsertInventory) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  
+
   const existing = await getInventoryItem(data.retailerId, data.productId);
   if (existing) {
-    await db.update(inventory)
+    await db
+      .update(inventory)
       .set({ ...data, lastUpdated: new Date() })
       .where(eq(inventory.id, existing.id));
     return existing.id;
   } else {
-    const result = await db.insert(inventory).values(data);
-    return result[0].insertId;
+    const [row] = await db.insert(inventory).values(data).returning({ id: inventory.id });
+    return row.id;
   }
 }
 
@@ -221,11 +235,11 @@ export async function upsertInventory(data: InsertInventory) {
 export async function createStockMovement(data: InsertStockMovement) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(stockMovements).values(data);
-  return result;
+  const [row] = await db.insert(stockMovements).values(data).returning();
+  return row;
 }
 
-export async function getStockMovementsByRetailer(retailerId: number, limit = 100) {
+export async function getStockMovementsByRetailer(retailerId: string, limit = 100) {
   const db = await getDb();
   if (!db) return [];
   return db
@@ -236,7 +250,7 @@ export async function getStockMovementsByRetailer(retailerId: number, limit = 10
     .limit(limit);
 }
 
-export async function getStockMovementsByProduct(productId: number, limit = 100) {
+export async function getStockMovementsByProduct(productId: string, limit = 100) {
   const db = await getDb();
   if (!db) return [];
   return db
@@ -259,7 +273,7 @@ export async function getActiveAlerts() {
     .orderBy(desc(alerts.createdAt));
 }
 
-export async function getAlertsByRetailer(retailerId: number) {
+export async function getAlertsByRetailer(retailerId: string) {
   const db = await getDb();
   if (!db) return [];
   return db
@@ -272,26 +286,26 @@ export async function getAlertsByRetailer(retailerId: number) {
 export async function createAlert(data: InsertAlert) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(alerts).values(data);
-  return result;
+  const [row] = await db.insert(alerts).values(data).returning();
+  return row;
 }
 
 export async function updateAlertStatus(
-  id: number,
+  id: string,
   status: "ACTIVE" | "ACKNOWLEDGED" | "RESOLVED",
-  userId?: number
+  userId?: string,
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  
-  const updateData: any = { status };
+
+  const updateData: Record<string, unknown> = { status };
   if (status === "ACKNOWLEDGED") {
     updateData.acknowledgedAt = new Date();
     updateData.acknowledgedBy = userId;
   } else if (status === "RESOLVED") {
     updateData.resolvedAt = new Date();
   }
-  
+
   await db.update(alerts).set(updateData).where(eq(alerts.id, id));
 }
 
@@ -300,11 +314,11 @@ export async function updateAlertStatus(
 export async function createSyncLog(data: InsertSyncLog) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(syncLogs).values(data);
-  return result;
+  const [row] = await db.insert(syncLogs).values(data).returning();
+  return row;
 }
 
-export async function getSyncLogsByRetailer(retailerId: number, limit = 50) {
+export async function getSyncLogsByRetailer(retailerId: string, limit = 50) {
   const db = await getDb();
   if (!db) return [];
   return db
