@@ -63,19 +63,47 @@ prima del cutover finale e dello spegnimento dell'ambiente Manus.
    bumpato a 5. Da 1500ms → 237ms cold / 52ms warm. Vedi sezione
    "Performance hotfix" più sotto.
 
+### ✅ Step completati (in questa sessione)
+
+#### Step 1a — Debug aid auth flow (commit `86341f4`, 2026-04-30 ~10:25)
+
+Cleanup UI/state del flusso auth post-stabilizzazione:
+
+- `client/src/pages/AuthCallback.tsx`: rimosso pannello "Auth callback
+  debug" con log timeline, delay 1500ms con countdown, bottoni manuali
+  "Annulla redirect" / "Vai subito a /". Sostituito con spinner +
+  "Accesso in corso…", redirect immediato a `/` su successo, redirect
+  a `/login?reason=callback_error` in 600ms su errore. Mantengo
+  `console.log/error` per devtools e `exchangeCodeForSession` con
+  error handling.
+- `client/src/_core/hooks/useAuth.ts`: rimosso `recordBounce` con
+  scrittura `sessionStorage`, `AUTH_BOUNCE_REASON_KEY`, `BounceReason`
+  type strutturato, grace window 800ms. La check
+  `session && meQuery.isFetching` è sufficiente come anti-flicker.
+  Bounce ora redirect immediato a `/login?reason={expired|me_error|no_profile}`.
+- `client/src/pages/Login.tsx`: rimosso banner verboso con stack/email/
+  userId/timestamp. Sostituito con messaggio breve in italiano letto
+  da query param `?reason=` (mappato in `REASON_MESSAGES`). URL
+  pulito da `history.replaceState` dopo il read così reload non
+  rimostra il messaggio.
+
+Diff: 3 file, **+65 / -361** (296 righe nette rimosse). Verifica
+post-deploy: `gestionale.soketo.it` asset hash bumpato
+`xZMrIhDv` → `Cb08zsub`, `/api/health` 200 in 537ms,
+`/api/trpc/auth.me` no-auth 200 con `{json: null}`. Browser test
+end-to-end demandato all'utente.
+
 ### Step finali rimasti per chiudere la migrazione
 
-#### 1. Pulizia debug aid (priorità alta — pre-cutover)
+#### 1b. Pulizia debug aid restante (priorità media)
 
 - `vercel-handler/index.ts` fast-path `/api/health` espone presenza
   env vars (DATABASE_URL, SUPABASE_*, OWNER_EMAIL) come `set`/`missing`.
   Non sono valori, ma è informazione comunque utile a un attaccante
   per sapere che dietro `gestionale.soketo.it` c'è uno stack
   Supabase. Da rimuovere o gate dietro un header secret.
-- `console.log("[dashboard] getStats Xms ...")` e simili: utili in
-  fase di shake-down, da silenziare/gate quando stabile.
-- `client/src/pages/AuthCallback.tsx` ha ancora un delay di 5s + log
-  on-page (commit `f099317`). Da rimuovere prima del cutover finale.
+- `console.log("[dashboard] getStats Xms ...")` in `server/db.ts`:
+  utile in fase di shake-down, da silenziare/gate quando stabile.
 - Considerare: eliminare `server/_core/env.ts` requirement su
   `SUPABASE_JWT_SECRET` (non usato più dopo passaggio a JWKS).
 
@@ -126,23 +154,24 @@ Se non funziona, fix nel trigger o nella logica di
 
 ### Suggested ordering per la prossima sessione
 
-1. Verifica trigger `handle_new_user` con un invite test (5 min).
-2. Pulizia debug aid (1h: rimuovi delay/log AuthCallback,
-   silenzia console.log dashboard, gate fast-path `/api/health`).
-3. Set `FATTUREINCLOUD_*` env vars su Vercel se servono ora.
-4. Aggiorna redirect URI FIC sul pannello + env Vercel.
+1. Bundle out-of-git (Step 2): cercare opzione B/C, evitare diff
+   binari da 80k righe a ogni rebuild di api/index.js.
+2. Verifica trigger `handle_new_user` con un invite test (Step 3, 5 min).
+3. Pulizia debug aid restante (Step 1b: env diag in `/api/health`,
+   `console.log` dashboard, requirement `SUPABASE_JWT_SECRET`).
+4. Set `FATTUREINCLOUD_*` env vars su Vercel + redirect URI nel
+   pannello FIC (Step 4, parte preparatoria).
 5. Smoke test completo end-to-end (login, CRUD, sync FIC se attivato).
-6. Bundle out-of-git → da approfondire, magari spostare a milestone
-   successiva.
-7. Cutover finale + spegnimento Manus.
+6. Cutover finale + spegnimento Manus (Step 4, parte finale).
 
 ### Commit principali della giornata (per riferimento)
 
 ```
-b96c107 perf(dashboard): parallel queries + resilient connection pool
-941f861 fix(auth): verify Supabase JWT with JWKS ECDSA P-256
-82767ba fix(vercel): commit prebundled api/index.js
-80bfa54 fix(vercel): functions config target api/index.js (was stale .ts)
+86341f4 chore: remove migration debug aid from auth flow         (Step 1a)
+b96c107 perf(dashboard): parallel queries + resilient pool       (perf hotfix)
+941f861 fix(auth): verify Supabase JWT with JWKS ECDSA P-256     (auth hotfix)
+82767ba fix(vercel): commit prebundled api/index.js              (deploy fix)
+80bfa54 fix(vercel): functions config target api/index.js        (root cause)
 1efcd4c fix(vercel): pre-bundle serverless function with esbuild
 e5ea4cd chore(vercel): pin node runtime to 20.x LTS
 ```
