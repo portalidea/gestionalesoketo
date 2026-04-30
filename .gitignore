@@ -111,3 +111,6 @@ temp/
 
 # Vercel CLI artifacts
 .vercel/
+
+# Vercel serverless function bundle (built from vercel-handler/index.ts)
+api/index.js
