@@ -1,5 +1,5 @@
 import type { CreateExpressContextOptions } from "@trpc/server/adapters/express";
-import { jwtVerify } from "jose";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { User } from "../../drizzle/schema";
 import * as db from "../db";
 import { ENV } from "./env";
@@ -10,7 +10,16 @@ export type TrpcContext = {
   user: User | null;
 };
 
-const jwtSecret = new TextEncoder().encode(ENV.supabase.jwtSecret);
+// Supabase firma i JWT con ECDSA P-256 (ES256) usando le JWT Signing
+// Keys pubblicate via JWKS. Il legacy HS256 secret resta nel progetto
+// come "Previous Key" ma i nuovi token sono firmati con la Current
+// (asimmetrica), quindi HS256+secret non li verifica più.
+// `createRemoteJWKSet` cacha le chiavi in memory e le ri-fetcha solo
+// quando incontra un `kid` sconosciuto.
+const SUPABASE_ISSUER = `${ENV.supabase.url}/auth/v1`;
+const JWKS = createRemoteJWKSet(
+  new URL(`${SUPABASE_ISSUER}/.well-known/jwks.json`),
+);
 
 function extractBearerToken(authHeader: string | undefined): string | null {
   if (!authHeader) return null;
@@ -33,8 +42,10 @@ export async function createContext(
 
   if (token) {
     try {
-      const { payload } = await jwtVerify(token, jwtSecret, {
-        algorithms: ["HS256"],
+      const { payload } = await jwtVerify(token, JWKS, {
+        algorithms: ["ES256"],
+        issuer: SUPABASE_ISSUER,
+        audience: "authenticated",
       });
       const sub = typeof payload.sub === "string" ? payload.sub : null;
       if (sub) {
@@ -44,7 +55,8 @@ export async function createContext(
       // Token invalido o scaduto: lasciamo user null, le procedure protette
       // risponderanno con UNAUTHORIZED.
       if (process.env.NODE_ENV !== "production") {
-        console.warn("[Auth] JWT verification failed:", String(error));
+        const e = error as Error;
+        console.warn(`[Auth] JWT verification failed (${e.name}): ${e.message}`);
       }
     }
   }

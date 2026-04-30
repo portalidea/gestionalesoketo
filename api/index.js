@@ -25327,7 +25327,7 @@ var init_base64url = __esm({
 });
 
 // node_modules/.pnpm/jose@6.1.0/node_modules/jose/dist/webapi/util/errors.js
-var JOSEError, JWTClaimValidationFailed, JWTExpired, JOSEAlgNotAllowed, JOSENotSupported, JWSInvalid, JWTInvalid, JWSSignatureVerificationFailed;
+var JOSEError, JWTClaimValidationFailed, JWTExpired, JOSEAlgNotAllowed, JOSENotSupported, JWSInvalid, JWTInvalid, JWKSInvalid, JWKSNoMatchingKey, JWKSMultipleMatchingKeys, JWKSTimeout, JWSSignatureVerificationFailed;
 var init_errors = __esm({
   "node_modules/.pnpm/jose@6.1.0/node_modules/jose/dist/webapi/util/errors.js"() {
     JOSEError = class extends Error {
@@ -25380,6 +25380,32 @@ var init_errors = __esm({
     JWTInvalid = class extends JOSEError {
       static code = "ERR_JWT_INVALID";
       code = "ERR_JWT_INVALID";
+    };
+    JWKSInvalid = class extends JOSEError {
+      static code = "ERR_JWKS_INVALID";
+      code = "ERR_JWKS_INVALID";
+    };
+    JWKSNoMatchingKey = class extends JOSEError {
+      static code = "ERR_JWKS_NO_MATCHING_KEY";
+      code = "ERR_JWKS_NO_MATCHING_KEY";
+      constructor(message2 = "no applicable key found in the JSON Web Key Set", options) {
+        super(message2, options);
+      }
+    };
+    JWKSMultipleMatchingKeys = class extends JOSEError {
+      [Symbol.asyncIterator];
+      static code = "ERR_JWKS_MULTIPLE_MATCHING_KEYS";
+      code = "ERR_JWKS_MULTIPLE_MATCHING_KEYS";
+      constructor(message2 = "multiple matching keys found in the JSON Web Key Set", options) {
+        super(message2, options);
+      }
+    };
+    JWKSTimeout = class extends JOSEError {
+      static code = "ERR_JWKS_TIMEOUT";
+      code = "ERR_JWKS_TIMEOUT";
+      constructor(message2 = "request timed out", options) {
+        super(message2, options);
+      }
     };
     JWSSignatureVerificationFailed = class extends JOSEError {
       static code = "ERR_JWS_SIGNATURE_VERIFICATION_FAILED";
@@ -25716,6 +25742,50 @@ var init_jwk_to_key = __esm({
       delete keyData.use;
       return crypto.subtle.importKey("jwk", keyData, algorithm, jwk.ext ?? (jwk.d || jwk.priv ? false : true), jwk.key_ops ?? keyUsages);
     };
+  }
+});
+
+// node_modules/.pnpm/jose@6.1.0/node_modules/jose/dist/webapi/key/import.js
+async function importJWK(jwk, alg, options) {
+  if (!is_object_default(jwk)) {
+    throw new TypeError("JWK must be an object");
+  }
+  let ext;
+  alg ??= jwk.alg;
+  ext ??= options?.extractable ?? jwk.ext;
+  switch (jwk.kty) {
+    case "oct":
+      if (typeof jwk.k !== "string" || !jwk.k) {
+        throw new TypeError('missing "k" (Key Value) Parameter value');
+      }
+      return decode(jwk.k);
+    case "RSA":
+      if ("oth" in jwk && jwk.oth !== void 0) {
+        throw new JOSENotSupported('RSA JWK "oth" (Other Primes Info) Parameter value is not supported');
+      }
+      return jwk_to_key_default({ ...jwk, alg, ext });
+    case "AKP": {
+      if (typeof jwk.alg !== "string" || !jwk.alg) {
+        throw new TypeError('missing "alg" (Algorithm) Parameter value');
+      }
+      if (alg !== void 0 && alg !== jwk.alg) {
+        throw new TypeError("JWK alg and alg option value mismatch");
+      }
+      return jwk_to_key_default({ ...jwk, ext });
+    }
+    case "EC":
+    case "OKP":
+      return jwk_to_key_default({ ...jwk, alg, ext });
+    default:
+      throw new JOSENotSupported('Unsupported "kty" (Key Type) Parameter value');
+  }
+}
+var init_import = __esm({
+  "node_modules/.pnpm/jose@6.1.0/node_modules/jose/dist/webapi/key/import.js"() {
+    init_base64url();
+    init_jwk_to_key();
+    init_errors();
+    init_is_object();
   }
 });
 
@@ -26519,10 +26589,304 @@ var init_verify4 = __esm({
   }
 });
 
+// node_modules/.pnpm/jose@6.1.0/node_modules/jose/dist/webapi/jwks/local.js
+function getKtyFromAlg(alg) {
+  switch (typeof alg === "string" && alg.slice(0, 2)) {
+    case "RS":
+    case "PS":
+      return "RSA";
+    case "ES":
+      return "EC";
+    case "Ed":
+      return "OKP";
+    case "ML":
+      return "AKP";
+    default:
+      throw new JOSENotSupported('Unsupported "alg" value for a JSON Web Key Set');
+  }
+}
+function isJWKSLike(jwks) {
+  return jwks && typeof jwks === "object" && Array.isArray(jwks.keys) && jwks.keys.every(isJWKLike);
+}
+function isJWKLike(key) {
+  return is_object_default(key);
+}
+async function importWithAlgCache(cache2, jwk, alg) {
+  const cached2 = cache2.get(jwk) || cache2.set(jwk, {}).get(jwk);
+  if (cached2[alg] === void 0) {
+    const key = await importJWK({ ...jwk, ext: true }, alg);
+    if (key instanceof Uint8Array || key.type !== "public") {
+      throw new JWKSInvalid("JSON Web Key Set members must be public keys");
+    }
+    cached2[alg] = key;
+  }
+  return cached2[alg];
+}
+function createLocalJWKSet(jwks) {
+  const set2 = new LocalJWKSet(jwks);
+  const localJWKSet = async (protectedHeader, token) => set2.getKey(protectedHeader, token);
+  Object.defineProperties(localJWKSet, {
+    jwks: {
+      value: () => structuredClone(set2.jwks()),
+      enumerable: false,
+      configurable: false,
+      writable: false
+    }
+  });
+  return localJWKSet;
+}
+var LocalJWKSet;
+var init_local = __esm({
+  "node_modules/.pnpm/jose@6.1.0/node_modules/jose/dist/webapi/jwks/local.js"() {
+    init_import();
+    init_errors();
+    init_is_object();
+    LocalJWKSet = class {
+      #jwks;
+      #cached = /* @__PURE__ */ new WeakMap();
+      constructor(jwks) {
+        if (!isJWKSLike(jwks)) {
+          throw new JWKSInvalid("JSON Web Key Set malformed");
+        }
+        this.#jwks = structuredClone(jwks);
+      }
+      jwks() {
+        return this.#jwks;
+      }
+      async getKey(protectedHeader, token) {
+        const { alg, kid } = { ...protectedHeader, ...token?.header };
+        const kty = getKtyFromAlg(alg);
+        const candidates = this.#jwks.keys.filter((jwk2) => {
+          let candidate = kty === jwk2.kty;
+          if (candidate && typeof kid === "string") {
+            candidate = kid === jwk2.kid;
+          }
+          if (candidate && (typeof jwk2.alg === "string" || kty === "AKP")) {
+            candidate = alg === jwk2.alg;
+          }
+          if (candidate && typeof jwk2.use === "string") {
+            candidate = jwk2.use === "sig";
+          }
+          if (candidate && Array.isArray(jwk2.key_ops)) {
+            candidate = jwk2.key_ops.includes("verify");
+          }
+          if (candidate) {
+            switch (alg) {
+              case "ES256":
+                candidate = jwk2.crv === "P-256";
+                break;
+              case "ES384":
+                candidate = jwk2.crv === "P-384";
+                break;
+              case "ES512":
+                candidate = jwk2.crv === "P-521";
+                break;
+              case "Ed25519":
+              case "EdDSA":
+                candidate = jwk2.crv === "Ed25519";
+                break;
+            }
+          }
+          return candidate;
+        });
+        const { 0: jwk, length } = candidates;
+        if (length === 0) {
+          throw new JWKSNoMatchingKey();
+        }
+        if (length !== 1) {
+          const error46 = new JWKSMultipleMatchingKeys();
+          const _cached = this.#cached;
+          error46[Symbol.asyncIterator] = async function* () {
+            for (const jwk2 of candidates) {
+              try {
+                yield await importWithAlgCache(_cached, jwk2, alg);
+              } catch {
+              }
+            }
+          };
+          throw error46;
+        }
+        return importWithAlgCache(this.#cached, jwk, alg);
+      }
+    };
+  }
+});
+
+// node_modules/.pnpm/jose@6.1.0/node_modules/jose/dist/webapi/jwks/remote.js
+function isCloudflareWorkers() {
+  return typeof WebSocketPair !== "undefined" || typeof navigator !== "undefined" && navigator.userAgent === "Cloudflare-Workers" || typeof EdgeRuntime !== "undefined" && EdgeRuntime === "vercel";
+}
+async function fetchJwks(url3, headers, signal, fetchImpl = fetch) {
+  const response = await fetchImpl(url3, {
+    method: "GET",
+    signal,
+    redirect: "manual",
+    headers
+  }).catch((err) => {
+    if (err.name === "TimeoutError") {
+      throw new JWKSTimeout();
+    }
+    throw err;
+  });
+  if (response.status !== 200) {
+    throw new JOSEError("Expected 200 OK from the JSON Web Key Set HTTP response");
+  }
+  try {
+    return await response.json();
+  } catch {
+    throw new JOSEError("Failed to parse the JSON Web Key Set HTTP response as JSON");
+  }
+}
+function isFreshJwksCache(input, cacheMaxAge) {
+  if (typeof input !== "object" || input === null) {
+    return false;
+  }
+  if (!("uat" in input) || typeof input.uat !== "number" || Date.now() - input.uat >= cacheMaxAge) {
+    return false;
+  }
+  if (!("jwks" in input) || !is_object_default(input.jwks) || !Array.isArray(input.jwks.keys) || !Array.prototype.every.call(input.jwks.keys, is_object_default)) {
+    return false;
+  }
+  return true;
+}
+function createRemoteJWKSet(url3, options) {
+  const set2 = new RemoteJWKSet(url3, options);
+  const remoteJWKSet = async (protectedHeader, token) => set2.getKey(protectedHeader, token);
+  Object.defineProperties(remoteJWKSet, {
+    coolingDown: {
+      get: () => set2.coolingDown(),
+      enumerable: true,
+      configurable: false
+    },
+    fresh: {
+      get: () => set2.fresh(),
+      enumerable: true,
+      configurable: false
+    },
+    reload: {
+      value: () => set2.reload(),
+      enumerable: true,
+      configurable: false,
+      writable: false
+    },
+    reloading: {
+      get: () => set2.pendingFetch(),
+      enumerable: true,
+      configurable: false
+    },
+    jwks: {
+      value: () => set2.jwks(),
+      enumerable: true,
+      configurable: false,
+      writable: false
+    }
+  });
+  return remoteJWKSet;
+}
+var USER_AGENT, customFetch, jwksCache, RemoteJWKSet;
+var init_remote = __esm({
+  "node_modules/.pnpm/jose@6.1.0/node_modules/jose/dist/webapi/jwks/remote.js"() {
+    init_errors();
+    init_local();
+    init_is_object();
+    if (typeof navigator === "undefined" || !navigator.userAgent?.startsWith?.("Mozilla/5.0 ")) {
+      const NAME = "jose";
+      const VERSION3 = "v6.1.0";
+      USER_AGENT = `${NAME}/${VERSION3}`;
+    }
+    customFetch = Symbol();
+    jwksCache = Symbol();
+    RemoteJWKSet = class {
+      #url;
+      #timeoutDuration;
+      #cooldownDuration;
+      #cacheMaxAge;
+      #jwksTimestamp;
+      #pendingFetch;
+      #headers;
+      #customFetch;
+      #local;
+      #cache;
+      constructor(url3, options) {
+        if (!(url3 instanceof URL)) {
+          throw new TypeError("url must be an instance of URL");
+        }
+        this.#url = new URL(url3.href);
+        this.#timeoutDuration = typeof options?.timeoutDuration === "number" ? options?.timeoutDuration : 5e3;
+        this.#cooldownDuration = typeof options?.cooldownDuration === "number" ? options?.cooldownDuration : 3e4;
+        this.#cacheMaxAge = typeof options?.cacheMaxAge === "number" ? options?.cacheMaxAge : 6e5;
+        this.#headers = new Headers(options?.headers);
+        if (USER_AGENT && !this.#headers.has("User-Agent")) {
+          this.#headers.set("User-Agent", USER_AGENT);
+        }
+        if (!this.#headers.has("accept")) {
+          this.#headers.set("accept", "application/json");
+          this.#headers.append("accept", "application/jwk-set+json");
+        }
+        this.#customFetch = options?.[customFetch];
+        if (options?.[jwksCache] !== void 0) {
+          this.#cache = options?.[jwksCache];
+          if (isFreshJwksCache(options?.[jwksCache], this.#cacheMaxAge)) {
+            this.#jwksTimestamp = this.#cache.uat;
+            this.#local = createLocalJWKSet(this.#cache.jwks);
+          }
+        }
+      }
+      pendingFetch() {
+        return !!this.#pendingFetch;
+      }
+      coolingDown() {
+        return typeof this.#jwksTimestamp === "number" ? Date.now() < this.#jwksTimestamp + this.#cooldownDuration : false;
+      }
+      fresh() {
+        return typeof this.#jwksTimestamp === "number" ? Date.now() < this.#jwksTimestamp + this.#cacheMaxAge : false;
+      }
+      jwks() {
+        return this.#local?.jwks();
+      }
+      async getKey(protectedHeader, token) {
+        if (!this.#local || !this.fresh()) {
+          await this.reload();
+        }
+        try {
+          return await this.#local(protectedHeader, token);
+        } catch (err) {
+          if (err instanceof JWKSNoMatchingKey) {
+            if (this.coolingDown() === false) {
+              await this.reload();
+              return this.#local(protectedHeader, token);
+            }
+          }
+          throw err;
+        }
+      }
+      async reload() {
+        if (this.#pendingFetch && isCloudflareWorkers()) {
+          this.#pendingFetch = void 0;
+        }
+        this.#pendingFetch ||= fetchJwks(this.#url.href, this.#headers, AbortSignal.timeout(this.#timeoutDuration), this.#customFetch).then((json3) => {
+          this.#local = createLocalJWKSet(json3);
+          if (this.#cache) {
+            this.#cache.uat = Date.now();
+            this.#cache.jwks = json3;
+          }
+          this.#jwksTimestamp = Date.now();
+          this.#pendingFetch = void 0;
+        }).catch((err) => {
+          this.#pendingFetch = void 0;
+          throw err;
+        });
+        await this.#pendingFetch;
+      }
+    };
+  }
+});
+
 // node_modules/.pnpm/jose@6.1.0/node_modules/jose/dist/webapi/index.js
 var init_webapi = __esm({
   "node_modules/.pnpm/jose@6.1.0/node_modules/jose/dist/webapi/index.js"() {
     init_verify4();
+    init_remote();
     init_errors();
     init_base64url();
   }
@@ -37337,8 +37701,10 @@ async function createContext(opts) {
   let user = null;
   if (token) {
     try {
-      const { payload } = await jwtVerify(token, jwtSecret, {
-        algorithms: ["HS256"]
+      const { payload } = await jwtVerify(token, JWKS, {
+        algorithms: ["ES256"],
+        issuer: SUPABASE_ISSUER,
+        audience: "authenticated"
       });
       const sub = typeof payload.sub === "string" ? payload.sub : null;
       if (sub) {
@@ -37346,7 +37712,8 @@ async function createContext(opts) {
       }
     } catch (error46) {
       if (process.env.NODE_ENV !== "production") {
-        console.warn("[Auth] JWT verification failed:", String(error46));
+        const e = error46;
+        console.warn(`[Auth] JWT verification failed (${e.name}): ${e.message}`);
       }
     }
   }
@@ -37356,14 +37723,17 @@ async function createContext(opts) {
     user
   };
 }
-var jwtSecret;
+var SUPABASE_ISSUER, JWKS;
 var init_context = __esm({
   "server/_core/context.ts"() {
     "use strict";
     init_webapi();
     init_db2();
     init_env();
-    jwtSecret = new TextEncoder().encode(ENV.supabase.jwtSecret);
+    SUPABASE_ISSUER = `${ENV.supabase.url}/auth/v1`;
+    JWKS = createRemoteJWKSet(
+      new URL(`${SUPABASE_ISSUER}/.well-known/jwks.json`)
+    );
   }
 });
 
@@ -58303,9 +58673,9 @@ var require_helper = __commonJS({
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.resolveFetch = void 0;
-    var resolveFetch3 = (customFetch) => {
-      if (customFetch) {
-        return (...args) => customFetch(...args);
+    var resolveFetch3 = (customFetch2) => {
+      if (customFetch2) {
+        return (...args) => customFetch2(...args);
       }
       return (...args) => fetch(...args);
     };
@@ -58406,11 +58776,11 @@ var require_FunctionsClient = __commonJS({
        * })
        * ```
        */
-      constructor(url3, { headers = {}, customFetch, region = types_1.FunctionRegion.Any } = {}) {
+      constructor(url3, { headers = {}, customFetch: customFetch2, region = types_1.FunctionRegion.Any } = {}) {
         this.url = url3;
         this.headers = headers;
         this.region = region;
-        this.fetch = (0, helper_1.resolveFetch)(customFetch);
+        this.fetch = (0, helper_1.resolveFetch)(customFetch2);
       }
       /**
        * Updates the authorization header
@@ -67105,9 +67475,9 @@ var require_RealtimeClient = __commonJS({
         this._pendingWorkerHeartbeatRef = null;
         this._pendingDisconnectTimer = null;
         this._disconnectOnEmptyChannelsAfterMs = 0;
-        this._resolveFetch = (customFetch) => {
-          if (customFetch) {
-            return (...args) => customFetch(...args);
+        this._resolveFetch = (customFetch2) => {
+          if (customFetch2) {
+            return (...args) => customFetch2(...args);
           }
           return (...args) => fetch(...args);
         };
@@ -68317,8 +68687,8 @@ var init_dist4 = __esm({
         this.originalError = originalError;
       }
     };
-    resolveFetch = (customFetch) => {
-      if (customFetch) return (...args) => customFetch(...args);
+    resolveFetch = (customFetch2) => {
+      if (customFetch2) return (...args) => customFetch2(...args);
       return (...args) => fetch(...args);
     };
     isPlainObject4 = (value) => {
@@ -71245,9 +71615,9 @@ var require_helpers = __commonJS({
       });
       return result;
     }
-    var resolveFetch3 = (customFetch) => {
-      if (customFetch) {
-        return (...args) => customFetch(...args);
+    var resolveFetch3 = (customFetch2) => {
+      if (customFetch2) {
+        return (...args) => customFetch2(...args);
       }
       return (...args) => fetch(...args);
     };
@@ -78873,15 +79243,15 @@ var init_dist5 = __esm({
       flowType: "implicit"
     };
     DEFAULT_REALTIME_OPTIONS = {};
-    resolveFetch2 = (customFetch) => {
-      if (customFetch) return (...args) => customFetch(...args);
+    resolveFetch2 = (customFetch2) => {
+      if (customFetch2) return (...args) => customFetch2(...args);
       return (...args) => fetch(...args);
     };
     resolveHeadersConstructor = () => {
       return Headers;
     };
-    fetchWithAuth = (supabaseKey, getAccessToken, customFetch) => {
-      const fetch$1 = resolveFetch2(customFetch);
+    fetchWithAuth = (supabaseKey, getAccessToken, customFetch2) => {
+      const fetch$1 = resolveFetch2(customFetch2);
       const HeadersConstructor = resolveHeadersConstructor();
       return async (input, init) => {
         var _await$getAccessToken;
@@ -79756,7 +80126,9 @@ function bootOnce() {
   return bootPromise;
 }
 async function handler(req, res) {
-  if (req.url === "/api/health" || req.url === "/api/ping") {
+  const rawPath = (req.originalUrl ?? req.url ?? "").split("?")[0];
+  const path = rawPath.replace(/\/+$/, "");
+  if (path === "/api/health" || path === "/api/ping") {
     const envSummary = {
       DATABASE_URL: process.env.DATABASE_URL ? "set" : "missing",
       SUPABASE_URL: process.env.SUPABASE_URL ? "set" : "missing",

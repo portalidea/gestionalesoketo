@@ -8,6 +8,206 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-04-30 (sera) — Step 3 hotfix — Bug critico Auth: HS256 vs ECDSA P-256
+
+### Sintomo
+
+Login in produzione non riesce: dopo magic link → `/auth/callback` →
+sessione Supabase OK lato client → tRPC `auth.me` ritorna `null` →
+`useAuth` rimanda al `/login` → loop.
+
+### Root cause
+
+Il progetto Supabase `aejwoytoskihmtlgtfaz` usa **JWT Signing Keys
+ECDSA P-256 (ES256)** come Current Key. Il vecchio HS256 secret resta
+nel pannello come "Previous Key" ma **i nuovi token sono firmati con
+la Current asimmetrica**, non con il secret HS256.
+
+Il backend in `server/_core/context.ts` verificava i JWT con:
+```ts
+const jwtSecret = new TextEncoder().encode(ENV.supabase.jwtSecret);
+const { payload } = await jwtVerify(token, jwtSecret, {
+  algorithms: ["HS256"],
+});
+```
+
+Quindi ogni JWT fresco lato client (firmato ES256) falliva la verifica
+con `JWSSignatureVerificationFailed`, il `catch` lo silenziava in
+production (loggava solo in dev), `user` restava `null`, le
+protectedProcedure rispondevano UNAUTHORIZED, il client tornava a
+`/login`.
+
+### Fix
+
+`server/_core/context.ts` riscritto per usare `createRemoteJWKSet` di
+`jose` (già nelle deps):
+
+```ts
+const SUPABASE_ISSUER = `${ENV.supabase.url}/auth/v1`;
+const JWKS = createRemoteJWKSet(
+  new URL(`${SUPABASE_ISSUER}/.well-known/jwks.json`),
+);
+// ...
+const { payload } = await jwtVerify(token, JWKS, {
+  algorithms: ["ES256"],
+  issuer: SUPABASE_ISSUER,
+  audience: "authenticated",
+});
+```
+
+`createRemoteJWKSet` cacha le chiavi in memory, refetch automatico se
+incontra un `kid` non in cache. Niente TTL fisso, ottimale per un
+serverless (1 RTT al cold start, poi cache).
+
+Sanity check JWKS endpoint:
+```
+GET https://aejwoytoskihmtlgtfaz.supabase.co/auth/v1/.well-known/jwks.json
+→ { "keys": [{ "alg": "ES256", "crv": "P-256", "kty": "EC",
+              "kid": "1c158780-...", "use": "sig", "x": "...", "y": "..." }] }
+```
+
+`SUPABASE_JWT_SECRET` resta in env vars per ora (richiesta in
+`env.ts`, non rompe nulla, eventualmente removed in cleanup successivo).
+
+### Fix collaterale (fast-path /api/health)
+
+Notato durante la diagnosi: il fast-path `/api/health` in
+`vercel-handler/index.ts` non matchava in produzione (Express
+rispondeva 404) perché Vercel, dopo il rewrite `vercel.json`, può
+passare `req.url = "/api"` mentre `req.originalUrl = "/api/health"`.
+Fast-path aggiornato a usare `req.originalUrl ?? req.url`,
+normalizzando query string e trailing slash.
+
+### Stato pre-push
+
+- `server/_core/context.ts`: ✅ ES256 + JWKS pubblico
+- `vercel-handler/index.ts`: ✅ fast-path tolerante
+- `api/index.js`: ✅ rigenerato 3.2MB con esbuild
+- Bundle locale: caricato pulito (`require('./api/index.js')` shape ok)
+- JWKS endpoint: reachable, format ES256/P-256/EC come atteso
+- Test login locale browser: **non eseguibile dall'AI** (richiede
+  click manuale magic link); demandato all'utente post-deploy
+
+### Da verificare post-deploy
+
+1. `/api/health` → 200 con marker `vercel-handler-alive` + env summary
+2. Login completo in produzione (utente fa magic link da browser)
+3. `auth.me` ritorna profilo non-null (admin role per
+   alessandro@soketo.it)
+
+---
+
+## 2026-04-30 (mattina, 08:23–09:16) — Step 4 — Deep-dive bundle Vercel
+
+### Sessione mattutina, 12 commit, deploy NON confermato funzionante
+
+Lavorato sul bundling della serverless function dopo che la diagnostica
+abilitata ieri (`5b07a74`) aveva rivelato `ERR_MODULE_NOT_FOUND: Cannot
+find module '/var/task/server/_core/context'`.
+
+### Catena di tentativi (in ordine cronologico)
+
+1. **`e5ea4cd`** — `engines.node = 20.x` in package.json. Non basta:
+   stesso `Cannot find module` (Node 20 conferma da diagnostic JSON).
+2. **`5b07a74`** — già di ieri, self-diagnostic JSON al boot fail.
+3. **`e3c2ca1`** — drop `includeFiles` da vercel.json. Stesso errore.
+4. **`5da27b1`** — switch da dynamic a static imports. Risultato: text/plain
+   `FUNCTION_INVOCATION_FAILED` (la diagnostic non parte perché lo
+   static import fallisce a livello di module load).
+5. **`61131bc`** — aggiunto `api/package.json` con `{"type":"commonjs"}`
+   per forzare CJS bundling. Stesso 500.
+6. **`1efcd4c`** — pre-bundle con esbuild come build step (`pnpm build:api`),
+   source spostata in `vercel-handler/index.ts`, output `api/index.js`
+   (gitignored), eliminato `api/index.ts`. Con `--packages=external`. 500.
+7. **`a023cf0`** — drop `--packages=external`, bundle self-contained 3.2MB
+   (tutte le deps inlined). 500.
+8. **`92bde04`** — aggiunto fast-path `/api/health` diagnostico (env summary,
+   bootStarted, nodeVersion). 500.
+9. **`69b9a05`** — sostituito handler con minimal hello-world (no imports,
+   1.3KB). Anche questo 500.
+10. **`8f1a432`** — handcrafted `api/index.js` direttamente committato in
+    git (no build:api), CJS minimal con `res.status(200)`. 500.
+11. **`9072ad0`** — handcrafted con raw Node http API
+    (`res.statusCode = 200; res.end(...)`), 4 righe. 500.
+12. **`80bfa54` ⭐** — fixato **`vercel.json`**: `functions.api/index.ts`
+    → `functions.api/index.js`. **Deploy ha funzionato in ~25s, HTTP 200
+    con marker `raw-node-handler`**. Era questo il root cause di tutto:
+    `vercel.json` puntava a un file (`api/index.ts`) che avevo eliminato,
+    Vercel non applicava la config corretta e il deploy era rotto.
+13. **`ffa52e7`** — ripristinato handler full (vercel-handler/index.ts con
+    tRPC+Express+diagnostic), riabilitato `pnpm build:api`, `api/index.js`
+    rimesso gitignored. **Non landed** dopo 8+ minuti di polling
+    (continuava a rispondere `raw-node-handler` di `9072ad0`).
+14. **`82767ba`** — committato `api/index.js` (3.2MB) direttamente in git,
+    sospettando che Vercel fa function detection prima del build. **Non
+    confermato live al momento dello stop.**
+
+### Root cause confermato
+
+`vercel.json` aveva `"functions": { "api/index.ts": ... }` ma `api/index.ts`
+era stato eliminato in commit `1efcd4c`. Per ~50 minuti Vercel ha
+risposto `FUNCTION_INVOCATION_FAILED` text/plain a qualunque modifica
+perché la function config puntava a un file fantasma. Una volta fixato
+(`80bfa54`), un handler minimale ha risposto 200 in 25 secondi.
+
+### Stato al momento dello stop (09:16)
+
+- **HEAD `main`**: `82767ba`
+- **`vercel.json`**: ✅ functions config corretto (`api/index.js`)
+- **`api/index.ts`**: ❌ eliminato (intenzionale)
+- **`api/index.js`**: ✅ committato in git, 3.2MB bundle CJS prebundled
+  (esbuild → vercel-handler/index.ts con tRPC+Express+/api/health
+  fast-path diagnostic)
+- **`api/package.json`**: `{"type":"commonjs"}`
+- **`package.json`**: `build = "vite build && pnpm build:api"`,
+  `build:api` esegue esbuild prebundle
+- **`vercel-handler/index.ts`**: source del handler full
+- **Bundle**: generato con **esbuild** (non tsup), 3328033 bytes
+- **Build locale**: ✅ verificata pulita (`pnpm build` produce
+  dist/public + api/index.js senza errori)
+
+### Risultato deploy
+
+**INCERTO**. Ultimo poll utile mostrava ancora `raw-node-handler` di
+`9072ad0` in produzione. I deploy `ffa52e7` e `82767ba` non hanno
+confermato di essere live. **L'utente vedeva 404 al momento dello stop**:
+da chiarire (mio ultimo poll mostrava 200, non 404 — qualcosa è cambiato
+fra il mio polling e il check dell'utente).
+
+### Da fare nella prossima sessione
+
+1. **Verificare in Vercel Dashboard** → Deployments:
+   - Quale è il deploy "Current" su production?
+   - Status del deploy `82767ba`: Ready / Error / Building?
+   - Se Error: leggere build logs, identificare il fail.
+
+2. **Se `82767ba` è Error**: probabilmente il commit del bundle 3.2MB ha
+   rotto qualcosa (size limit? gitignored ma ora tracked?). Considerare
+   rollback a `80bfa54` come baseline working e procedere chirurgicamente.
+
+3. **Se `82767ba` è Ready ma /api/health fa 404**: problema di routing
+   con i rewrite in vercel.json (`/api/:path*` → `/api`); il path passato
+   a Express dopo il rewrite potrebbe non avere più `/api/health`. Va
+   ispezionato il `req.url` reale visto dal handler.
+
+4. **Se `82767ba` è Ready e /api/health risponde 200 con marker
+   `vercel-handler-alive`**: tutto a posto, procedere con flusso login
+   come pianificato ieri.
+
+### Punti di attenzione aperti
+
+- **Approccio "commit del bundle 3.2MB"** è subottimale (file binario in
+  git). Da rivedere: dovrebbe essere possibile generarlo solo durante il
+  build Vercel se la function detection scansiona dopo il build. Da
+  verificare.
+- **Cache Vercel**: alcuni deploy hanno tardato molto (ffa52e7 mai
+  confermato). Possibile che ci sia un build cache stantio da invalidare.
+- **Debug aid in `vercel-handler/index.ts`** (env summary, log on-page in
+  AuthCallback) **da rimuovere prima del cutover finale**. Vale anche per
+  il fast-path /api/health diagnostic che espone presenza/assenza env vars.
+
+---
+
 ## 2026-04-30 — Step 4 (in corso) — Deploy Vercel + serverless bundling
 
 ### Riassunto della giornata

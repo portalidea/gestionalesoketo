@@ -56,7 +56,13 @@ export default async function handler(req: Request, res: Response) {
   // Fast-path: /api/health risponde senza richiedere il boot completo.
   // Serve come liveness probe e diagnostico: ci dice quali env sono
   // visibili nel runtime Vercel e se il boot è stato già tentato.
-  if (req.url === "/api/health" || req.url === "/api/ping") {
+  // Vercel può modificare req.url dopo il rewrite in vercel.json (la
+  // destination "/api" droppa il path catturato), ma originalUrl
+  // preserva la richiesta originale. Match su entrambi, tollera query
+  // string e trailing slash.
+  const rawPath = (req.originalUrl ?? req.url ?? "").split("?")[0];
+  const path = rawPath.replace(/\/+$/, "");
+  if (path === "/api/health" || path === "/api/ping") {
     const envSummary = {
       DATABASE_URL: process.env.DATABASE_URL ? "set" : "missing",
       SUPABASE_URL: process.env.SUPABASE_URL ? "set" : "missing",
