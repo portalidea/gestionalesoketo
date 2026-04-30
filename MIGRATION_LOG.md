@@ -65,6 +65,34 @@ prima del cutover finale e dello spegnimento dell'ambiente Manus.
 
 ### ✅ Step completati (in questa sessione)
 
+#### Step 3 — Verifica trigger `handle_new_user` (2026-04-30 ~10:38)
+
+Test end-to-end del trigger Supabase Auth → public.users.
+
+**Diagnosi live** (script `scripts/check-trigger.ts`):
+- Trigger `on_auth_user_created` AFTER INSERT su `auth.users` ✅
+- Funzione `public.handle_new_user()` SECURITY DEFINER, source identica
+  alla migration `0002_auth_supabase_integration.sql` ✅
+- Schema `public.users.role` NOT NULL DEFAULT `'operator'::user_role` ✅
+- FK `users_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE` ✅
+- 3 utenti esistenti tutti coerenti tra auth↔public, created_at <5ms
+  di delta = trigger ha fired ad ogni signup.
+
+**Test funzionale** (script `scripts/test-trigger.ts`):
+1. `supabase.auth.admin.createUser({ email: 'trigger-test-{ts}@soketo.test' })`
+2. Verifica entro 200ms che `public.users` abbia la riga con
+   `id` matching, `email` matching, `role='operator'`, `name` derivato
+   da local-part.
+3. `supabase.auth.admin.deleteUser(id)` → verifica che `public.users`
+   sia sparita via CASCADE.
+
+Tutti gli assert passati, DB pulito post-test. Niente fix necessario.
+
+Script committati per regressioni future (insieme a `test-dashboard.ts`
+del perf hotfix):
+- `scripts/check-trigger.ts` — diagnosi schema/trigger live
+- `scripts/test-trigger.ts` — test end-to-end create→trigger→cascade
+
 #### Step 2 — Bundle out of git (commit `ea6ca7b`, 2026-04-30 ~10:30)
 
 `api/index.js` (3.2MB esbuild prebundle) spostato da tracked a build
@@ -141,18 +169,6 @@ end-to-end demandato all'utente.
 - Considerare: eliminare `server/_core/env.ts` requirement su
   `SUPABASE_JWT_SECRET` (non usato più dopo passaggio a JWKS).
 
-#### 3. Verifica trigger `handle_new_user` post-invite (priorità media)
-
-Il trigger Postgres `on_auth_user_created` su `auth.users` deve
-creare la riga in `public.users` con role default `operator`. Mai
-verificato end-to-end con un utente invitato fresco. Da testare:
-1. Da `/settings/team` invita un'email test.
-2. L'utente clicca magic link.
-3. Verifica che `public.users` abbia riga con role=`operator` e nome
-   derivato da metadata o local-part email.
-Se non funziona, fix nel trigger o nella logica di
-`supabaseAdmin.auth.admin.inviteUserByEmail`.
-
 #### 4. Cutover Manus + dismissione (priorità bassa, ma chiude il progetto)
 
 - Aggiornare il **redirect URI Fatture in Cloud** da
@@ -173,13 +189,12 @@ Se non funziona, fix nel trigger o nella logica di
 
 ### Suggested ordering per la prossima sessione
 
-1. Verifica trigger `handle_new_user` con un invite test (Step 3, 5 min).
-2. Pulizia debug aid restante (Step 1b: env diag in `/api/health`,
+1. Pulizia debug aid restante (Step 1b: env diag in `/api/health`,
    `console.log` dashboard, requirement `SUPABASE_JWT_SECRET`).
-3. Set `FATTUREINCLOUD_*` env vars su Vercel + redirect URI nel
+2. Set `FATTUREINCLOUD_*` env vars su Vercel + redirect URI nel
    pannello FIC (Step 4, parte preparatoria).
-4. Smoke test completo end-to-end (login, CRUD, sync FIC se attivato).
-5. Cutover finale + spegnimento Manus (Step 4, parte finale).
+3. Smoke test completo end-to-end (login, CRUD, sync FIC se attivato).
+4. Cutover finale + spegnimento Manus (Step 4, parte finale).
 
 ### Commit principali della giornata (per riferimento)
 
