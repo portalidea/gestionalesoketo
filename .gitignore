@@ -113,7 +113,8 @@ temp/
 .vercel/
 
 # Vercel serverless function bundle (built from vercel-handler/index.ts).
-# Generato da `pnpm build:api` (esbuild prebundle) durante `pnpm build`.
-# Vercel esegue il build prima di raccogliere le functions, quindi vede il
-# file fresco. Non lo committiamo: 3.2MB binario che cambia ad ogni build.
-api/index.js
+# Tracciato in git nonostante sia un build artifact: Vercel valida il
+# pattern `functions` di vercel.json contro il git checkout PRE-build
+# (https://vercel.link/unmatched-function-pattern). Senza api/index.js
+# in git, ogni deploy fallisce in <1s con "pattern doesn't match any
+# Serverless Functions". Tech debt residuo da rivedere al cutover.
