@@ -3,39 +3,33 @@
  *
  * Vercel mappa tutto `/api/*` su questa funzione (vedi `vercel.json`).
  *
- * Self-diagnostic: tutti gli import dei moduli applicativi sono dinamici
- * dentro un try/catch. Se il boot fallisce (es. ERR_MODULE_NOT_FOUND), la
- * function restituisce JSON con name/message/stack invece del generico
- * `FUNCTION_INVOCATION_FAILED` di Vercel.
+ * Static imports (gli stessi del dev) per forzare ncc/esbuild di Vercel a
+ * bundlare tutto il grafo server/* dentro l'output. Se gli import falliscono
+ * a livello di modulo, la function non parte e Vercel ritorna
+ * `FUNCTION_INVOCATION_FAILED`. Per gli errori che arrivano dopo l'import
+ * (es. env validation, db init lazy) la response è il JSON diagnostico in
+ * coda al file.
  */
+import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import express from "express";
 import type { Express, Request, Response } from "express";
+import { createContext } from "../server/_core/context";
+import fattureInCloudRoutes from "../server/fattureincloud-routes";
+import { appRouter } from "../server/routers";
 
 let cachedApp: Express | null = null;
 let bootError: Error | null = null;
 
 try {
-  const [
-    trpcAdapter,
-    contextMod,
-    ficRoutesMod,
-    routersMod,
-  ] = await Promise.all([
-    import("@trpc/server/adapters/express"),
-    import("../server/_core/context"),
-    import("../server/fattureincloud-routes"),
-    import("../server/routers"),
-  ]);
-
   const app = express();
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
-  app.use("/api", ficRoutesMod.default);
+  app.use("/api", fattureInCloudRoutes);
   app.use(
     "/api/trpc",
-    trpcAdapter.createExpressMiddleware({
-      router: routersMod.appRouter,
-      createContext: contextMod.createContext,
+    createExpressMiddleware({
+      router: appRouter,
+      createContext,
     }),
   );
   cachedApp = app;
