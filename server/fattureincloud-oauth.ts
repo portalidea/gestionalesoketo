@@ -9,6 +9,19 @@ const FATTUREINCLOUD_AUTH_URL = "https://api-v2.fattureincloud.it/oauth/authoriz
 const FATTUREINCLOUD_TOKEN_URL = "https://api-v2.fattureincloud.it/oauth/token";
 const FATTUREINCLOUD_API_BASE = "https://api-v2.fattureincloud.it/c";
 
+// Scope read-only richiesti da FiC. Devono corrispondere a quelli
+// abilitati nell'app OAuth lato sviluppatore FiC (https://console.fattureincloud.it).
+// Per future esigenze di scrittura aggiungere i corrispondenti `:a`/`:w`.
+const FATTUREINCLOUD_SCOPES = [
+  "entity.clients:r",
+  "entity.suppliers:r",
+  "products:r",
+  "issued_documents:r",
+  "received_documents:r",
+  "stock:r",
+  "settings:r",
+].join(" ");
+
 interface OAuthTokens {
   access_token: string;
   refresh_token: string;
@@ -30,6 +43,7 @@ export function getAuthorizationUrl(config: FattureInCloudConfig, state: string)
     response_type: "code",
     client_id: config.clientId,
     redirect_uri: config.redirectUri,
+    scope: FATTUREINCLOUD_SCOPES,
     state,
   });
 

@@ -43124,6 +43124,7 @@ function getAuthorizationUrl(config2, state) {
     response_type: "code",
     client_id: config2.clientId,
     redirect_uri: config2.redirectUri,
+    scope: FATTUREINCLOUD_SCOPES,
     state
   });
   return `${FATTUREINCLOUD_AUTH_URL}?${params.toString()}`;
@@ -43212,7 +43213,7 @@ function getOAuthConfig() {
     redirectUri
   };
 }
-var FATTUREINCLOUD_AUTH_URL, FATTUREINCLOUD_TOKEN_URL, FATTUREINCLOUD_API_BASE;
+var FATTUREINCLOUD_AUTH_URL, FATTUREINCLOUD_TOKEN_URL, FATTUREINCLOUD_API_BASE, FATTUREINCLOUD_SCOPES;
 var init_fattureincloud_oauth = __esm({
   "server/fattureincloud-oauth.ts"() {
     "use strict";
@@ -43220,6 +43221,15 @@ var init_fattureincloud_oauth = __esm({
     FATTUREINCLOUD_AUTH_URL = "https://api-v2.fattureincloud.it/oauth/authorize";
     FATTUREINCLOUD_TOKEN_URL = "https://api-v2.fattureincloud.it/oauth/token";
     FATTUREINCLOUD_API_BASE = "https://api-v2.fattureincloud.it/c";
+    FATTUREINCLOUD_SCOPES = [
+      "entity.clients:r",
+      "entity.suppliers:r",
+      "products:r",
+      "issued_documents:r",
+      "received_documents:r",
+      "stock:r",
+      "settings:r"
+    ].join(" ");
   }
 });
 
