@@ -5,9 +5,7 @@
   "framework": null,
   "functions": {
     "api/index.ts": {
-      "maxDuration": 60,
-      "includeFiles": "{server,shared,drizzle}/**",
-      "excludeFiles": "**/*.test.ts"
+      "maxDuration": 60
     }
   },
   "rewrites": [
