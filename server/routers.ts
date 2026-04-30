@@ -312,40 +312,32 @@ export const appRouter = router({
   }),
 
   // ============= STOCK MOVEMENTS =============
+  // NOTA: la creazione/cancellazione movimenti dall'UI è disabilitata
+  // (placeholder pulsante "Aggiungi Movimento" in RetailerDetail). Il
+  // sistema lotti FEFO completo arriva in Phase B post-cutover. Le
+  // procedure restano disponibili per importazioni programmatiche e
+  // per future estensioni.
   stockMovements: router({
-    /**
-     * Crea movimento + aggiorna inventory atomicamente.
-     * IN: inventory += qty, OUT: -= qty, ADJUSTMENT: replace.
-     * batchNumber/expirationDate vengono salvati su inventory (lotto).
-     */
     create: writerProcedure
       .input(
         z.object({
+          inventoryId: uuid,
           retailerId: uuid,
           productId: uuid,
           type: z.enum(["IN", "OUT", "ADJUSTMENT"]),
-          quantity: z.number().int().positive(),
-          batchNumber: z.string().optional(),
-          expirationDate: z.coerce.date().optional(),
+          quantity: z.number(),
+          previousQuantity: z.number().optional(),
+          newQuantity: z.number().optional(),
+          sourceDocument: z.string().optional(),
+          sourceDocumentType: z.string().optional(),
           notes: z.string().optional(),
         }),
       )
       .mutation(async ({ input, ctx }) => {
-        return await db.createMovementWithInventory({
+        return await db.createStockMovement({
           ...input,
           createdBy: ctx.user.id,
         });
-      }),
-
-    /**
-     * Cancella movimento + rollback inventory a previousQuantity.
-     * Fail se ci sono stati movimenti successivi (newQuantity non
-     * matcha l'inventory corrente).
-     */
-    delete: writerProcedure
-      .input(z.object({ id: uuid }))
-      .mutation(async ({ input }) => {
-        return await db.deleteMovementWithRollback(input.id);
       }),
 
     getByRetailer: protectedProcedure

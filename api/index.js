@@ -37613,73 +37613,6 @@ async function createStockMovement(data) {
   const [row] = await db.insert(stockMovements).values(data).returning();
   return row;
 }
-async function createMovementWithInventory(input) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  return db.transaction(async (tx) => {
-    const existing = await tx.select().from(inventory).where(
-      and(
-        eq(inventory.retailerId, input.retailerId),
-        eq(inventory.productId, input.productId)
-      )
-    ).limit(1);
-    const previousQuantity = existing[0]?.quantity ?? 0;
-    let newQuantity;
-    if (input.type === "IN") newQuantity = previousQuantity + input.quantity;
-    else if (input.type === "OUT")
-      newQuantity = previousQuantity - input.quantity;
-    else newQuantity = input.quantity;
-    let inventoryId;
-    if (existing[0]) {
-      await tx.update(inventory).set({
-        quantity: newQuantity,
-        batchNumber: input.batchNumber ?? existing[0].batchNumber,
-        expirationDate: input.expirationDate ?? existing[0].expirationDate,
-        lastUpdated: /* @__PURE__ */ new Date()
-      }).where(eq(inventory.id, existing[0].id));
-      inventoryId = existing[0].id;
-    } else {
-      const [row] = await tx.insert(inventory).values({
-        retailerId: input.retailerId,
-        productId: input.productId,
-        quantity: newQuantity,
-        batchNumber: input.batchNumber ?? null,
-        expirationDate: input.expirationDate ?? null
-      }).returning({ id: inventory.id });
-      inventoryId = row.id;
-    }
-    const [movement] = await tx.insert(stockMovements).values({
-      inventoryId,
-      retailerId: input.retailerId,
-      productId: input.productId,
-      type: input.type,
-      quantity: input.quantity,
-      previousQuantity,
-      newQuantity,
-      notes: input.notes ?? null,
-      createdBy: input.createdBy ?? null
-    }).returning();
-    return movement;
-  });
-}
-async function deleteMovementWithRollback(id) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  return db.transaction(async (tx) => {
-    const [movement] = await tx.select().from(stockMovements).where(eq(stockMovements.id, id)).limit(1);
-    if (!movement) throw new Error("Movimento non trovato");
-    const [inv] = await tx.select().from(inventory).where(eq(inventory.id, movement.inventoryId)).limit(1);
-    if (inv && movement.newQuantity !== null && movement.previousQuantity !== null && inv.quantity === movement.newQuantity) {
-      await tx.update(inventory).set({ quantity: movement.previousQuantity, lastUpdated: /* @__PURE__ */ new Date() }).where(eq(inventory.id, inv.id));
-    } else if (inv && movement.newQuantity !== inv.quantity) {
-      throw new Error(
-        "Stato inventario divergente da quando il movimento \xE8 stato creato. Sono stati registrati altri movimenti successivi: rollback non sicuro."
-      );
-    }
-    await tx.delete(stockMovements).where(eq(stockMovements.id, id));
-    return { success: true };
-  });
-}
 async function getStockMovementsByRetailer(retailerId, limit = 100) {
   const db = await getDb();
   if (!db) return [];
@@ -80102,35 +80035,30 @@ var init_routers = __esm({
         })
       }),
       // ============= STOCK MOVEMENTS =============
+      // NOTA: la creazione/cancellazione movimenti dall'UI è disabilitata
+      // (placeholder pulsante "Aggiungi Movimento" in RetailerDetail). Il
+      // sistema lotti FEFO completo arriva in Phase B post-cutover. Le
+      // procedure restano disponibili per importazioni programmatiche e
+      // per future estensioni.
       stockMovements: router2({
-        /**
-         * Crea movimento + aggiorna inventory atomicamente.
-         * IN: inventory += qty, OUT: -= qty, ADJUSTMENT: replace.
-         * batchNumber/expirationDate vengono salvati su inventory (lotto).
-         */
         create: writerProcedure.input(
           external_exports.object({
+            inventoryId: uuid5,
             retailerId: uuid5,
             productId: uuid5,
             type: external_exports.enum(["IN", "OUT", "ADJUSTMENT"]),
-            quantity: external_exports.number().int().positive(),
-            batchNumber: external_exports.string().optional(),
-            expirationDate: external_exports.coerce.date().optional(),
+            quantity: external_exports.number(),
+            previousQuantity: external_exports.number().optional(),
+            newQuantity: external_exports.number().optional(),
+            sourceDocument: external_exports.string().optional(),
+            sourceDocumentType: external_exports.string().optional(),
             notes: external_exports.string().optional()
           })
         ).mutation(async ({ input, ctx }) => {
-          return await createMovementWithInventory({
+          return await createStockMovement({
             ...input,
             createdBy: ctx.user.id
           });
-        }),
-        /**
-         * Cancella movimento + rollback inventory a previousQuantity.
-         * Fail se ci sono stati movimenti successivi (newQuantity non
-         * matcha l'inventory corrente).
-         */
-        delete: writerProcedure.input(external_exports.object({ id: uuid5 })).mutation(async ({ input }) => {
-          return await deleteMovementWithRollback(input.id);
         }),
         getByRetailer: protectedProcedure.input(
           external_exports.object({

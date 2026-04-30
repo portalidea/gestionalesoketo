@@ -20,24 +20,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Table,
   TableBody,
   TableCell,
@@ -46,7 +28,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
 import { format } from "date-fns";
 import { it } from "date-fns/locale";
@@ -68,17 +49,8 @@ import {
   TrendingUp,
   User,
 } from "lucide-react";
-import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { useLocation, useRoute } from "wouter";
-
-type MovementType = "IN" | "OUT" | "ADJUSTMENT";
-
-const MOVEMENT_TYPE_LABELS: Record<MovementType, string> = {
-  IN: "Carico (entrata)",
-  OUT: "Scarico (uscita)",
-  ADJUSTMENT: "Rettifica",
-};
 
 export default function RetailerDetail() {
   const [, params] = useRoute("/retailers/:id");
@@ -90,53 +62,10 @@ export default function RetailerDetail() {
     { id: retailerId },
     { enabled: retailerId.length > 0 },
   );
-  const { data: products } = trpc.products.list.useQuery();
   const { data: deps } = trpc.retailers.dependentsCount.useQuery(
     { id: retailerId },
     { enabled: retailerId.length > 0 },
   );
-
-  const [movementOpen, setMovementOpen] = useState(false);
-  const [movementForm, setMovementForm] = useState<{
-    productId: string;
-    type: MovementType;
-    quantity: string;
-    batchNumber: string;
-    expirationDate: string;
-    notes: string;
-  }>({
-    productId: "",
-    type: "IN",
-    quantity: "",
-    batchNumber: "",
-    expirationDate: "",
-    notes: "",
-  });
-
-  const createMovement = trpc.stockMovements.create.useMutation({
-    onSuccess: async () => {
-      await utils.retailers.getDetails.invalidate({ id: retailerId });
-      toast.success("Movimento registrato");
-      setMovementOpen(false);
-      setMovementForm({
-        productId: "",
-        type: "IN",
-        quantity: "",
-        batchNumber: "",
-        expirationDate: "",
-        notes: "",
-      });
-    },
-    onError: (err) => toast.error(err.message),
-  });
-
-  const deleteMovement = trpc.stockMovements.delete.useMutation({
-    onSuccess: async () => {
-      await utils.retailers.getDetails.invalidate({ id: retailerId });
-      toast.success("Movimento eliminato e inventario ripristinato");
-    },
-    onError: (err) => toast.error(err.message),
-  });
 
   const deleteRetailerMutation = trpc.retailers.delete.useMutation({
     onSuccess: async () => {
@@ -146,26 +75,6 @@ export default function RetailerDetail() {
     },
     onError: (err) => toast.error(err.message),
   });
-
-  const handleMovementSubmit = (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const qty = parseInt(movementForm.quantity, 10);
-    if (!movementForm.productId || !qty || qty <= 0) {
-      toast.error("Compila prodotto e quantità (positiva).");
-      return;
-    }
-    createMovement.mutate({
-      retailerId,
-      productId: movementForm.productId,
-      type: movementForm.type,
-      quantity: qty,
-      batchNumber: movementForm.batchNumber || undefined,
-      expirationDate: movementForm.expirationDate
-        ? new Date(movementForm.expirationDate)
-        : undefined,
-      notes: movementForm.notes || undefined,
-    });
-  };
 
   if (isLoading) {
     return (
@@ -529,154 +438,14 @@ export default function RetailerDetail() {
           </TabsContent>
 
           <TabsContent value="movements" className="space-y-4">
-            <div className="flex justify-end">
-              <Dialog open={movementOpen} onOpenChange={setMovementOpen}>
-                <DialogTrigger asChild>
-                  <Button>
-                    <Plus className="h-4 w-4 mr-2" />
-                    Aggiungi Movimento
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="max-w-lg">
-                  <form onSubmit={handleMovementSubmit}>
-                    <DialogHeader>
-                      <DialogTitle>Nuovo movimento di magazzino</DialogTitle>
-                      <DialogDescription>
-                        Carico, scarico o rettifica. Inventario aggiornato
-                        atomicamente.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="grid gap-4 py-4">
-                      <div className="grid gap-2">
-                        <Label htmlFor="mov-product">Prodotto *</Label>
-                        <Select
-                          value={movementForm.productId}
-                          onValueChange={(v) =>
-                            setMovementForm({ ...movementForm, productId: v })
-                          }
-                        >
-                          <SelectTrigger id="mov-product">
-                            <SelectValue placeholder="Seleziona prodotto" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {(products ?? []).map((p) => (
-                              <SelectItem key={p.id} value={p.id}>
-                                {p.name}{" "}
-                                <span className="text-muted-foreground">
-                                  ({p.sku})
-                                </span>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="grid gap-2">
-                          <Label htmlFor="mov-type">Tipo *</Label>
-                          <Select
-                            value={movementForm.type}
-                            onValueChange={(v) =>
-                              setMovementForm({
-                                ...movementForm,
-                                type: v as MovementType,
-                              })
-                            }
-                          >
-                            <SelectTrigger id="mov-type">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {(
-                                Object.entries(MOVEMENT_TYPE_LABELS) as Array<
-                                  [MovementType, string]
-                                >
-                              ).map(([k, label]) => (
-                                <SelectItem key={k} value={k}>
-                                  {label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="grid gap-2">
-                          <Label htmlFor="mov-qty">Quantità *</Label>
-                          <Input
-                            id="mov-qty"
-                            type="number"
-                            min={1}
-                            value={movementForm.quantity}
-                            onChange={(e) =>
-                              setMovementForm({
-                                ...movementForm,
-                                quantity: e.target.value,
-                              })
-                            }
-                            required
-                          />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="grid gap-2">
-                          <Label htmlFor="mov-batch">Lotto</Label>
-                          <Input
-                            id="mov-batch"
-                            value={movementForm.batchNumber}
-                            onChange={(e) =>
-                              setMovementForm({
-                                ...movementForm,
-                                batchNumber: e.target.value,
-                              })
-                            }
-                          />
-                        </div>
-                        <div className="grid gap-2">
-                          <Label htmlFor="mov-exp">Scadenza</Label>
-                          <Input
-                            id="mov-exp"
-                            type="date"
-                            value={movementForm.expirationDate}
-                            onChange={(e) =>
-                              setMovementForm({
-                                ...movementForm,
-                                expirationDate: e.target.value,
-                              })
-                            }
-                          />
-                        </div>
-                      </div>
-                      <div className="grid gap-2">
-                        <Label htmlFor="mov-notes">Note</Label>
-                        <Textarea
-                          id="mov-notes"
-                          rows={2}
-                          value={movementForm.notes}
-                          onChange={(e) =>
-                            setMovementForm({
-                              ...movementForm,
-                              notes: e.target.value,
-                            })
-                          }
-                        />
-                      </div>
-                    </div>
-                    <DialogFooter>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setMovementOpen(false)}
-                      >
-                        Annulla
-                      </Button>
-                      <Button type="submit" disabled={createMovement.isPending}>
-                        {createMovement.isPending && (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        )}
-                        Registra
-                      </Button>
-                    </DialogFooter>
-                  </form>
-                </DialogContent>
-              </Dialog>
+            <div className="flex flex-col items-end gap-1">
+              <Button disabled aria-disabled="true">
+                <Plus className="h-4 w-4 mr-2" />
+                Aggiungi Movimento
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Sistema lotti FEFO completo in arrivo (Fase B post-cutover).
+              </p>
             </div>
 
             {recentMovements.length > 0 ? (
@@ -695,8 +464,8 @@ export default function RetailerDetail() {
                         <TableHead>Tipo</TableHead>
                         <TableHead>Prodotto</TableHead>
                         <TableHead className="text-right">Quantità</TableHead>
+                        <TableHead>Documento</TableHead>
                         <TableHead>Note</TableHead>
-                        <TableHead className="w-12"></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -732,47 +501,11 @@ export default function RetailerDetail() {
                               {movement.quantity}
                             </span>
                           </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {movement.sourceDocument || "-"}
+                          </TableCell>
                           <TableCell className="text-muted-foreground text-sm">
                             {movement.notes || "-"}
-                          </TableCell>
-                          <TableCell>
-                            <AlertDialog>
-                              <AlertDialogTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                                  aria-label="Elimina movimento"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </AlertDialogTrigger>
-                              <AlertDialogContent>
-                                <AlertDialogHeader>
-                                  <AlertDialogTitle>
-                                    Eliminare il movimento?
-                                  </AlertDialogTitle>
-                                  <AlertDialogDescription>
-                                    L'inventario verrà ripristinato alla
-                                    quantità precedente al movimento. Se nel
-                                    frattempo sono stati registrati altri
-                                    movimenti, l'operazione fallirà per
-                                    sicurezza.
-                                  </AlertDialogDescription>
-                                </AlertDialogHeader>
-                                <AlertDialogFooter>
-                                  <AlertDialogCancel>Annulla</AlertDialogCancel>
-                                  <AlertDialogAction
-                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                    onClick={() =>
-                                      deleteMovement.mutate({ id: movement.id })
-                                    }
-                                  >
-                                    Elimina movimento
-                                  </AlertDialogAction>
-                                </AlertDialogFooter>
-                              </AlertDialogContent>
-                            </AlertDialog>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -789,7 +522,6 @@ export default function RetailerDetail() {
                   </h3>
                   <p className="text-muted-foreground text-center max-w-md">
                     Non sono stati registrati movimenti di magazzino per questo rivenditore.
-                    Usa il pulsante in alto per registrare un carico, uno scarico o una rettifica.
                   </p>
                 </CardContent>
               </Card>
