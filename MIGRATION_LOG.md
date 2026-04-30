@@ -36,8 +36,9 @@ prima del cutover finale e dello spegnimento dell'ambiente Manus.
   stockMovements, alerts, syncLogs) con RLS abilitato come
   defense-in-depth.
 - **Hosting Vercel**: serverless function `api/index.js` prebundled
-  con esbuild (3.2MB CJS, gitignored, generato durante `pnpm build`),
-  pool postgres `max:5`, `idle_timeout:20`, `max_lifetime:5min`.
+  con esbuild (3.2MB CJS, **tracked in git** — Step 2 tentato e
+  revertito, vedi sotto), pool postgres `max:5`, `idle_timeout:20`,
+  `max_lifetime:5min`.
 
 ### Fix architetturali principali della giornata
 
@@ -64,6 +65,88 @@ prima del cutover finale e dello spegnimento dell'ambiente Manus.
    "Performance hotfix" più sotto.
 
 ### ✅ Step completati (in questa sessione)
+
+#### Step 1b — Pulizia debug aid residua (commit `03a9ca7` + `e26d754`, 2026-04-30 ~11:34)
+
+Cleanup server-side post-stabilizzazione di tutti i fix architetturali.
+
+- `vercel-handler/index.ts`: `/api/health` ridotto a `{"ok":true}` (11
+  byte vs 628). Rimossi: env summary, marker `vercel-handler-alive`,
+  `nodeVersion`, paths, `bootStarted`, alias `/api/ping`. Boot/request
+  error path: log dettagliato a `console.error` (Vercel runtime logs)
+  + risposta generica al client (no stack trace exposed in production).
+- `server/db.ts`: rimosso `console.log` di timing in
+  `getDashboardStats` (era diagnostic temporaneo del perf hotfix).
+  Catch-block error log semplificato (mantiene `console.error` per
+  errori reali, niente prefisso timing).
+- `server/_core/env.ts`: rimosso `jwtSecret: required("SUPABASE_JWT_SECRET")`.
+  Il secret HS256 non è più usato in codice (post-fix JWKS). La env
+  var resta nelle Vercel env vars per rollback safety.
+- `.env.example`: rimossa riga `SUPABASE_JWT_SECRET=`.
+
+Verifica grep su `jwtSecret`/`JWT_SECRET` in source: 0 reference
+funzionali post-cleanup (solo commento esplicativo). Diff: 4 file,
++15/-96 (–81 righe nette).
+
+**Nota deploy**: il commit iniziale `03a9ca7` (pulizia) non landed
+perché Step 2 era già rotto e tutti i deploy dopo `ea6ca7b`
+fallivano (vedi sezione Step 2 sotto). Step 1b è andato live
+insieme al revert di Step 2 nel commit `e26d754`.
+
+#### Step 2 — ❌ Bundle out of git: TENTATO E REVERTITO
+
+**Tentativo** (commit `ea6ca7b`, 2026-04-30 ~10:30): rimosso
+`api/index.js` da git tracking (3.2MB esbuild prebundle), aggiunto
+a `.gitignore`. Ipotesi: Vercel rigenera il bundle durante
+`pnpm build`, function detection avviene post-build.
+
+**Falsa conferma**: la mia verifica iniziale ("30 polls a 200 con
+marker `vercel-handler-alive`") proveniva dal **deploy Ready
+precedente** che era ancora attivo come production alias. Non avevo
+notato il fail.
+
+**Realtà** (scoperta 1h dopo, recuperando i Vercel build logs via
+CLI):
+```
+2026-04-30T09:18:46Z  Running "vercel build"
+2026-04-30T09:18:46Z  Error: The pattern "api/index.js" defined in
+                      `functions` doesn't match any Serverless
+                      Functions inside the `api` directory.
+```
+Tutti i 5 deploy successivi a `ea6ca7b` hanno fallito in <1s con
+questo errore, prima ancora di eseguire il `buildCommand`. Vercel
+**valida i pattern di `vercel.json functions` contro il git checkout
+PRE-build**, non post-build. Senza `api/index.js` in git il pattern
+non matcha → fail immediato.
+
+**Revert** (commit `e26d754`, 2026-04-30 ~11:34): rimesso
+`api/index.js` come tracked, .gitignore aggiornato con commento
+esplicativo. Deploy successivo Ready in ~30s.
+
+**Strategia futura per chiudere il tech debt**:
+1. **Best**: configurare il pattern `functions` in vercel.json a
+   `vercel-handler/index.ts` (la source) invece di `api/index.js`
+   (l'artifact). Vercel detecta la source, fa bundling nativo via
+   ncc, ed evita il problema. Da testare se ncc gestisce
+   correttamente i path relativi `../server/*` (problema originale
+   del 30/04 mattina) — magari con tsconfig adeguato è risolto.
+2. **Alternativa**: usare Vercel Build Output API v3 — emettere
+   manualmente la function in `.vercel/output/functions/api/index.func/`
+   con il proprio config. Più controllo, più complessità.
+3. **Alternativa pragmatica**: tenere bundle in git ma usare git
+   LFS per evitare diff churn binari.
+
+Da affrontare al cutover finale, con tempo per debugging. Nel
+frattempo, accettato come tech debt: 3.2MB binario in git che cambia
+ad ogni rebuild della function.
+
+**Lezione (registrata in memoria)**: la nota in questo log scritta
+dopo il commit `ea6ca7b` («Vercel fa function detection POST-build,
+non PRE-build») era doppiamente errata — confondeva due fasi
+distinte di Vercel: function COLLECTION (post-build) e pattern
+VALIDATION (pre-build). Quest'ultima legge `vercel.json` e cerca
+file matching nel git checkout, prima ancora di eseguire
+`buildCommand`. Verificare sempre con build logs.
 
 #### Step 3 — Verifica trigger `handle_new_user` (2026-04-30 ~10:38)
 
@@ -157,17 +240,12 @@ end-to-end demandato all'utente.
 
 ### Step finali rimasti per chiudere la migrazione
 
-#### 1b. Pulizia debug aid restante (priorità media)
+#### 2-redo. Bundle out of git (tech debt, da rivedere al cutover)
 
-- `vercel-handler/index.ts` fast-path `/api/health` espone presenza
-  env vars (DATABASE_URL, SUPABASE_*, OWNER_EMAIL) come `set`/`missing`.
-  Non sono valori, ma è informazione comunque utile a un attaccante
-  per sapere che dietro `gestionale.soketo.it` c'è uno stack
-  Supabase. Da rimuovere o gate dietro un header secret.
-- `console.log("[dashboard] getStats Xms ...")` in `server/db.ts`:
-  utile in fase di shake-down, da silenziare/gate quando stabile.
-- Considerare: eliminare `server/_core/env.ts` requirement su
-  `SUPABASE_JWT_SECRET` (non usato più dopo passaggio a JWKS).
+Step 2 non è stato chiuso. Vedi sezione "Step 2 ❌ TENTATO E REVERTITO"
+sopra per dettagli e strategia futura. Nel frattempo accettato come
+tech debt: `api/index.js` 3.2MB tracked in git, churn binario ad
+ogni rebuild della function.
 
 #### 4. Cutover Manus + dismissione (priorità bassa, ma chiude il progetto)
 
@@ -189,18 +267,21 @@ end-to-end demandato all'utente.
 
 ### Suggested ordering per la prossima sessione
 
-1. Pulizia debug aid restante (Step 1b: env diag in `/api/health`,
-   `console.log` dashboard, requirement `SUPABASE_JWT_SECRET`).
-2. Set `FATTUREINCLOUD_*` env vars su Vercel + redirect URI nel
+1. Set `FATTUREINCLOUD_*` env vars su Vercel + redirect URI nel
    pannello FIC (Step 4, parte preparatoria).
-3. Smoke test completo end-to-end (login, CRUD, sync FIC se attivato).
-4. Cutover finale + spegnimento Manus (Step 4, parte finale).
+2. Smoke test completo end-to-end (login, CRUD, sync FIC se attivato).
+3. Cutover finale + spegnimento Manus (Step 4, parte finale).
+4. (Eventuale, post-cutover) Step 2-redo: bundle out of git con
+   strategia diversa (functions pattern → source TS, oppure
+   Build Output API v3, oppure git LFS).
 
 ### Commit principali della giornata (per riferimento)
 
 ```
-ea6ca7b chore: move api/index.js to build artifact (out of git)  (Step 2)
-86341f4 chore: remove migration debug aid from auth flow         (Step 1a)
+e26d754 revert: keep api/index.js in git (vercel pre-build pattern)  (Step 2 revert + Step 1b)
+03a9ca7 chore: clean up debug aid (minimal health, drop jwt_secret)  (Step 1b — non landed da solo)
+ea6ca7b chore: move api/index.js to build artifact (out of git)      (Step 2 — REVERTITO)
+86341f4 chore: remove migration debug aid from auth flow             (Step 1a)
 b96c107 perf(dashboard): parallel queries + resilient pool       (perf hotfix)
 941f861 fix(auth): verify Supabase JWT with JWKS ECDSA P-256     (auth hotfix)
 82767ba fix(vercel): commit prebundled api/index.js              (workaround poi rimosso da ea6ca7b)
