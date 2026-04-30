@@ -8,6 +8,102 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-04-30 (sera+) — Performance hotfix — Dashboard hang in produzione
+
+### Sintomo
+
+Login funzionante in produzione (post-fix JWKS ES256), ma la home `/`
+restava in loading infinito. Le altre pagine (retailers, products,
+alerts, settings) rispondevano normalmente. Sintomo conferma da
+Vercel logs: `FUNCTION_INVOCATION_TIMEOUT` su `/api/trpc/dashboard.getStats`.
+
+### Root cause
+
+Combinazione di due fattori:
+
+1. **N+1 query** in `dashboard.getStats` (`server/routers.ts`): 3 query
+   iniziali + 13 chiamate `getInventoryByRetailer` + N `getProductById`
+   in loop sequenziale. ~18 query totali.
+
+2. **Connection pool `max: 1`** in `server/db.ts`. Su istanze Vercel
+   warm il pooler Supabase (Supavisor in transaction mode) può chiudere
+   connessioni idle lato server, ma il driver `postgres-js` non lo
+   rileva subito e una query successiva può hangare aspettando una
+   risposta che non arriverà mai. Con `max: 1` quella connessione era
+   l'unica disponibile, quindi tutte le query successive si
+   accodavano dietro all'hang.
+
+Test locale del loop vecchio: ~1500ms (lento ma completa). In
+produzione: hang fino al timeout 60s di Vercel.
+
+### Fix
+
+**`server/db.ts`** — pool resiliente:
+```ts
+postgres(process.env.DATABASE_URL, {
+  prepare: false,
+  max: 5,              // era 1
+  idle_timeout: 20,    // chiude conn idle dopo 20s
+  max_lifetime: 60*5,  // cycling regolare ogni 5 min
+  connect_timeout: 10, // fail-fast in connect
+});
+```
+
+**`server/db.ts`** — nuova `getDashboardStats()` con 4 query parallele
+(`Promise.all`):
+- `count(*)::int` su retailers, products, alerts(WHERE status='ACTIVE')
+- `inventory INNER JOIN products` per ottenere quantity, expirationDate,
+  unitPrice, minStockThreshold in una sola query
+
+Tutto il calcolo aggregato (totalValue, lowStock, expiring) avviene
+in memoria sulle righe joinate, zero query nel loop.
+
+**`server/routers.ts`** — `dashboard.getStats` ridotto a thin wrapper:
+```ts
+getStats: protectedProcedure.query(async () => {
+  return await db.getDashboardStats();
+}),
+```
+
+**Diagnostico**: `console.error` (era warn) sui catch di getDb e
+getDashboardStats, sempre attivo (anche in produzione). Visibile nei
+Vercel runtime logs.
+
+### Timing locale (post-fix)
+
+```
+[dashboard] getStats 237ms  ← cold (prima conn)
+[dashboard] getStats  52ms  ← warm
+```
+
+Vs ~1500ms del pattern N+1 vecchio = **6x più veloce a freddo, 30x a
+caldo**.
+
+### Verifica produzione (post-deploy `b96c107`)
+
+Tutte le tRPC procedures rispondono <310ms con auth check funzionante:
+```
+/api/trpc/dashboard.getStats   → 401 UNAUTHORIZED (no auth)  ~300ms
+/api/trpc/retailers.list       → 401 UNAUTHORIZED (no auth)  307ms
+/api/trpc/products.list        → 401 UNAUTHORIZED (no auth)  236ms
+/api/trpc/alerts.getActive     → 401 UNAUTHORIZED (no auth)  265ms
+/api/health                    → 200 OK
+```
+
+Niente più hang. Conferma finale richiesta: utente apre dashboard in
+produzione con sessione admin attiva, KPI deve caricare in <1s.
+
+### Punti di attenzione aperti
+
+- Pattern simile (N+1 in loop sequenziale) potrebbe esistere in altre
+  procedure (es. `retailers.getDetails` aggrega inventory+movements+
+  alerts per un retailer). Monitorare.
+- `console.error` di diagnostica sempre attivo in produzione: utile per
+  debug post-deploy, da valutare se ridurre verbosità una volta
+  stabile.
+
+---
+
 ## 2026-04-30 (sera) — Step 3 hotfix — Bug critico Auth: HS256 vs ECDSA P-256
 
 ### Sintomo
