@@ -1,4 +1,4 @@
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -21,16 +21,30 @@ let _db: ReturnType<typeof drizzle> | null = null;
 let _client: ReturnType<typeof postgres> | null = null;
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
+//
+// Pool config tuned for serverless (Vercel) + Supabase pgbouncer:
+//   - prepare: false   → pgbouncer transaction mode non supporta prepared
+//   - max: 5           → permette query parallele dentro la stessa istanza
+//                        (es. dashboard.getStats + alerts.getActive in
+//                        parallelo dalla home, o Promise.all interno)
+//   - idle_timeout: 20 → chiude conn idle dopo 20s; evita di tenere
+//                        connessioni che il pooler ha già reciso
+//   - max_lifetime: 5min → cycling regolare per non avere conn stantie
+//   - connect_timeout: 10 → fail-fast se Supabase non risponde
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
       _client = postgres(process.env.DATABASE_URL, {
-        prepare: false, // pgbouncer (Supabase pooler) compat
-        max: 1,
+        prepare: false,
+        max: 5,
+        idle_timeout: 20,
+        max_lifetime: 60 * 5,
+        connect_timeout: 10,
       });
       _db = drizzle(_client);
     } catch (error) {
-      console.warn("[Database] Failed to connect:", error);
+      // Loggato sempre (anche in produzione) per visibilità in Vercel logs.
+      console.error("[Database] Failed to connect:", error);
       _db = null;
     }
   }
@@ -284,4 +298,89 @@ export async function getSyncLogsByRetailer(retailerId: string, limit = 50) {
     .where(eq(syncLogs.retailerId, retailerId))
     .orderBy(desc(syncLogs.startedAt))
     .limit(limit);
+}
+
+// ============= DASHBOARD STATS =============
+
+const EMPTY_DASHBOARD_STATS = {
+  totalRetailers: 0,
+  totalProducts: 0,
+  activeAlerts: 0,
+  totalInventoryValue: "0.00",
+  lowStockItems: 0,
+  expiringItems: 0,
+};
+
+/**
+ * Aggregato KPI per la home dashboard. Sostituisce un loop N+1 (13 retailer →
+ * getInventoryByRetailer → getProductById per item) con 4 query parallele.
+ * Tempo atteso: ~300ms vs ~2s con il pattern vecchio.
+ */
+export async function getDashboardStats() {
+  const t0 = Date.now();
+  const db = await getDb();
+  if (!db) return EMPTY_DASHBOARD_STATS;
+
+  try {
+    const [retailerCountRows, productCountRows, alertCountRows, inventoryRows] =
+      await Promise.all([
+        db.select({ c: sql<number>`count(*)::int` }).from(retailers),
+        db.select({ c: sql<number>`count(*)::int` }).from(products),
+        db
+          .select({ c: sql<number>`count(*)::int` })
+          .from(alerts)
+          .where(eq(alerts.status, "ACTIVE")),
+        db
+          .select({
+            quantity: inventory.quantity,
+            expirationDate: inventory.expirationDate,
+            unitPrice: products.unitPrice,
+            minStockThreshold: products.minStockThreshold,
+          })
+          .from(inventory)
+          .innerJoin(products, eq(inventory.productId, products.id)),
+      ]);
+
+    let totalInventoryValue = 0;
+    let lowStockItems = 0;
+    let expiringItems = 0;
+    const now = Date.now();
+    for (const item of inventoryRows) {
+      const price = item.unitPrice ? parseFloat(item.unitPrice) : NaN;
+      if (!Number.isNaN(price)) {
+        totalInventoryValue += price * item.quantity;
+      }
+      if (item.quantity < (item.minStockThreshold ?? 10)) {
+        lowStockItems++;
+      }
+      if (item.expirationDate) {
+        const days = Math.floor(
+          (new Date(item.expirationDate).getTime() - now) / 86_400_000,
+        );
+        if (days > 0 && days <= 30) expiringItems++;
+      }
+    }
+
+    const result = {
+      totalRetailers: retailerCountRows[0]?.c ?? 0,
+      totalProducts: productCountRows[0]?.c ?? 0,
+      activeAlerts: alertCountRows[0]?.c ?? 0,
+      totalInventoryValue: totalInventoryValue.toFixed(2),
+      lowStockItems,
+      expiringItems,
+    };
+    console.log(`[dashboard] getStats ${Date.now() - t0}ms`, {
+      retailers: result.totalRetailers,
+      products: result.totalProducts,
+      alerts: result.activeAlerts,
+      inventoryRows: inventoryRows.length,
+    });
+    return result;
+  } catch (error) {
+    console.error(
+      `[dashboard] getStats failed after ${Date.now() - t0}ms:`,
+      error,
+    );
+    throw error;
+  }
 }

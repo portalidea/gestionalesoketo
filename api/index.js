@@ -37473,12 +37473,14 @@ async function getDb() {
     try {
       _client = src_default(process.env.DATABASE_URL, {
         prepare: false,
-        // pgbouncer (Supabase pooler) compat
-        max: 1
+        max: 5,
+        idle_timeout: 20,
+        max_lifetime: 60 * 5,
+        connect_timeout: 10
       });
       _db = drizzle(_client);
     } catch (error46) {
-      console.warn("[Database] Failed to connect:", error46);
+      console.error("[Database] Failed to connect:", error46);
       _db = null;
     }
   }
@@ -37638,7 +37640,65 @@ async function getSyncLogsByRetailer(retailerId, limit = 50) {
   if (!db) return [];
   return db.select().from(syncLogs).where(eq(syncLogs.retailerId, retailerId)).orderBy(desc(syncLogs.startedAt)).limit(limit);
 }
-var _db, _client;
+async function getDashboardStats() {
+  const t0 = Date.now();
+  const db = await getDb();
+  if (!db) return EMPTY_DASHBOARD_STATS;
+  try {
+    const [retailerCountRows, productCountRows, alertCountRows, inventoryRows] = await Promise.all([
+      db.select({ c: sql`count(*)::int` }).from(retailers),
+      db.select({ c: sql`count(*)::int` }).from(products),
+      db.select({ c: sql`count(*)::int` }).from(alerts).where(eq(alerts.status, "ACTIVE")),
+      db.select({
+        quantity: inventory.quantity,
+        expirationDate: inventory.expirationDate,
+        unitPrice: products.unitPrice,
+        minStockThreshold: products.minStockThreshold
+      }).from(inventory).innerJoin(products, eq(inventory.productId, products.id))
+    ]);
+    let totalInventoryValue = 0;
+    let lowStockItems = 0;
+    let expiringItems = 0;
+    const now = Date.now();
+    for (const item of inventoryRows) {
+      const price = item.unitPrice ? parseFloat(item.unitPrice) : NaN;
+      if (!Number.isNaN(price)) {
+        totalInventoryValue += price * item.quantity;
+      }
+      if (item.quantity < (item.minStockThreshold ?? 10)) {
+        lowStockItems++;
+      }
+      if (item.expirationDate) {
+        const days = Math.floor(
+          (new Date(item.expirationDate).getTime() - now) / 864e5
+        );
+        if (days > 0 && days <= 30) expiringItems++;
+      }
+    }
+    const result = {
+      totalRetailers: retailerCountRows[0]?.c ?? 0,
+      totalProducts: productCountRows[0]?.c ?? 0,
+      activeAlerts: alertCountRows[0]?.c ?? 0,
+      totalInventoryValue: totalInventoryValue.toFixed(2),
+      lowStockItems,
+      expiringItems
+    };
+    console.log(`[dashboard] getStats ${Date.now() - t0}ms`, {
+      retailers: result.totalRetailers,
+      products: result.totalProducts,
+      alerts: result.activeAlerts,
+      inventoryRows: inventoryRows.length
+    });
+    return result;
+  } catch (error46) {
+    console.error(
+      `[dashboard] getStats failed after ${Date.now() - t0}ms:`,
+      error46
+    );
+    throw error46;
+  }
+}
+var _db, _client, EMPTY_DASHBOARD_STATS;
 var init_db2 = __esm({
   "server/db.ts"() {
     "use strict";
@@ -37648,6 +37708,14 @@ var init_db2 = __esm({
     init_schema2();
     _db = null;
     _client = null;
+    EMPTY_DASHBOARD_STATS = {
+      totalRetailers: 0,
+      totalProducts: 0,
+      activeAlerts: 0,
+      totalInventoryValue: "0.00",
+      lowStockItems: 0,
+      expiringItems: 0
+    };
   }
 });
 
@@ -80012,43 +80080,7 @@ var init_routers = __esm({
       // ============= DASHBOARD STATS =============
       dashboard: router2({
         getStats: protectedProcedure.query(async () => {
-          const retailers2 = await getAllRetailers();
-          const products2 = await getAllProducts();
-          const activeAlerts = await getActiveAlerts();
-          let totalInventoryValue = 0;
-          let lowStockItems = 0;
-          let expiringItems = 0;
-          for (const retailer of retailers2) {
-            const inventory2 = await getInventoryByRetailer(retailer.id);
-            for (const item of inventory2) {
-              const product = await getProductById(item.productId);
-              if (product && product.unitPrice) {
-                const price = parseFloat(product.unitPrice);
-                if (!isNaN(price)) {
-                  totalInventoryValue += price * item.quantity;
-                }
-              }
-              if (product && item.quantity < (product.minStockThreshold || 10)) {
-                lowStockItems++;
-              }
-              if (item.expirationDate) {
-                const daysUntilExpiry = Math.floor(
-                  (new Date(item.expirationDate).getTime() - Date.now()) / (1e3 * 60 * 60 * 24)
-                );
-                if (daysUntilExpiry <= 30 && daysUntilExpiry > 0) {
-                  expiringItems++;
-                }
-              }
-            }
-          }
-          return {
-            totalRetailers: retailers2.length,
-            totalProducts: products2.length,
-            activeAlerts: activeAlerts.length,
-            totalInventoryValue: totalInventoryValue.toFixed(2),
-            lowStockItems,
-            expiringItems
-          };
+          return await getDashboardStats();
         })
       }),
       // ============= FATTURE IN CLOUD SYNC =============

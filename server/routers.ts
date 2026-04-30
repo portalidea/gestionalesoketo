@@ -396,49 +396,7 @@ export const appRouter = router({
   // ============= DASHBOARD STATS =============
   dashboard: router({
     getStats: protectedProcedure.query(async () => {
-      const retailers = await db.getAllRetailers();
-      const products = await db.getAllProducts();
-      const activeAlerts = await db.getActiveAlerts();
-
-      let totalInventoryValue = 0;
-      let lowStockItems = 0;
-      let expiringItems = 0;
-
-      for (const retailer of retailers) {
-        const inventory = await db.getInventoryByRetailer(retailer.id);
-        for (const item of inventory) {
-          const product = await db.getProductById(item.productId);
-          if (product && product.unitPrice) {
-            const price = parseFloat(product.unitPrice);
-            if (!isNaN(price)) {
-              totalInventoryValue += price * item.quantity;
-            }
-          }
-
-          if (product && item.quantity < (product.minStockThreshold || 10)) {
-            lowStockItems++;
-          }
-
-          if (item.expirationDate) {
-            const daysUntilExpiry = Math.floor(
-              (new Date(item.expirationDate).getTime() - Date.now()) /
-                (1000 * 60 * 60 * 24),
-            );
-            if (daysUntilExpiry <= 30 && daysUntilExpiry > 0) {
-              expiringItems++;
-            }
-          }
-        }
-      }
-
-      return {
-        totalRetailers: retailers.length,
-        totalProducts: products.length,
-        activeAlerts: activeAlerts.length,
-        totalInventoryValue: totalInventoryValue.toFixed(2),
-        lowStockItems,
-        expiringItems,
-      };
+      return await db.getDashboardStats();
     }),
   }),
 
