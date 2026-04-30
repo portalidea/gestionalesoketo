@@ -1,293 +1,93 @@
 import { supabase } from "@/lib/supabase";
-import type { Session } from "@supabase/supabase-js";
-import { useEffect, useRef, useState } from "react";
-
-type LogLevel = "info" | "warn" | "error" | "success";
-
-interface LogEntry {
-  level: LogLevel;
-  message: string;
-  timestamp: string;
-}
-
-const REDIRECT_DELAY_MS = 1500;
-const SIGNED_IN_TIMEOUT_MS = 4000;
+import { Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
 
 export default function AuthCallback() {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [redirectTarget, setRedirectTarget] = useState<string | null>(null);
-  const [secondsLeft, setSecondsLeft] = useState<number>(
-    Math.round(REDIRECT_DELAY_MS / 1000),
-  );
-  const cancelledRef = useRef(false);
-
-  const appendLog = (level: LogLevel, message: string) => {
-    const timestamp = new Date().toISOString().slice(11, 23);
-    const consoleFn =
-      level === "error"
-        ? console.error
-        : level === "warn"
-          ? console.warn
-          : console.log;
-    consoleFn(`[Auth callback] ${message}`);
-    setLogs((prev) => [...prev, { level, message, timestamp }]);
-  };
-
-  const scheduleRedirect = (target: string) => {
-    setRedirectTarget(target);
-    appendLog(
-      "info",
-      `Redirect a "${target}" tra ${Math.round(REDIRECT_DELAY_MS / 1000)} secondi…`,
-    );
-  };
-
-  const waitForSignedInOrSession = async (): Promise<Session | null> => {
-    const { data } = await supabase.auth.getSession();
-    if (data.session) {
-      appendLog(
-        "success",
-        `getSession() conferma sessione persistita. user.id=${data.session.user.id}`,
-      );
-      return data.session;
-    }
-
-    appendLog(
-      "warn",
-      "getSession() non restituisce ancora la sessione: aspetto evento SIGNED_IN…",
-    );
-
-    return new Promise<Session | null>((resolve) => {
-      let resolved = false;
-      const settle = (value: Session | null) => {
-        if (resolved) return;
-        resolved = true;
-        try {
-          listener?.data.subscription.unsubscribe();
-        } catch {
-          // ignore
-        }
-        clearTimeout(timer);
-        resolve(value);
-      };
-
-      const listener = supabase.auth.onAuthStateChange(
-        (event, newSession) => {
-          appendLog(
-            "info",
-            `onAuthStateChange → event="${event}" hasSession=${Boolean(newSession)}`,
-          );
-          if (event === "SIGNED_IN" && newSession) {
-            settle(newSession);
-          }
-        },
-      );
-
-      const timer = setTimeout(() => {
-        appendLog(
-          "warn",
-          `Timeout ${SIGNED_IN_TIMEOUT_MS}ms in attesa di SIGNED_IN — proseguo comunque.`,
-        );
-        settle(null);
-      }, SIGNED_IN_TIMEOUT_MS);
-    });
-  };
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    cancelledRef.current = false;
+    let cancelled = false;
 
     const run = async () => {
       const url = new URL(window.location.href);
       const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
 
-      appendLog("info", `URL completo: ${window.location.href}`);
-
-      const errorParam =
-        url.searchParams.get("error") ?? hashParams.get("error");
       const errorDescription =
         url.searchParams.get("error_description") ??
         hashParams.get("error_description");
       if (errorDescription) {
-        appendLog(
-          "error",
-          `Supabase ha restituito un errore esplicito: error="${errorParam ?? "(none)"}" description="${errorDescription}"`,
-        );
-        scheduleRedirect("/login");
+        console.error("[Auth callback]", errorDescription);
+        if (!cancelled) setError(errorDescription);
         return;
       }
 
       const code = url.searchParams.get("code");
       if (code) {
-        appendLog(
-          "success",
-          `Trovato parametro "code" (length=${code.length}, preview="${code.slice(0, 12)}…")`,
-        );
-        appendLog("info", "Chiamata exchangeCodeForSession in corso…");
-
         const { data, error: exchangeError } =
           await supabase.auth.exchangeCodeForSession(code);
-
+        if (cancelled) return;
         if (exchangeError) {
-          const status = (exchangeError as { status?: number }).status;
-          appendLog(
-            "error",
-            `exchangeCodeForSession FALLITO: name="${exchangeError.name}" status=${status ?? "n/a"} message="${exchangeError.message}"`,
-          );
-          try {
-            appendLog(
-              "error",
-              `Dettagli errore: ${JSON.stringify(exchangeError, Object.getOwnPropertyNames(exchangeError))}`,
-            );
-          } catch {
-            // ignore
-          }
-          scheduleRedirect("/login");
+          console.error("[Auth callback] exchange failed:", exchangeError);
+          setError(exchangeError.message);
           return;
         }
-
         if (!data.session) {
-          appendLog(
-            "error",
-            "exchangeCodeForSession non ha errori ma data.session è null/undefined.",
-          );
-          scheduleRedirect("/login");
+          console.error("[Auth callback] exchange returned no session");
+          setError("Sessione non disponibile");
           return;
         }
-
-        appendLog(
-          "success",
-          `Exchange OK. user.id=${data.session.user.id} email=${data.session.user.email ?? "(none)"} expires_at=${data.session.expires_at ?? "n/a"}`,
-        );
-
-        // Aspettiamo che la sessione sia visibile a getSession() / che arrivi
-        // SIGNED_IN, così sappiamo che il pickup post-reload è solido.
-        await waitForSignedInOrSession();
-
-        scheduleRedirect("/");
+        window.location.replace("/");
         return;
       }
 
+      // Fallback: legacy hash flow con access_token nel fragment.
       if (hashParams.get("access_token")) {
-        appendLog(
-          "info",
-          "Trovato access_token nel fragment URL — attesa pickup SDK…",
-        );
-        for (let attempt = 0; attempt < 20; attempt++) {
+        for (let i = 0; i < 20; i++) {
           const { data } = await supabase.auth.getSession();
+          if (cancelled) return;
           if (data.session) {
-            appendLog(
-              "success",
-              `Sessione recuperata da hash al tentativo ${attempt + 1}. user.id=${data.session.user.id}`,
-            );
-            scheduleRedirect("/");
+            window.location.replace("/");
             return;
           }
-          await new Promise((r) => setTimeout(r, 150));
+          await new Promise((r) => setTimeout(r, 100));
         }
-        appendLog(
-          "error",
-          "Timeout: SDK non ha agganciato la sessione dal fragment URL dopo 20 tentativi (~3s).",
-        );
-        scheduleRedirect("/login");
+        console.error("[Auth callback] hash flow: session not picked up");
+        setError("Login non riuscito");
         return;
       }
 
-      appendLog(
-        "error",
-        "Nessun parametro utile trovato (né code, né access_token, né error_description).",
-      );
-      scheduleRedirect("/login");
+      console.error("[Auth callback] no code/access_token/error in URL");
+      setError("Parametri di login mancanti");
     };
 
     run().catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      appendLog("error", `Eccezione non gestita: ${msg}`);
-      scheduleRedirect("/login");
+      if (cancelled) return;
+      console.error("[Auth callback] unexpected:", err);
+      setError(err instanceof Error ? err.message : String(err));
     });
 
     return () => {
-      cancelledRef.current = true;
+      cancelled = true;
     };
   }, []);
 
   useEffect(() => {
-    if (!redirectTarget) return;
-
-    setSecondsLeft(Math.round(REDIRECT_DELAY_MS / 1000));
-    const tickInterval = window.setInterval(() => {
-      setSecondsLeft((s) => (s > 0 ? s - 1 : 0));
-    }, 1000);
-
-    const redirectTimeout = window.setTimeout(() => {
-      if (cancelledRef.current) return;
-      window.location.replace(redirectTarget);
-    }, REDIRECT_DELAY_MS);
-
-    return () => {
-      window.clearInterval(tickInterval);
-      window.clearTimeout(redirectTimeout);
-    };
-  }, [redirectTarget]);
-
-  const colorForLevel = (level: LogLevel) => {
-    switch (level) {
-      case "error":
-        return "text-red-400";
-      case "warn":
-        return "text-yellow-400";
-      case "success":
-        return "text-green-400";
-      default:
-        return "text-zinc-200";
-    }
-  };
+    if (!error) return;
+    const t = window.setTimeout(() => {
+      window.location.replace("/login?reason=callback_error");
+    }, 600);
+    return () => window.clearTimeout(t);
+  }, [error]);
 
   return (
-    <div className="min-h-screen bg-black text-zinc-100 px-4 py-6 font-mono text-xs">
-      <div className="mx-auto max-w-3xl space-y-4">
-        <div className="flex items-baseline justify-between border-b border-zinc-700 pb-2">
-          <h1 className="text-base font-semibold">Auth callback debug</h1>
-          {redirectTarget ? (
-            <span className="text-zinc-400">
-              Redirect a <span className="text-zinc-100">{redirectTarget}</span>{" "}
-              fra {secondsLeft}s
-            </span>
-          ) : (
-            <span className="text-zinc-400">In esecuzione…</span>
-          )}
-        </div>
-
-        <pre className="whitespace-pre-wrap break-all rounded bg-zinc-950 border border-zinc-800 p-3 leading-relaxed">
-          {logs.map((entry, i) => (
-            <div key={i} className={colorForLevel(entry.level)}>
-              [{entry.timestamp}] {entry.level.toUpperCase().padEnd(7)}{" "}
-              {entry.message}
-            </div>
-          ))}
-          {logs.length === 0 && (
-            <span className="text-zinc-500">(in attesa di log…)</span>
-          )}
-        </pre>
-
-        {redirectTarget && (
-          <div className="flex gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => {
-                cancelledRef.current = true;
-                setRedirectTarget(null);
-              }}
-              className="rounded border border-zinc-700 px-3 py-1 text-zinc-200 hover:bg-zinc-900"
-            >
-              Annulla redirect
-            </button>
-            <a
-              href={redirectTarget}
-              className="rounded border border-zinc-700 px-3 py-1 text-zinc-200 hover:bg-zinc-900"
-            >
-              Vai subito a {redirectTarget}
-            </a>
-          </div>
-        )}
+    <div className="flex min-h-screen items-center justify-center px-4">
+      <div className="flex items-center gap-3 text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin" />
+        <span className="text-sm">
+          {error
+            ? "Login non riuscito, ti rimando alla pagina di accesso…"
+            : "Accesso in corso…"}
+        </span>
       </div>
     </div>
   );

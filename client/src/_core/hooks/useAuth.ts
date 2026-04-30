@@ -9,30 +9,6 @@ type UseAuthOptions = {
   redirectPath?: string;
 };
 
-export const AUTH_BOUNCE_REASON_KEY = "auth_bounce_reason";
-
-const REDIRECT_GRACE_MS = 800;
-
-type BounceReason = {
-  at: string;
-  from: string;
-  cause: "no_session" | "no_app_user" | "me_query_error";
-  detail?: string;
-  hasSupabaseSession: boolean;
-  supabaseUserId: string | null;
-  supabaseEmail: string | null;
-};
-
-function recordBounce(reason: BounceReason) {
-  try {
-    sessionStorage.setItem(AUTH_BOUNCE_REASON_KEY, JSON.stringify(reason));
-  } catch {
-    // ignore (private mode etc.)
-  }
-  // Sempre loggato in console per chi guarda il devtools.
-  console.error("[useAuth] Bouncing to login. Reason:", reason);
-}
-
 export function useAuth(options?: UseAuthOptions) {
   const { redirectOnUnauthenticated = false, redirectPath = LOGIN_PATH } =
     options ?? {};
@@ -52,8 +28,6 @@ export function useAuth(options?: UseAuthOptions) {
     const { data: subscription } = supabase.auth.onAuthStateChange(
       (_event, newSession) => {
         setSession(newSession);
-        // Una volta che lo state change arriva, possiamo sblocchare il loader
-        // anche se il primo getSession() non era ancora tornato.
         setSessionLoading(false);
       },
     );
@@ -96,43 +70,16 @@ export function useAuth(options?: UseAuthOptions) {
     if (state.isAuthenticated) return;
     if (typeof window === "undefined") return;
     if (window.location.pathname === redirectPath) return;
-
-    // Se abbiamo una sessione Supabase ma nessuna data da meQuery e la query
-    // non è ancora finita, NON ribaltare: aspetta il successo o l'errore.
+    // Stato transitorio: sessione presente ma meQuery non ancora risolta.
     if (session && meQuery.isFetching) return;
 
-    let cause: BounceReason["cause"];
-    let detail: string | undefined;
-    if (!session) {
-      cause = "no_session";
-    } else if (meQuery.error) {
-      cause = "me_query_error";
-      detail = meQuery.error.message;
-    } else {
-      cause = "no_app_user";
-      detail =
-        "Sessione Supabase valida ma /api/trpc/auth.me ha restituito null. " +
-        "Probabilmente manca la riga in public.users (trigger handle_new_user) " +
-        "oppure il JWT_SECRET server non corrisponde a quello del progetto Supabase.";
-    }
-
-    const reason: BounceReason = {
-      at: new Date().toISOString(),
-      from: window.location.pathname + window.location.search,
-      cause,
-      detail,
-      hasSupabaseSession: Boolean(session),
-      supabaseUserId: session?.user.id ?? null,
-      supabaseEmail: session?.user.email ?? null,
-    };
-
-    // Grace window per evitare bounce su transitorio (rete lenta, retry).
-    const handle = window.setTimeout(() => {
-      recordBounce(reason);
-      window.location.href = redirectPath;
-    }, REDIRECT_GRACE_MS);
-
-    return () => window.clearTimeout(handle);
+    const reason = !session
+      ? "expired"
+      : meQuery.error
+        ? "me_error"
+        : "no_profile";
+    console.warn(`[useAuth] redirecting to ${redirectPath} (${reason})`);
+    window.location.href = `${redirectPath}?reason=${reason}`;
   }, [
     redirectOnUnauthenticated,
     redirectPath,

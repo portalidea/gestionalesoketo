@@ -1,4 +1,3 @@
-import { AUTH_BOUNCE_REASON_KEY } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -6,31 +5,29 @@ import { supabase } from "@/lib/supabase";
 import { Loader2, Mail } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 
-type BounceReason = {
-  at: string;
-  from: string;
-  cause: "no_session" | "no_app_user" | "me_query_error";
-  detail?: string;
-  hasSupabaseSession: boolean;
-  supabaseUserId: string | null;
-  supabaseEmail: string | null;
+const REASON_MESSAGES: Record<string, string> = {
+  expired: "Sessione scaduta. Accedi di nuovo.",
+  no_profile:
+    "Account non riconosciuto. Contatta l'amministratore per ricevere un invito.",
+  me_error: "Errore di connessione al server. Riprova.",
+  callback_error: "Login non riuscito. Riprova.",
 };
 
 export default function Login() {
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<"idle" | "submitting" | "sent" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [bounceReason, setBounceReason] = useState<BounceReason | null>(null);
+  const [bounceMessage, setBounceMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem(AUTH_BOUNCE_REASON_KEY);
-      if (raw) {
-        setBounceReason(JSON.parse(raw) as BounceReason);
-        sessionStorage.removeItem(AUTH_BOUNCE_REASON_KEY);
-      }
-    } catch {
-      // ignore
+    const params = new URLSearchParams(window.location.search);
+    const reason = params.get("reason");
+    if (reason && REASON_MESSAGES[reason]) {
+      setBounceMessage(REASON_MESSAGES[reason]);
+      // Pulisci il query param così un reload non rimostra il messaggio.
+      const clean = new URL(window.location.href);
+      clean.searchParams.delete("reason");
+      window.history.replaceState({}, "", clean.toString());
     }
   }, []);
 
@@ -55,52 +52,12 @@ export default function Login() {
     setStatus("sent");
   };
 
-  const causeLabel: Record<BounceReason["cause"], string> = {
-    no_session: "Nessuna sessione Supabase trovata.",
-    no_app_user:
-      "Sessione Supabase valida ma utente non presente in public.users.",
-    me_query_error: "Errore nella chiamata /api/trpc/auth.me.",
-  };
-
   return (
     <div className="flex min-h-screen items-center justify-center px-4 py-8">
       <div className="w-full max-w-md space-y-8">
-        {bounceReason && (
-          <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-left font-mono text-xs space-y-2">
-            <p className="font-semibold text-destructive">
-              Sei stato rimandato al login.
-            </p>
-            <p className="text-foreground">{causeLabel[bounceReason.cause]}</p>
-            {bounceReason.detail && (
-              <p className="text-muted-foreground break-words">
-                {bounceReason.detail}
-              </p>
-            )}
-            <div className="text-muted-foreground space-y-0.5 pt-1 border-t border-destructive/30">
-              <div>
-                <span className="opacity-70">at:</span> {bounceReason.at}
-              </div>
-              <div>
-                <span className="opacity-70">from:</span>{" "}
-                <span className="break-all">{bounceReason.from}</span>
-              </div>
-              <div>
-                <span className="opacity-70">supabase session:</span>{" "}
-                {bounceReason.hasSupabaseSession ? "yes" : "no"}
-              </div>
-              {bounceReason.supabaseUserId && (
-                <div className="break-all">
-                  <span className="opacity-70">user.id:</span>{" "}
-                  {bounceReason.supabaseUserId}
-                </div>
-              )}
-              {bounceReason.supabaseEmail && (
-                <div className="break-all">
-                  <span className="opacity-70">email:</span>{" "}
-                  {bounceReason.supabaseEmail}
-                </div>
-              )}
-            </div>
+        {bounceMessage && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-center text-sm text-destructive">
+            {bounceMessage}
           </div>
         )}
 
