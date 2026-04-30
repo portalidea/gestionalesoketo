@@ -36,8 +36,8 @@ prima del cutover finale e dello spegnimento dell'ambiente Manus.
   stockMovements, alerts, syncLogs) con RLS abilitato come
   defense-in-depth.
 - **Hosting Vercel**: serverless function `api/index.js` prebundled
-  con esbuild (3.2MB CJS), pool postgres `max:5`,
-  `idle_timeout:20`, `max_lifetime:5min`.
+  con esbuild (3.2MB CJS, gitignored, generato durante `pnpm build`),
+  pool postgres `max:5`, `idle_timeout:20`, `max_lifetime:5min`.
 
 ### Fix architetturali principali della giornata
 
@@ -64,6 +64,40 @@ prima del cutover finale e dello spegnimento dell'ambiente Manus.
    "Performance hotfix" più sotto.
 
 ### ✅ Step completati (in questa sessione)
+
+#### Step 2 — Bundle out of git (commit `ea6ca7b`, 2026-04-30 ~10:30)
+
+`api/index.js` (3.2MB esbuild prebundle) spostato da tracked a build
+artifact gitignored.
+
+- `.gitignore`: aggiunto `api/index.js` con commento esplicativo.
+- `git rm --cached api/index.js`: rimosso dal tracking, conservato
+  su disco.
+- `package.json` `build` chain già corretto:
+  `vite build && pnpm build:api`.
+- `vercel.json` `functions: api/index.js` invariato.
+
+**Test locale**: `rm api/index.js && pnpm build` → rigenera 3.2MB
+in 2.3s. Build chain robusto da clean state.
+
+**Smoke test produzione**: 30 polls su `/api/health` consecutivi tutti
+HTTP 200 con marker `vercel-handler-alive`; `/api/trpc/auth.me` no-auth
+200 `{json: null}`; `/api/trpc/dashboard.getStats` no-auth 401
+UNAUTHORIZED. Function pienamente operativa.
+
+**Lezione importante**: Vercel fa function detection POST-build, non
+PRE-build. La nota precedente in questo log («Vercel scansiona git
+checkout per function detection prima del build») era **errata** —
+osservazione confusa dal bug parallelo di vercel.json del 30/04
+mattina (functions config puntava a `api/index.ts` inesistente).
+Una volta sistemato vercel.json, il flusso normale funziona:
+1. Clone repo (no `api/index.js`)
+2. `pnpm build` → vite + esbuild → genera `api/index.js`
+3. Function collection: trova `api/index.js` per la config
+4. Deploy
+
+Diff: 2 file, **+4 / -80555** (–80551 righe nette = repo dimagrito di
+~3.2MB).
 
 #### Step 1a — Debug aid auth flow (commit `86341f4`, 2026-04-30 ~10:25)
 
@@ -107,21 +141,6 @@ end-to-end demandato all'utente.
 - Considerare: eliminare `server/_core/env.ts` requirement su
   `SUPABASE_JWT_SECRET` (non usato più dopo passaggio a JWKS).
 
-#### 2. Bundle build artifact out of git (priorità media)
-
-`api/index.js` è 3.2MB committato in git. Subottimale ma necessario
-perché Vercel fa function detection scansionando git PRIMA del
-build. Da rivedere:
-- Opzione A: tenerlo in git con `.gitattributes diff=binary` per
-  ridurre rumore nei diff. Soluzione semplice ma sporca.
-- Opzione B: configurare Vercel per fare function detection
-  post-build (controllare se `outputFunctions` o
-  Build Output API v3 supporta questo). Ideale ma da indagare.
-- Opzione C: includere nel repo solo un placeholder
-  (es. `api/index.js` di 1 riga `throw new Error('build me')`),
-  build:api lo sovrascrive nel `pnpm build` di Vercel. Hacky ma
-  funzionerebbe se il placeholder esiste in git.
-
 #### 3. Verifica trigger `handle_new_user` post-invite (priorità media)
 
 Il trigger Postgres `on_auth_user_created` su `auth.users` deve
@@ -154,24 +173,23 @@ Se non funziona, fix nel trigger o nella logica di
 
 ### Suggested ordering per la prossima sessione
 
-1. Bundle out-of-git (Step 2): cercare opzione B/C, evitare diff
-   binari da 80k righe a ogni rebuild di api/index.js.
-2. Verifica trigger `handle_new_user` con un invite test (Step 3, 5 min).
-3. Pulizia debug aid restante (Step 1b: env diag in `/api/health`,
+1. Verifica trigger `handle_new_user` con un invite test (Step 3, 5 min).
+2. Pulizia debug aid restante (Step 1b: env diag in `/api/health`,
    `console.log` dashboard, requirement `SUPABASE_JWT_SECRET`).
-4. Set `FATTUREINCLOUD_*` env vars su Vercel + redirect URI nel
+3. Set `FATTUREINCLOUD_*` env vars su Vercel + redirect URI nel
    pannello FIC (Step 4, parte preparatoria).
-5. Smoke test completo end-to-end (login, CRUD, sync FIC se attivato).
-6. Cutover finale + spegnimento Manus (Step 4, parte finale).
+4. Smoke test completo end-to-end (login, CRUD, sync FIC se attivato).
+5. Cutover finale + spegnimento Manus (Step 4, parte finale).
 
 ### Commit principali della giornata (per riferimento)
 
 ```
+ea6ca7b chore: move api/index.js to build artifact (out of git)  (Step 2)
 86341f4 chore: remove migration debug aid from auth flow         (Step 1a)
 b96c107 perf(dashboard): parallel queries + resilient pool       (perf hotfix)
 941f861 fix(auth): verify Supabase JWT with JWKS ECDSA P-256     (auth hotfix)
-82767ba fix(vercel): commit prebundled api/index.js              (deploy fix)
-80bfa54 fix(vercel): functions config target api/index.js        (root cause)
+82767ba fix(vercel): commit prebundled api/index.js              (workaround poi rimosso da ea6ca7b)
+80bfa54 fix(vercel): functions config target api/index.js        (root cause deploy stuck)
 1efcd4c fix(vercel): pre-bundle serverless function with esbuild
 e5ea4cd chore(vercel): pin node runtime to 20.x LTS
 ```
