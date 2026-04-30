@@ -113,5 +113,4 @@ temp/
 .vercel/
 
 # Vercel serverless function bundle (built from vercel-handler/index.ts)
-# Disabled temporarily for handcrafted-isolation-test
-# api/index.js
+api/index.js
