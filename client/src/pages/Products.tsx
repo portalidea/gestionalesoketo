@@ -77,7 +77,7 @@ export default function Products() {
           <div>
             <h1 className="text-4xl font-bold text-foreground mb-2">Prodotti</h1>
             <p className="text-muted-foreground">
-              Gestisci il catalogo prodotti Sucketo
+              Gestisci il catalogo prodotti SoKeto
             </p>
           </div>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -92,7 +92,7 @@ export default function Products() {
                 <DialogHeader>
                   <DialogTitle>Nuovo Prodotto</DialogTitle>
                   <DialogDescription>
-                    Inserisci i dati del nuovo prodotto Sucketo
+                    Inserisci i dati del nuovo prodotto SoKeto
                   </DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-4 py-4">
@@ -295,7 +295,7 @@ export default function Products() {
                 Nessun prodotto catalogato
               </h3>
               <p className="text-muted-foreground mb-6 text-center max-w-md">
-                Inizia aggiungendo i prodotti Sucketo al catalogo
+                Inizia aggiungendo i prodotti SoKeto al catalogo
               </p>
               <Button onClick={() => setDialogOpen(true)}>
                 <Plus className="h-5 w-5 mr-2" />

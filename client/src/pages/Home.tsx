@@ -18,7 +18,7 @@ export default function Home() {
             Dashboard
           </h1>
           <p className="text-muted-foreground">
-            Panoramica generale della gestione magazzino rivenditori Sucketo
+            Panoramica generale della gestione magazzino rivenditori SoKeto
           </p>
         </div>
 
@@ -59,7 +59,7 @@ export default function Home() {
                     {stats?.totalProducts || 0}
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Prodotti Sucketo disponibili
+                    Prodotti SoKeto disponibili
                   </p>
                 </CardContent>
               </Card>

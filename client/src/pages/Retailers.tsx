@@ -73,7 +73,7 @@ export default function Retailers() {
           <div>
             <h1 className="text-4xl font-bold text-foreground mb-2">Rivenditori</h1>
             <p className="text-muted-foreground">
-              Gestisci l'anagrafica dei punti vendita Sucketo
+              Gestisci l'anagrafica dei punti vendita SoKeto
             </p>
           </div>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

@@ -31,7 +31,7 @@ export default function Reports() {
                 <CardHeader>
                   <CardTitle className="text-lg">Vendite per Prodotto</CardTitle>
                   <CardDescription>
-                    Analisi dettagliata delle vendite di ogni prodotto Sucketo
+                    Analisi dettagliata delle vendite di ogni prodotto SoKeto
                   </CardDescription>
                 </CardHeader>
               </Card>

@@ -96,7 +96,7 @@ export default function Team() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Team</h1>
           <p className="text-sm text-muted-foreground">
-            Gestisci gli operatori che hanno accesso a SoKeto Inventory.
+            Gestisci gli operatori che hanno accesso a SoKeto Gestionale.
           </p>
         </div>
 

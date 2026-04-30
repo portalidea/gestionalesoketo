@@ -62,7 +62,7 @@ export default function Login() {
         )}
 
         <div className="space-y-2 text-center">
-          <h1 className="text-2xl font-semibold tracking-tight">SoKeto Inventory</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">SoKeto Gestionale</h1>
           <p className="text-sm text-muted-foreground">
             Accedi con il tuo indirizzo email. Ti invieremo un link magico per il login.
           </p>
