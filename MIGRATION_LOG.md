@@ -8,6 +8,116 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 🎉 MIGRATION COMPLETED — 2026-04-30
+
+Sistema migrato da **Manus.im** a **Vercel + Supabase** con successo.
+Cutover finalizzato. Manus dismesso (azione manuale del proprietario).
+
+### Architettura finale
+
+- **Frontend**: Vite + React 19 + Tailwind 4 + shadcn/ui + wouter
+- **Backend**: Express + tRPC 11 + Drizzle ORM (postgres-js)
+- **Database**: Supabase Postgres (regione Frankfurt `eu-central-1`)
+- **Auth**: Supabase Auth via magic link, JWT verificato con JWKS
+  ECDSA P-256 lato backend
+- **Hosting**: Vercel Hobby (free tier), serverless function CJS
+  prebundled con esbuild (3.2 MB)
+- **Dominio**: `https://gestionale.soketo.it` (alias custom Vercel,
+  cert TLS auto)
+- **Email**: Resend (free tier) con dominio custom verificato
+  `sm.soketo.it` (sender `noreply@sm.soketo.it`, SPF+DKIM+DMARC)
+
+### Costi ricorrenti
+
+- **€0/mese** — tutti i servizi su free tier
+- Eventuale upgrade futuro: Vercel Pro (~$20/mo) se traffico cresce
+  o serve maxDuration > 60s sulle function
+
+### Step completati (12)
+
+1. ✅ Schema migration MySQL/TiDB → Postgres con conversione
+   `dialect: mysql` → `pgcore`, drop `onUpdateNow()` in favor di
+   `updatedAt` esplicito, `insertId` → `RETURNING`,
+   `onDuplicateKeyUpdate` → `onConflictDoUpdate`
+2. ✅ Auth Manus OAuth → Supabase Auth con magic link.
+   Verifica JWT via `createRemoteJWKSet` + ES256 (chiavi asimmetriche
+   ECDSA P-256, no più HS256 secret legacy)
+3. ✅ Deploy Vercel serverless: `api/index.js` esbuild prebundled
+   da `vercel-handler/index.ts`, CJS (con `api/package.json` type
+   commonjs), `vercel.json functions` config
+4. ✅ Dominio custom `gestionale.soketo.it` (CNAME via Cloudflare)
+5. ✅ SMTP custom Resend con dominio `sm.soketo.it` verificato
+6. ✅ Performance dashboard: N+1 → 4 query parallele (3 count +
+   1 INNER JOIN). Connection pool resiliente: `max:5`,
+   `idle_timeout:20`, `max_lifetime:5min`. Cold 237ms / Warm 52ms
+7. ✅ Trigger `handle_new_user` verificato funzionante end-to-end
+   (script `scripts/test-trigger.ts`)
+8. ✅ UI cleanup auth flow: rimosso pannello debug AuthCallback,
+   banner verboso Login, `sessionStorage` bounce in useAuth.
+   Sostituito con redirect immediato + URL param `?reason=`
+9. ✅ Server cleanup: `/api/health` minimal `{"ok":true}`,
+   rimosso `SUPABASE_JWT_SECRET` requirement da env.ts
+10. ✅ Brand rename `Sucketo` / `SoKeto Inventory` →
+    `SoKeto Gestionale` (app name) + `SoKeto` (brand prodotto)
+11. ✅ ProductDetail editabile (`/products/:id`); cascade delete
+    retailer in transaction con dialog dependents count
+12. ✅ Architettura FiC ridefinita: single-tenant SoKeto (un solo
+    account E-Keto Food). Refactor schema + UI completa
+    in Phase B post-cutover
+
+### Tech debt accettato (deferred)
+
+- **`api/index.js` 3.2MB tracked in git** (Vercel valida pattern
+  `functions` PRE-build → file deve esistere in git checkout).
+  Strategia futura: pattern → source TS, oppure Build Output API v3,
+  oppure git LFS.
+- **`SUPABASE_JWT_SECRET`** env var Vercel non più usata in codice
+  (verifica via JWKS); lasciata come safety net per rollback
+  emergenziale. Rimuovere dopo settimane di stabilità.
+- **Tab Movimenti Stock retailer** disabilitata (bottone
+  "+ Aggiungi Movimento" non attivo) in attesa di Phase B.
+  Tab read-only mostra movimenti esistenti.
+
+### Backup pre-cutover
+
+- **Supabase Dashboard snapshot**: scattato manualmente dal
+  proprietario via UI Backups (azione esterna a questo log)
+- **Local data dump**:
+  `backups/migration-final-2026-04-30.sql` (13 KB, 25 righe
+  applicative — gitignored, mai pushato)
+- **Git tag**: `v1.0-post-migration` su HEAD di `main`
+- **Disaster recovery**: applicare migrations Drizzle
+  (`drizzle/0000` → `0001` → `0002`) + `psql < dump.sql`
+
+### Step NON completati (per scelta strategica)
+
+- **Step 2 — Bundle out of git**: tentato (commit `ea6ca7b`),
+  fallito a livello Vercel pre-build pattern check, revertito
+  (commit `e26d754`). Tech debt documentato.
+- **Sistema lotti FEFO + magazzino centrale**: rinviato a Phase B.
+- **Integrazioni multi-provider gestionali retailer**: rinviato
+  a Phase B (oggi solo FiC parziale).
+
+### Roadmap Phase B (2–6 settimane, priorità alta)
+
+Sistema completo lotti FEFO con tracking
+**produttori → magazzino centrale SoKeto → retailer → cliente finale**.
+Vedi sezione "🛣️ FASE B" più sotto per il piano di dettaglio.
+
+Blocking per uso operativo: E-Keto Food deve gestire scadenze lotti
+per regole alimentari.
+
+### Manus dismissal
+
+Azione manuale del proprietario:
+- Login Manus.im
+- Cancellare progetto SoKeto Inventory Manager
+- Conferma stop addebiti crediti
+
+Da fare 24-48h dopo verifica stabilità del nuovo dominio.
+
+---
+
 ## 2026-04-30 — STATO FINE GIORNATA — App in produzione operativa
 
 ### TL;DR

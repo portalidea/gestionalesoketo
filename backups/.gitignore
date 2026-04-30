@@ -1,0 +1,5 @@
+# I file di backup non sono committati: contengono dati sensibili (email
+# utenti, anagrafica retailer/clienti) ma il file .gitignore stesso sì,
+# così la directory esiste in repo come placeholder per gli script di dump.
+*
+!.gitignore
