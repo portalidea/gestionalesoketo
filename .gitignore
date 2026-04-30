@@ -113,6 +113,7 @@ temp/
 .vercel/
 
 # Vercel serverless function bundle (built from vercel-handler/index.ts).
-# Committed (not gitignored) so Vercel's function detection — which scans
-# git checkout before running pnpm build — picks it up. Build still
-# regenerates it via build:api (vite build && esbuild prebundle).
+# Generato da `pnpm build:api` (esbuild prebundle) durante `pnpm build`.
+# Vercel esegue il build prima di raccogliere le functions, quindi vede il
+# file fresco. Non lo committiamo: 3.2MB binario che cambia ad ogni build.
+api/index.js
