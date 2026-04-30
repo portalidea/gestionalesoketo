@@ -8,6 +8,147 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-04-30 — STATO FINE GIORNATA — App in produzione operativa
+
+### TL;DR
+
+L'app SoKeto Inventory Manager è **operativa in produzione** sul nuovo
+stack Supabase + Vercel. Login, dashboard, CRUD su retailers/products/
+inventory/alerts: tutto funzionante. Restano alcuni step di cleanup
+prima del cutover finale e dello spegnimento dell'ambiente Manus.
+
+### Cosa funziona oggi (verificato end-to-end)
+
+- **Dominio custom**: `https://gestionale.soketo.it` (alias Vercel,
+  cert TLS attivo).
+- **Login**: magic link via Supabase Auth → `/auth/callback` →
+  redirect `/` con sessione persistita. JWT verificato correttamente
+  lato backend.
+- **Dashboard**: KPI cards caricati in <1s (post-fix N+1 + pool).
+- **Pagine applicative**: Retailers, Products, Alerts, Reports,
+  Settings/Team — tutte funzionanti, tempi di risposta sub-secondo.
+- **SMTP custom**: Resend configurato come provider email Supabase
+  con dominio mittente `sm.soketo.it` (DNS SPF/DKIM/DMARC verificati,
+  reputation IP dedicata vs il sender condiviso default Supabase).
+  Le email magic-link partono dal nostro dominio.
+- **DB Supabase**: 13 retailers, 8 products, 2 inventory rows seedati.
+  Schema 7 tabelle (users, retailers, products, inventory,
+  stockMovements, alerts, syncLogs) con RLS abilitato come
+  defense-in-depth.
+- **Hosting Vercel**: serverless function `api/index.js` prebundled
+  con esbuild (3.2MB CJS), pool postgres `max:5`,
+  `idle_timeout:20`, `max_lifetime:5min`.
+
+### Fix architetturali principali della giornata
+
+1. **JWT verification: HS256 → ES256/JWKS**
+   `server/_core/context.ts` — Supabase progetto è su JWT Signing Keys
+   ECDSA P-256 asimmetriche; il backend verificava ancora con HS256
+   secret legacy. Refactor a `createRemoteJWKSet` + `algorithms:
+   ['ES256']` + claim validation (issuer, audience). Vedi sezione
+   "Step 3 hotfix" più sotto per dettagli.
+
+2. **Vercel function bundling: prebundle esbuild + commit del bundle**
+   `vercel-handler/index.ts` source → `api/index.js` build artifact
+   committato in git (3.2MB). Necessario perché Vercel scansiona git
+   per function detection prima del build, e il bundling implicito di
+   `@vercel/node` non risolveva i relative path verso `../server/*`
+   (ERR_MODULE_NOT_FOUND in produzione). Vedi sezione "Step 4
+   deep-dive bundle" più sotto.
+
+3. **Performance dashboard: N+1 → 4 parallel queries**
+   `server/db.ts` + `server/routers.ts` — `dashboard.getStats` faceva
+   ~18 query sequenziali su un pool `max:1`. Refactor a 4 query in
+   parallelo (3 count + 1 INNER JOIN inventory⨝products) e pool
+   bumpato a 5. Da 1500ms → 237ms cold / 52ms warm. Vedi sezione
+   "Performance hotfix" più sotto.
+
+### Step finali rimasti per chiudere la migrazione
+
+#### 1. Pulizia debug aid (priorità alta — pre-cutover)
+
+- `vercel-handler/index.ts` fast-path `/api/health` espone presenza
+  env vars (DATABASE_URL, SUPABASE_*, OWNER_EMAIL) come `set`/`missing`.
+  Non sono valori, ma è informazione comunque utile a un attaccante
+  per sapere che dietro `gestionale.soketo.it` c'è uno stack
+  Supabase. Da rimuovere o gate dietro un header secret.
+- `console.log("[dashboard] getStats Xms ...")` e simili: utili in
+  fase di shake-down, da silenziare/gate quando stabile.
+- `client/src/pages/AuthCallback.tsx` ha ancora un delay di 5s + log
+  on-page (commit `f099317`). Da rimuovere prima del cutover finale.
+- Considerare: eliminare `server/_core/env.ts` requirement su
+  `SUPABASE_JWT_SECRET` (non usato più dopo passaggio a JWKS).
+
+#### 2. Bundle build artifact out of git (priorità media)
+
+`api/index.js` è 3.2MB committato in git. Subottimale ma necessario
+perché Vercel fa function detection scansionando git PRIMA del
+build. Da rivedere:
+- Opzione A: tenerlo in git con `.gitattributes diff=binary` per
+  ridurre rumore nei diff. Soluzione semplice ma sporca.
+- Opzione B: configurare Vercel per fare function detection
+  post-build (controllare se `outputFunctions` o
+  Build Output API v3 supporta questo). Ideale ma da indagare.
+- Opzione C: includere nel repo solo un placeholder
+  (es. `api/index.js` di 1 riga `throw new Error('build me')`),
+  build:api lo sovrascrive nel `pnpm build` di Vercel. Hacky ma
+  funzionerebbe se il placeholder esiste in git.
+
+#### 3. Verifica trigger `handle_new_user` post-invite (priorità media)
+
+Il trigger Postgres `on_auth_user_created` su `auth.users` deve
+creare la riga in `public.users` con role default `operator`. Mai
+verificato end-to-end con un utente invitato fresco. Da testare:
+1. Da `/settings/team` invita un'email test.
+2. L'utente clicca magic link.
+3. Verifica che `public.users` abbia riga con role=`operator` e nome
+   derivato da metadata o local-part email.
+Se non funziona, fix nel trigger o nella logica di
+`supabaseAdmin.auth.admin.inviteUserByEmail`.
+
+#### 4. Cutover Manus + dismissione (priorità bassa, ma chiude il progetto)
+
+- Aggiornare il **redirect URI Fatture in Cloud** da
+  `foodappdash-gpwq8jmv.manus.space/api/fattureincloud/callback` al
+  nuovo dominio `gestionale.soketo.it/api/fattureincloud/callback`.
+  Aggiornare anche env var `FATTUREINCLOUD_REDIRECT_URI` su Vercel
+  (ora marcata `missing` dal `/api/health` diagnostic — possibile
+  sia stata rimossa o mai settata su questo project; da settare in
+  Vercel Dashboard prima del cutover).
+- Modifica anche nel pannello sviluppatori
+  https://console.fattureincloud.it (redirect URI registrato).
+- Comunicazione cutover: utenti attivi sono 1 (alessandro@), no
+  comunicazione esterna richiesta.
+- Spegnimento progetto Manus Cloud su `manus.space` dopo 24-48h di
+  stabilità del nuovo dominio.
+- Aggiornare `CLAUDE.md` per riflettere stato post-migrazione (no
+  più "DA RIMUOVERE", "DA SOSTITUIRE" markers).
+
+### Suggested ordering per la prossima sessione
+
+1. Verifica trigger `handle_new_user` con un invite test (5 min).
+2. Pulizia debug aid (1h: rimuovi delay/log AuthCallback,
+   silenzia console.log dashboard, gate fast-path `/api/health`).
+3. Set `FATTUREINCLOUD_*` env vars su Vercel se servono ora.
+4. Aggiorna redirect URI FIC sul pannello + env Vercel.
+5. Smoke test completo end-to-end (login, CRUD, sync FIC se attivato).
+6. Bundle out-of-git → da approfondire, magari spostare a milestone
+   successiva.
+7. Cutover finale + spegnimento Manus.
+
+### Commit principali della giornata (per riferimento)
+
+```
+b96c107 perf(dashboard): parallel queries + resilient connection pool
+941f861 fix(auth): verify Supabase JWT with JWKS ECDSA P-256
+82767ba fix(vercel): commit prebundled api/index.js
+80bfa54 fix(vercel): functions config target api/index.js (was stale .ts)
+1efcd4c fix(vercel): pre-bundle serverless function with esbuild
+e5ea4cd chore(vercel): pin node runtime to 20.x LTS
+```
+
+---
+
 ## 2026-04-30 (sera+) — Performance hotfix — Dashboard hang in produzione
 
 ### Sintomo
