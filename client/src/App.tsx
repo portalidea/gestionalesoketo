@@ -9,6 +9,7 @@ import AuthCallback from "./pages/AuthCallback";
 import Home from "./pages/Home";
 import Integrations from "./pages/Integrations";
 import Login from "./pages/Login";
+import ProductDetail from "./pages/ProductDetail";
 import Products from "./pages/Products";
 import Reports from "./pages/Reports";
 import RetailerDetail from "./pages/RetailerDetail";
@@ -24,6 +25,7 @@ function Router() {
       <Route path="/retailers" component={Retailers} />
       <Route path="/retailers/:id" component={RetailerDetail} />
       <Route path="/products" component={Products} />
+      <Route path="/products/:id" component={ProductDetail} />
       <Route path="/alerts" component={Alerts} />
       <Route path="/reports" component={Reports} />
       <Route path="/settings/team" component={Team} />

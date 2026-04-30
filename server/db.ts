@@ -115,10 +115,42 @@ export async function updateRetailer(id: string, data: Partial<InsertRetailer>) 
     .where(eq(retailers.id, id));
 }
 
+/**
+ * Conta righe dipendenti per mostrare in conferma di delete.
+ */
+export async function getRetailerDependentsCount(id: string) {
+  const db = await getDb();
+  if (!db) return { inventory: 0, stockMovements: 0, alerts: 0, syncLogs: 0 };
+  const [inv, mov, alr, syn] = await Promise.all([
+    db.select({ c: sql<number>`count(*)::int` }).from(inventory).where(eq(inventory.retailerId, id)),
+    db.select({ c: sql<number>`count(*)::int` }).from(stockMovements).where(eq(stockMovements.retailerId, id)),
+    db.select({ c: sql<number>`count(*)::int` }).from(alerts).where(eq(alerts.retailerId, id)),
+    db.select({ c: sql<number>`count(*)::int` }).from(syncLogs).where(eq(syncLogs.retailerId, id)),
+  ]);
+  return {
+    inventory: inv[0]?.c ?? 0,
+    stockMovements: mov[0]?.c ?? 0,
+    alerts: alr[0]?.c ?? 0,
+    syncLogs: syn[0]?.c ?? 0,
+  };
+}
+
+/**
+ * Delete cascade in transaction: rimuove tutte le righe dipendenti
+ * (alerts, stockMovements, inventory, syncLogs) prima del retailer.
+ * Lo schema attuale non ha FK constraint a livello DB, quindi la cascade
+ * va gestita qui in app code (Phase B post-cutover valuteremo FK SQL).
+ */
 export async function deleteRetailer(id: string) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.delete(retailers).where(eq(retailers.id, id));
+  await db.transaction(async (tx) => {
+    await tx.delete(alerts).where(eq(alerts.retailerId, id));
+    await tx.delete(stockMovements).where(eq(stockMovements.retailerId, id));
+    await tx.delete(inventory).where(eq(inventory.retailerId, id));
+    await tx.delete(syncLogs).where(eq(syncLogs.retailerId, id));
+    await tx.delete(retailers).where(eq(retailers.id, id));
+  });
 }
 
 // ============= PRODUCTS =============
@@ -208,6 +240,137 @@ export async function createStockMovement(data: InsertStockMovement) {
   if (!db) throw new Error("Database not available");
   const [row] = await db.insert(stockMovements).values(data).returning();
   return row;
+}
+
+/**
+ * Crea un movement E aggiorna l'inventory in una sola transazione.
+ * IN: inventory.quantity += qty, OUT: -= qty, ADJUSTMENT: replace.
+ * batchNumber/expirationDate vengono salvati su inventory (sono attributi
+ * del lotto corrente, non del movimento).
+ * Il movement registra previousQuantity + newQuantity per consentire
+ * il rollback in caso di delete.
+ */
+export async function createMovementWithInventory(input: {
+  retailerId: string;
+  productId: string;
+  type: "IN" | "OUT" | "ADJUSTMENT";
+  quantity: number;
+  batchNumber?: string | null;
+  expirationDate?: Date | null;
+  notes?: string | null;
+  createdBy?: string | null;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.transaction(async (tx) => {
+    const existing = await tx
+      .select()
+      .from(inventory)
+      .where(
+        and(
+          eq(inventory.retailerId, input.retailerId),
+          eq(inventory.productId, input.productId),
+        ),
+      )
+      .limit(1);
+
+    const previousQuantity = existing[0]?.quantity ?? 0;
+    let newQuantity: number;
+    if (input.type === "IN") newQuantity = previousQuantity + input.quantity;
+    else if (input.type === "OUT")
+      newQuantity = previousQuantity - input.quantity;
+    else newQuantity = input.quantity; // ADJUSTMENT: replace
+
+    let inventoryId: string;
+    if (existing[0]) {
+      await tx
+        .update(inventory)
+        .set({
+          quantity: newQuantity,
+          batchNumber: input.batchNumber ?? existing[0].batchNumber,
+          expirationDate: input.expirationDate ?? existing[0].expirationDate,
+          lastUpdated: new Date(),
+        })
+        .where(eq(inventory.id, existing[0].id));
+      inventoryId = existing[0].id;
+    } else {
+      const [row] = await tx
+        .insert(inventory)
+        .values({
+          retailerId: input.retailerId,
+          productId: input.productId,
+          quantity: newQuantity,
+          batchNumber: input.batchNumber ?? null,
+          expirationDate: input.expirationDate ?? null,
+        })
+        .returning({ id: inventory.id });
+      inventoryId = row.id;
+    }
+
+    const [movement] = await tx
+      .insert(stockMovements)
+      .values({
+        inventoryId,
+        retailerId: input.retailerId,
+        productId: input.productId,
+        type: input.type,
+        quantity: input.quantity,
+        previousQuantity,
+        newQuantity,
+        notes: input.notes ?? null,
+        createdBy: input.createdBy ?? null,
+      })
+      .returning();
+
+    return movement;
+  });
+}
+
+/**
+ * Cancella un movement e ripristina l'inventory alla previousQuantity.
+ * Se l'inventory corrente è divergente da newQuantity registrato sul
+ * movimento (perché c'è stato un movimento successivo), il rollback
+ * non è sicuro: fail.
+ */
+export async function deleteMovementWithRollback(id: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.transaction(async (tx) => {
+    const [movement] = await tx
+      .select()
+      .from(stockMovements)
+      .where(eq(stockMovements.id, id))
+      .limit(1);
+    if (!movement) throw new Error("Movimento non trovato");
+
+    const [inv] = await tx
+      .select()
+      .from(inventory)
+      .where(eq(inventory.id, movement.inventoryId))
+      .limit(1);
+
+    if (
+      inv &&
+      movement.newQuantity !== null &&
+      movement.previousQuantity !== null &&
+      inv.quantity === movement.newQuantity
+    ) {
+      await tx
+        .update(inventory)
+        .set({ quantity: movement.previousQuantity, lastUpdated: new Date() })
+        .where(eq(inventory.id, inv.id));
+    } else if (inv && movement.newQuantity !== inv.quantity) {
+      throw new Error(
+        "Stato inventario divergente da quando il movimento è stato creato. " +
+          "Sono stati registrati altri movimenti successivi: rollback non sicuro.",
+      );
+    }
+
+    await tx.delete(stockMovements).where(eq(stockMovements.id, id));
+    return { success: true };
+  });
 }
 
 export async function getStockMovementsByRetailer(retailerId: string, limit = 100) {

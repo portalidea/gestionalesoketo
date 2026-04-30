@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
 import { Loader2, Plus, Package, Check } from "lucide-react";
 import { useState } from "react";
+import { Link } from "wouter";
 import { toast } from "sonner";
 
 export default function Products() {
@@ -218,7 +219,8 @@ export default function Products() {
         ) : products && products.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {products.map((product) => (
-              <Card key={product.id} className="border-border bg-card hover:border-primary transition-colors">
+              <Link key={product.id} href={`/products/${product.id}`}>
+              <Card className="border-border bg-card hover:border-primary transition-colors cursor-pointer h-full">
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-3">
@@ -285,6 +287,7 @@ export default function Products() {
                   )}
                 </CardContent>
               </Card>
+              </Link>
             ))}
           </div>
         ) : (

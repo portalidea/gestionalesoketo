@@ -197,6 +197,12 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    dependentsCount: protectedProcedure
+      .input(z.object({ id: uuid }))
+      .query(async ({ input }) => {
+        return await db.getRetailerDependentsCount(input.id);
+      }),
+
     delete: writerProcedure
       .input(z.object({ id: uuid }))
       .mutation(async ({ input }) => {
@@ -307,26 +313,39 @@ export const appRouter = router({
 
   // ============= STOCK MOVEMENTS =============
   stockMovements: router({
+    /**
+     * Crea movimento + aggiorna inventory atomicamente.
+     * IN: inventory += qty, OUT: -= qty, ADJUSTMENT: replace.
+     * batchNumber/expirationDate vengono salvati su inventory (lotto).
+     */
     create: writerProcedure
       .input(
         z.object({
-          inventoryId: uuid,
           retailerId: uuid,
           productId: uuid,
           type: z.enum(["IN", "OUT", "ADJUSTMENT"]),
-          quantity: z.number(),
-          previousQuantity: z.number().optional(),
-          newQuantity: z.number().optional(),
-          sourceDocument: z.string().optional(),
-          sourceDocumentType: z.string().optional(),
+          quantity: z.number().int().positive(),
+          batchNumber: z.string().optional(),
+          expirationDate: z.coerce.date().optional(),
           notes: z.string().optional(),
         }),
       )
       .mutation(async ({ input, ctx }) => {
-        return await db.createStockMovement({
+        return await db.createMovementWithInventory({
           ...input,
           createdBy: ctx.user.id,
         });
+      }),
+
+    /**
+     * Cancella movimento + rollback inventory a previousQuantity.
+     * Fail se ci sono stati movimenti successivi (newQuantity non
+     * matcha l'inventory corrente).
+     */
+    delete: writerProcedure
+      .input(z.object({ id: uuid }))
+      .mutation(async ({ input }) => {
+        return await db.deleteMovementWithRollback(input.id);
       }),
 
     getByRetailer: protectedProcedure
