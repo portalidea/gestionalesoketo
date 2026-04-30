@@ -23,7 +23,9 @@ export const ENV = {
     url: required("SUPABASE_URL"),
     anonKey: required("SUPABASE_ANON_KEY"),
     serviceRoleKey: required("SUPABASE_SERVICE_ROLE_KEY"),
-    jwtSecret: required("SUPABASE_JWT_SECRET"),
+    // jwtSecret rimosso: verifica JWT via JWKS pubblico ECDSA P-256
+    // (vedi server/_core/context.ts). SUPABASE_JWT_SECRET nelle env vars
+    // di Vercel può essere mantenuta per safety di rollback.
   },
   ownerEmail: optional("OWNER_EMAIL"),
   isProduction: process.env.NODE_ENV === "production",

@@ -317,7 +317,6 @@ const EMPTY_DASHBOARD_STATS = {
  * Tempo atteso: ~300ms vs ~2s con il pattern vecchio.
  */
 export async function getDashboardStats() {
-  const t0 = Date.now();
   const db = await getDb();
   if (!db) return EMPTY_DASHBOARD_STATS;
 
@@ -361,7 +360,7 @@ export async function getDashboardStats() {
       }
     }
 
-    const result = {
+    return {
       totalRetailers: retailerCountRows[0]?.c ?? 0,
       totalProducts: productCountRows[0]?.c ?? 0,
       activeAlerts: alertCountRows[0]?.c ?? 0,
@@ -369,18 +368,8 @@ export async function getDashboardStats() {
       lowStockItems,
       expiringItems,
     };
-    console.log(`[dashboard] getStats ${Date.now() - t0}ms`, {
-      retailers: result.totalRetailers,
-      products: result.totalProducts,
-      alerts: result.activeAlerts,
-      inventoryRows: inventoryRows.length,
-    });
-    return result;
   } catch (error) {
-    console.error(
-      `[dashboard] getStats failed after ${Date.now() - t0}ms:`,
-      error,
-    );
+    console.error("[dashboard] getStats failed:", error);
     throw error;
   }
 }
