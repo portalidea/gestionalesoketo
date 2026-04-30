@@ -53,6 +53,45 @@ function bootOnce(): Promise<void> {
 }
 
 export default async function handler(req: Request, res: Response) {
+  // Fast-path: /api/health risponde senza richiedere il boot completo.
+  // Serve come liveness probe e diagnostico: ci dice quali env sono
+  // visibili nel runtime Vercel e se il boot è stato già tentato.
+  if (req.url === "/api/health" || req.url === "/api/ping") {
+    const envSummary = {
+      DATABASE_URL: process.env.DATABASE_URL ? "set" : "missing",
+      SUPABASE_URL: process.env.SUPABASE_URL ? "set" : "missing",
+      SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY ? "set" : "missing",
+      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY ? "set" : "missing",
+      SUPABASE_JWT_SECRET: process.env.SUPABASE_JWT_SECRET ? "set" : "missing",
+      OWNER_EMAIL: process.env.OWNER_EMAIL ? "set" : "missing",
+      FATTUREINCLOUD_CLIENT_ID: process.env.FATTUREINCLOUD_CLIENT_ID ? "set" : "missing",
+      FATTUREINCLOUD_CLIENT_SECRET: process.env.FATTUREINCLOUD_CLIENT_SECRET ? "set" : "missing",
+      FATTUREINCLOUD_REDIRECT_URI: process.env.FATTUREINCLOUD_REDIRECT_URI ?? "missing",
+      VERCEL: process.env.VERCEL ?? "missing",
+      VERCEL_ENV: process.env.VERCEL_ENV ?? "missing",
+      VERCEL_REGION: process.env.VERCEL_REGION ?? "missing",
+      NODE_ENV: process.env.NODE_ENV ?? "missing",
+    };
+    res.status(200).setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify(
+        {
+          ok: true,
+          marker: "vercel-handler-alive",
+          url: req.url,
+          method: req.method,
+          bootStarted: !!bootPromise,
+          bootError: bootError ? { name: bootError.name, message: bootError.message } : null,
+          nodeVersion: process.version,
+          env: envSummary,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
   await bootOnce();
   if (bootError) {
     res.status(500).setHeader("content-type", "application/json");
