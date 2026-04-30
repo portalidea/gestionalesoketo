@@ -27,6 +27,7 @@ import {
   LogOut,
   Package,
   PanelLeft,
+  Plug,
   Store,
   Users,
 } from "lucide-react";
@@ -44,6 +45,7 @@ const baseMenuItems = [
 
 const adminMenuItems = [
   { icon: Users, label: "Team", path: "/settings/team" },
+  { icon: Plug, label: "Integrazioni", path: "/settings/integrations" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";

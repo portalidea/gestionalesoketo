@@ -7,6 +7,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import Alerts from "./pages/Alerts";
 import AuthCallback from "./pages/AuthCallback";
 import Home from "./pages/Home";
+import Integrations from "./pages/Integrations";
 import Login from "./pages/Login";
 import Products from "./pages/Products";
 import Reports from "./pages/Reports";
@@ -26,6 +27,7 @@ function Router() {
       <Route path="/alerts" component={Alerts} />
       <Route path="/reports" component={Reports} />
       <Route path="/settings/team" component={Team} />
+      <Route path="/settings/integrations" component={Integrations} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>
