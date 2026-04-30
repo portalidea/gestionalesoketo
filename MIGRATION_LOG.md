@@ -66,6 +66,58 @@ prima del cutover finale e dello spegnimento dell'ambiente Manus.
 
 ### ✅ Step completati (in questa sessione)
 
+#### Step 4-prep — FIC env + scope + UI placeholder (commits `03bbe19` + `3889acd`, 2026-04-30 ~14:54)
+
+**Configurazione OAuth FiC**:
+- Env vars `FATTUREINCLOUD_CLIENT_ID`, `FATTUREINCLOUD_CLIENT_SECRET`,
+  `FATTUREINCLOUD_REDIRECT_URI` settate su Vercel production.
+- App OAuth FiC creata privata su https://console.fattureincloud.it,
+  redirect URI configurato `https://gestionale.soketo.it/api/fattureincloud/callback`.
+
+**Bug fix scope OAuth** (commit `03bbe19`): `getAuthorizationUrl()` in
+`server/fattureincloud-oauth.ts` non includeva `scope` nell'URL di
+authorize → FiC rispondeva `error=invalid_request, scope field is
+required`. Aggiunti 7 scope read-only:
+`entity.clients:r entity.suppliers:r products:r issued_documents:r
+received_documents:r stock:r settings:r`.
+
+**🆕 DECISIONE ARCHITETTURALE — SoKeto è single-tenant FiC**:
+
+L'app NON è multi-tenant FiC. Esiste UN solo account FiC (E-Keto Food
+Srls) che contiene i 13 retailer come **clienti dell'anagrafica
+fiscale**. Proforma e fatture si emettono dal nostro unico account FiC,
+non dai retailer.
+
+Implicazioni schema/codice (mai pensate prima):
+- Connessione FiC è **globale singleton**, non per-retailer.
+- Mai dovrebbe esistere `retailers.fattureInCloudAccessToken` etc.
+- Necessità di tabella `system_integrations` (singleton) + colonna
+  `retailers.fic_client_id` per mapping retailer ↔ cliente FiC.
+
+**Phase A applicata** (commit `3889acd`, non distruttiva):
+- `RetailerDetail.tsx`: rimossa tab "Sincronizzazione" + import del
+  componente `FattureInCloudSync`.
+- Nuova pagina `pages/Integrations.tsx` admin-only con placeholder
+  "Coming soon" per la futura UI di connessione FiC globale.
+- Voce di menu "Integrazioni" in `DashboardLayout` (admin only).
+- Backend route `/api/fattureincloud/*` e componente
+  `FattureInCloudSync` lasciati intatti (deprecati, non raggiungibili
+  dall'UI). Saranno rimossi in Phase B.
+
+**Phase B** (post-cutover Manus, in fase B della roadmap):
+- Schema migration: tabella `system_integrations` (id, type, access_token,
+  refresh_token, expires_at, fic_company_id, timestamps); drop colonne
+  `retailers.fattureInCloud*`/`syncEnabled`/`lastSyncAt`; add
+  `retailers.fic_client_id` text NULL.
+- Refactor `server/fattureincloud-routes.ts`: `/start` e `/callback`
+  scrivono su `system_integrations` invece che su `retailers`. Tutte
+  le API call leggono il token da lì.
+- UI completa `pages/Integrations.tsx`: stato Connesso/Non connesso,
+  pulsanti Connetti (avvia OAuth) / Disconnetti, info `fic_company_id`
+  e scadenza token.
+- UI mapping retailer ↔ cliente FiC (dropdown clienti FiC su
+  retailer page).
+
 #### Step 1b — Pulizia debug aid residua (commit `03a9ca7` + `e26d754`, 2026-04-30 ~11:34)
 
 Cleanup server-side post-stabilizzazione di tutti i fix architetturali.
@@ -240,24 +292,15 @@ end-to-end demandato all'utente.
 
 ### Step finali rimasti per chiudere la migrazione
 
-#### 2-redo. Bundle out of git (tech debt, da rivedere al cutover)
+#### 1. Smoke test E2E completo
 
-Step 2 non è stato chiuso. Vedi sezione "Step 2 ❌ TENTATO E REVERTITO"
-sopra per dettagli e strategia futura. Nel frattempo accettato come
-tech debt: `api/index.js` 3.2MB tracked in git, churn binario ad
-ogni rebuild della function.
+Login admin → CRUD su retailers/products/inventory → alerts →
+verifica dashboard. Tutto funzionante post-cleanup. ~10 min.
 
-#### 4. Cutover Manus + dismissione (priorità bassa, ma chiude il progetto)
+#### 2. Cutover Manus + dismissione (chiude il progetto)
 
-- Aggiornare il **redirect URI Fatture in Cloud** da
-  `foodappdash-gpwq8jmv.manus.space/api/fattureincloud/callback` al
-  nuovo dominio `gestionale.soketo.it/api/fattureincloud/callback`.
-  Aggiornare anche env var `FATTUREINCLOUD_REDIRECT_URI` su Vercel
-  (ora marcata `missing` dal `/api/health` diagnostic — possibile
-  sia stata rimossa o mai settata su questo project; da settare in
-  Vercel Dashboard prima del cutover).
-- Modifica anche nel pannello sviluppatori
-  https://console.fattureincloud.it (redirect URI registrato).
+- FIC env vars + redirect URI: ✅ già completati (vedi Step 4-prep
+  sopra). App OAuth FiC creata privata, scope OAuth fix applicato.
 - Comunicazione cutover: utenti attivi sono 1 (alessandro@), no
   comunicazione esterna richiesta.
 - Spegnimento progetto Manus Cloud su `manus.space` dopo 24-48h di
@@ -265,23 +308,33 @@ ogni rebuild della function.
 - Aggiornare `CLAUDE.md` per riflettere stato post-migrazione (no
   più "DA RIMUOVERE", "DA SOSTITUIRE" markers).
 
+### Tech debt residuo (Phase B, post-cutover)
+
+- **Architettura FiC single-tenant** (riprogettazione): tabella
+  `system_integrations` (singleton FiC), drop colonne
+  `retailers.fattureInCloud*`/`syncEnabled`/`lastSyncAt`, add
+  `retailers.fic_client_id`. Refactor backend routes + UI completa
+  `/settings/integrations`. Vedi Step 4-prep per dettagli completi
+  del piano Phase B.
+- **Bundle out of git** (Step 2 revertito): 3.2MB `api/index.js`
+  tracked. Strategie proposte vedi Step 2 ❌.
+
 ### Suggested ordering per la prossima sessione
 
-1. Set `FATTUREINCLOUD_*` env vars su Vercel + redirect URI nel
-   pannello FIC (Step 4, parte preparatoria).
-2. Smoke test completo end-to-end (login, CRUD, sync FIC se attivato).
-3. Cutover finale + spegnimento Manus (Step 4, parte finale).
-4. (Eventuale, post-cutover) Step 2-redo: bundle out of git con
-   strategia diversa (functions pattern → source TS, oppure
-   Build Output API v3, oppure git LFS).
+1. Smoke test E2E completo (login, CRUD, dashboard).
+2. Cutover finale + spegnimento Manus.
+3. (Phase B, separata) Refactor architettura FiC single-tenant +
+   bundle out-of-git.
 
 ### Commit principali della giornata (per riferimento)
 
 ```
-e26d754 revert: keep api/index.js in git (vercel pre-build pattern)  (Step 2 revert + Step 1b)
-03a9ca7 chore: clean up debug aid (minimal health, drop jwt_secret)  (Step 1b — non landed da solo)
-ea6ca7b chore: move api/index.js to build artifact (out of git)      (Step 2 — REVERTITO)
-86341f4 chore: remove migration debug aid from auth flow             (Step 1a)
+3889acd feat(fic): hide per-retailer sync UI, add Integrations placeholder  (Step 4-prep Phase A)
+03bbe19 fix(fic): include scope param in OAuth authorize URL               (FIC OAuth fix)
+e26d754 revert: keep api/index.js in git (vercel pre-build pattern)        (Step 2 revert + Step 1b)
+03a9ca7 chore: clean up debug aid (minimal health, drop jwt_secret)        (Step 1b — non landed da solo)
+ea6ca7b chore: move api/index.js to build artifact (out of git)            (Step 2 — REVERTITO)
+86341f4 chore: remove migration debug aid from auth flow                   (Step 1a)
 b96c107 perf(dashboard): parallel queries + resilient pool       (perf hotfix)
 941f861 fix(auth): verify Supabase JWT with JWKS ECDSA P-256     (auth hotfix)
 82767ba fix(vercel): commit prebundled api/index.js              (workaround poi rimosso da ea6ca7b)
