@@ -112,5 +112,7 @@ temp/
 # Vercel CLI artifacts
 .vercel/
 
-# Vercel serverless function bundle (built from vercel-handler/index.ts)
-api/index.js
+# Vercel serverless function bundle (built from vercel-handler/index.ts).
+# Committed (not gitignored) so Vercel's function detection — which scans
+# git checkout before running pnpm build — picks it up. Build still
+# regenerates it via build:api (vite build && esbuild prebundle).
