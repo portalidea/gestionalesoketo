@@ -3,8 +3,120 @@
 > Diario cronologico inverso (più recente in alto). Per ogni step:
 > data, esito, problemi incontrati, soluzioni adottate, link a commit.
 
-Branch di lavoro: `migration/manus-to-supabase`.
+Branch di lavoro: `migration/manus-to-supabase` → mergiato in `main`.
 Riferimento piano: `MIGRATION_PLAN.md`.
+
+---
+
+## 2026-04-30 — Step 4 (in corso) — Deploy Vercel + serverless bundling
+
+### Riassunto della giornata
+
+**Step 0–3 completati e mergiati in `main`**. Step 4 (deploy production) è
+attivo: il codice è in produzione su Vercel ma il bundle serverless non
+include la directory `server/` per cui `/api/health` non risponde (ultimo
+deploy `ezfMTXudm` su `main`). Auth Supabase end-to-end **funziona in
+locale** (login magic link → callback → tRPC autenticato OK).
+
+### Cosa è stato fatto oggi
+
+1. **Step 3 — Auth Supabase**: rifinito il flusso PKCE callback dopo bounce
+   in produzione. Fix in `pages/AuthCallback.tsx`:
+   - `8cc82c7` — attesa esplicita di `SIGNED_IN` da `onAuthStateChange`
+     prima del redirect; superficie del motivo del bounce su pagina (errore
+     `auth.me`, sessione mancante, ecc.) per debug.
+   - `f099317` — temporaneamente i log del callback vengono renderizzati
+     in pagina con delay di 5s prima del redirect (debug aid, da rimuovere
+     una volta confermato il flusso production).
+   - `b996dea` — exchange PKCE esplicito con logging verboso nel callback.
+
+2. **Step 4 — Setup deploy Vercel**:
+   - `5d3ec56` — preparato deploy: singola serverless function per tutto
+     `/api/*`. Entry point spostato in `api/index.ts` con `export default`
+     handler Express.
+   - `e0fe87f` — trigger redeploy dopo aver settato env vars production
+     in Vercel (DATABASE_URL pooler 6543 transaction mode, SUPABASE_URL,
+     SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET,
+     OWNER_EMAIL, FATTUREINCLOUD_*).
+   - `1a718fa` — fix env: load `.env.local` come side-effect import prima
+     della valutazione del modulo, altrimenti env risultava undefined al
+     boot.
+
+3. **Bundling serverless — iterazioni**:
+   - `b3eecee` — drop `loadEnv` import dall'entry serverless (non
+     disponibile fuori dal contesto Vite).
+   - `f6a262b` — primo tentativo: bundle serverless con esbuild prebundle
+     out of `api/`. Risultato: bundle generato ma `server/` non incluso.
+   - `843c136` (**ultimo commit**) — switch a `includeFiles` in
+     `vercel.json` invece del prebundle esbuild. Lasciamo a Vercel/ncc il
+     bundling, ma forziamo l'inclusione dei file `server/**` e
+     `drizzle/**` come asset.
+
+### Stato attuale
+
+- **Branch**: tutto su `main`. `migration/manus-to-supabase` mergiato.
+- **Deploy production**: `ezfMTXudm` su Vercel (latest), commit `843c136`.
+- **Funziona**: auth Supabase locale end-to-end, schema PG + RLS, seed
+  dati (13 retailers + 8 products + 2 inventory).
+- **Non funziona ancora**: `/api/health` in production. Causa: bundle
+  serverless non include realmente `server/` e dipendenze tRPC. Ultimo
+  fix `includeFiles` deve essere verificato sul prossimo deploy.
+- **Git**: working tree clean, tutto committato e pushato.
+
+### Da fare domani (priorità ordinata)
+
+1. **Verificare il deploy con `includeFiles`**: aprire Vercel dashboard,
+   controllare che il deploy `843c136` sia passato e che
+   `https://<vercel-url>/api/health` risponda 200. Se ancora 404/500,
+   ispezionare i build logs e l'output della function (probabile causa:
+   path resolution di `import` dentro al bundle ncc, o dipendenze native
+   non incluse — `postgres` driver, ecc.).
+
+2. **Test login completo in produzione**: una volta che `/api/health`
+   risponde, eseguire flusso end-to-end:
+   - GET `/login` → form email
+   - magic link via email → click → `/auth/callback`
+   - polling sessione → redirect `/`
+   - `auth.me` deve tornare il profilo admin.
+   - Eventualmente rimuovere il delay/log di 5s in `AuthCallback.tsx`
+     (`f099317`) una volta confermato che il flusso è stabile.
+
+3. **Configurazione Supabase definitiva** (solo se step 2 OK):
+   - Site URL Supabase → URL Vercel production (o dominio custom).
+   - Additional redirect URLs → aggiungere
+     `https://inventory.soketo.it/auth/callback`.
+   - **Dominio custom**: configurare `inventory.soketo.it` su Vercel
+     (DNS CNAME → cname.vercel-dns.com), aspettare emissione cert.
+   - Aggiornare `FATTUREINCLOUD_REDIRECT_URI` env var Vercel al nuovo
+     dominio.
+   - Aggiornare il redirect URI nel pannello sviluppatori Fatture in
+     Cloud (https://console.fattureincloud.it).
+
+4. **Cutover finale + dismissione Manus**:
+   - Provisioning admin via `pnpm exec tsx scripts/create-admin.ts info@soketo.it`
+     (o l'email definitiva).
+   - Verifica fumo completa in production: login admin, lista retailers,
+     CRUD prodotti, dashboard.
+   - Comunicazione cutover (se applicabile, l'utente attivo è 1).
+   - Spegnimento ambiente Manus Cloud (vecchio dominio
+     `foodappdash-gpwq8jmv.manus.space`): dismissione progetto Manus
+     dopo conferma che il nuovo URL è stabile per 24-48h.
+
+### Punti di attenzione aperti
+
+- Il debug aid in `pages/AuthCallback.tsx` (delay 5s + log on-page) **va
+  rimosso** prima del cutover finale. Issue tracking implicito.
+- Il `redirectUri` di Fatture in Cloud è hard-coded in env, va tenuto
+  allineato. Nessun retailer ha sync attivo, finestra di rischio bassa.
+- Vercel Hobby timeout 10s: ancora non testato in production con sync
+  FIC reale. Da osservare al primo sync manuale.
+
+### Riferimento per la prossima sessione
+
+Quando riapri la sessione, **leggi questo file da cima**: trovi tutto
+il contesto necessario. La prima azione è verificare lo stato del deploy
+`ezfMTXudm` (commit `843c136`) e procedere col punto 1 della lista "Da
+fare domani".
 
 ---
 
