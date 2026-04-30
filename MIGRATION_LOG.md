@@ -66,7 +66,41 @@ prima del cutover finale e dello spegnimento dell'ambiente Manus.
 
 ### ✅ Step completati (in questa sessione)
 
-#### Smoke test fixes — 5 priorità di feature gap (commits `bcef0fc` + `bbfcd8d`, 2026-04-30 ~15:20)
+#### Phase B deferral — Sistema lotti FEFO posticipato (commit `66c4f8c`, 2026-04-30 ~15:32)
+
+**Decisione strategica del proprietario**: Manus era una **demo
+incompleta**, non una piattaforma operativa. La gestione lotti
+completa (FEFO, magazzino centrale, integrazioni multi-provider
+gestionali retailer) è una **visione Phase B** post-cutover. Il
+sistema migrato attuale ≈ funzionalità Manus = sufficiente per il
+cutover.
+
+Conseguenza: Commit 2 originale (`bbfcd8d`) ridimensionato. Rimosso:
+
+- `RetailerDetail.tsx`: Dialog form completo per aggiunta movimento
+  (Select prodotto/tipo, qty, lotto, scadenza, note) sostituito con
+  bottone disabled + nota *"Sistema lotti FEFO completo in arrivo
+  (Fase B post-cutover)"*.
+- `RetailerDetail.tsx`: cestino + AlertDialog per delete movimento
+  per riga rimossi. Tab Movimenti torna read-only (matches Manus).
+- `server/db.ts`: `createMovementWithInventory` +
+  `deleteMovementWithRollback` rimosse (transactional inventory
+  updates non più usate dall'UI).
+- `server/routers.ts`: `stockMovements.delete` rimossa.
+  `stockMovements.create` torna alla signature originale (resta
+  utile per import programmatici, futuri hook FIC, ecc.).
+
+Mantenuto:
+- `pages/ProductDetail.tsx` edit page (P2)
+- Cascade delete retailer in transaction + `dependentsCount` (P4)
+
+Diff commit `66c4f8c`: 4 file, +36/-515. Verifica produzione:
+- Asset hash `DXyPRTYv` → `CvZMv6_M`
+- `POST stockMovements.delete` → 404 NOT_FOUND ✓ (rimossa)
+- `POST products.update` → 401 UNAUTHORIZED ✓ (esiste)
+- Bottone disabled visibile in UI.
+
+#### Smoke test fixes — 5 priorità di feature gap (commits `bcef0fc` + `bbfcd8d` + `66c4f8c`, 2026-04-30 ~15:20)
 
 Smoke test E2E pre-cutover ha rivelato 5 funzionalità mancanti o
 regressioni che andavano ripristinate prima del cutover Manus.
@@ -366,27 +400,76 @@ end-to-end demandato all'utente.
 - Aggiornare `CLAUDE.md` per riflettere stato post-migrazione (no
   più "DA RIMUOVERE", "DA SOSTITUIRE" markers).
 
-### Tech debt residuo (Phase B, post-cutover)
+### 🛣️ FASE B — Architettura completa lotti FEFO (post-cutover)
 
-- **Architettura FiC single-tenant** (riprogettazione): tabella
-  `system_integrations` (singleton FiC), drop colonne
-  `retailers.fattureInCloud*`/`syncEnabled`/`lastSyncAt`, add
-  `retailers.fic_client_id`. Refactor backend routes + UI completa
-  `/settings/integrations`. Vedi Step 4-prep per dettagli completi
-  del piano Phase B.
+**Vision strategica del proprietario** (registrata 2026-04-30):
+
+E-Keto Food è il produttore/distributore. La piattaforma in
+produzione attualmente replica Manus ≈ anagrafica statica di retailer
+e prodotti, niente movimenti reali. Per uso operativo serve un sistema
+completo di gestione lotti con scadenze, perché E-Keto **deve**
+gestire la rotazione lotti per legge alimentare.
+
+**Modello dominio Phase B**:
+
+```
+produttori → magazzino centrale SoKeto → retailer → cliente finale
+```
+
+**Entità da implementare**:
+
+- **`producers`**: anagrafica produttori (E-Keto Food + eventuali
+  terze parti).
+- **`productBatches`**: lotti per prodotto, con
+  `expirationDate`/`productionDate`/`producerId`/`initialQuantity`.
+  Un prodotto ha N lotti.
+- **`inventory` ridisegnata**: `(location, batch, quantity)` dove
+  `location` = `'soketo_warehouse'` OR `retailer_id`. Ogni lotto su
+  ogni location è una riga separata.
+- **`movements`** estesi:
+  - `IN` da produttore → magazzino centrale (creazione lotto)
+  - `TRANSFER` magazzino → retailer (consegna)
+  - `RETAIL_OUT` retailer → cliente finale (vendita; importata dal
+    gestionale del retailer via integrazione)
+- **FEFO** (First Expired First Out): suggerimento automatico su
+  distribuzione magazzino → retailer in base a scadenze.
+- **Integrazione multi-provider gestionali retailer**:
+  - Fatture in Cloud (già parzialmente integrato — vedi sotto)
+  - Mago, TeamSystem, Danea, ecc. (architettura plug-in per
+    `provider` field)
+- **`retailer.fic_client_id`** mapping: per generare proforma /
+  fatture verso retailer dal nostro account FiC SoKeto unico
+  (single-tenant, vedi sotto).
+
+**Architettura FiC single-tenant** (componente Phase B):
+- Tabella `system_integrations` (singleton FiC) per token globale.
+- Drop colonne `retailers.fattureInCloud*` /`syncEnabled`/`lastSyncAt`.
+- Add `retailers.fic_client_id`.
+- Refactor backend routes + UI completa `/settings/integrations`.
+- Vedi sezione Step 4-prep per dettagli del piano FiC.
+
+**Tempo stimato**: 2–6 settimane.
+**Priorità**: alta — blocking per uso operativo. E-Keto Food deve
+gestire scadenze lotti per regole alimentari.
+
+### Tech debt minore (deferred)
+
 - **Bundle out of git** (Step 2 revertito): 3.2MB `api/index.js`
-  tracked. Strategie proposte vedi Step 2 ❌.
+  tracked in git, churn binario ad ogni rebuild. Strategie proposte
+  vedi Step 2 ❌.
 
 ### Suggested ordering per la prossima sessione
 
 1. Cutover finale + spegnimento Manus.
-2. (Phase B, separata) Refactor architettura FiC single-tenant +
-   bundle out-of-git.
+2. (Phase B, separata, 2–6 settimane) Sistema lotti FEFO completo +
+   architettura FiC single-tenant + integrazioni multi-provider
+   gestionali retailer. Vedi sezione "🛣️ FASE B" sopra.
 
 ### Commit principali della giornata (per riferimento)
 
 ```
-bbfcd8d feat(crud): products edit + stock movements UI + cascade delete   (Smoke fixes P2/P3/P4)
+66c4f8c refactor(stock): defer FEFO lots system to Phase B                  (Smoke fixes simplified)
+bbfcd8d feat(crud): products edit + stock movements UI + cascade delete    (Smoke fixes P2/P3/P4)
 bcef0fc chore(brand): rename Sucketo/SoKeto Inventory → SoKeto Gestionale  (Smoke fixes P1)
 3889acd feat(fic): hide per-retailer sync UI, add Integrations placeholder  (Step 4-prep Phase A)
 03bbe19 fix(fic): include scope param in OAuth authorize URL               (FIC OAuth fix)
