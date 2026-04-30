@@ -66,6 +66,69 @@ prima del cutover finale e dello spegnimento dell'ambiente Manus.
 
 ### ✅ Step completati (in questa sessione)
 
+#### Smoke test fixes — 5 priorità di feature gap (commits `bcef0fc` + `bbfcd8d`, 2026-04-30 ~15:20)
+
+Smoke test E2E pre-cutover ha rivelato 5 funzionalità mancanti o
+regressioni che andavano ripristinate prima del cutover Manus.
+
+**Commit `bcef0fc` — Brand rename**
+- 11 stringhe utente in 8 file: `Sucketo` (variante errata) e
+  `SoKeto Inventory` (variante inglese) → uniformi:
+  - **App name** (titolo, sidebar, login, settings): `SoKeto Gestionale`
+    — index.html, DashboardLayout, Login, Team.
+  - **Brand prodotto/azienda** (descrizioni "prodotti X", "rivenditori X"):
+    `SoKeto` — Reports, Home, Retailers, Products.
+- Verifica grep zero residui post-rename. Deploy in 25s,
+  asset hash `Cb08zsub` → `DgjxWvhY`, `<title>` updated.
+
+**Commit `bbfcd8d` — CRUD features**
+- **P2 Products**: cards in `/products` ora cliccabili (Link
+  wouter), nuova pagina `/products/:id` (`pages/ProductDetail.tsx`)
+  con form completo editabile (anagrafica, prezzo, fornitore,
+  caratteristiche LowCarb/GlutenFree/Keto, soglie, immagine),
+  AlertDialog di conferma delete.
+- **P3 Stock movements**:
+  - Backend: nuova `db.createMovementWithInventory` in transaction
+    (compute newQuantity per IN/OUT/ADJUSTMENT, upsert inventory
+    con batchNumber+expirationDate, insert movement con
+    previousQuantity+newQuantity per rollback). Nuova
+    `db.deleteMovementWithRollback` che ripristina inventory solo
+    se newQuantity matcha (no movimenti successivi); altrimenti
+    fail con errore esplicito.
+  - Routers: `stockMovements.create` rinfrescato a usare la
+    transactional version (input estende `batchNumber`,
+    `expirationDate`); nuova `stockMovements.delete`.
+  - UI `RetailerDetail.tsx`: bottone "+ Aggiungi Movimento" sopra
+    la tabella, Dialog con form (Select prodotto, Select tipo IT,
+    quantity, batch, expiration date, notes). Ogni riga movimento
+    ha icona cestino discreta con AlertDialog conferma.
+- **P4 Delete retailer cascade**:
+  - `db.deleteRetailer` ora cascade in transaction: alerts,
+    stockMovements, inventory, syncLogs, retailers (in ordine).
+  - Nuova `db.getRetailerDependentsCount` + procedura
+    `retailers.dependentsCount` per mostrare i count nel dialog.
+  - `RetailerDetail.tsx`: icona Trash2 discreta in alto a destra
+    (variant=ghost, size=icon, color destructive — non bottone
+    gigante) con AlertDialog che mostra count dipendenti.
+  - **Nota**: cascade gestita in app code (transaction drizzle),
+    no FK constraint a livello DB. In Phase B post-cutover si
+    valuterà se aggiungere FK CASCADE nativi SQL.
+- **P5 Create retailer**: già funzionante (Dialog form esistente
+  in `Retailers.tsx`), nessun cambio necessario.
+- **P1 Brand rename**: già fatto in commit `bcef0fc` separato.
+
+Diff totale Commit 2: 7 file, +1092/-39. Nuova pagina ProductDetail
+~390 righe, RetailerDetail esteso con dialog form + delete UI,
+backend transazionale + cascade.
+
+Verifica produzione (deploy in 30s, asset `DgjxWvhY` → `DXyPRTYv`):
+- `/api/health` → `{"ok":true}` ✓
+- `/api/trpc/products.getById` → 401 UNAUTHORIZED ✓
+- `/api/trpc/retailers.dependentsCount` → 401 (procedure live) ✓
+- `/api/trpc/stockMovements.create` → 401 (procedure refactored) ✓
+
+Test browser end-to-end demandato all'utente.
+
 #### Step 4-prep — FIC env + scope + UI placeholder (commits `03bbe19` + `3889acd`, 2026-04-30 ~14:54)
 
 **Configurazione OAuth FiC**:
@@ -292,12 +355,7 @@ end-to-end demandato all'utente.
 
 ### Step finali rimasti per chiudere la migrazione
 
-#### 1. Smoke test E2E completo
-
-Login admin → CRUD su retailers/products/inventory → alerts →
-verifica dashboard. Tutto funzionante post-cleanup. ~10 min.
-
-#### 2. Cutover Manus + dismissione (chiude il progetto)
+#### 1. Cutover Manus + dismissione (chiude il progetto)
 
 - FIC env vars + redirect URI: ✅ già completati (vedi Step 4-prep
   sopra). App OAuth FiC creata privata, scope OAuth fix applicato.
@@ -321,14 +379,15 @@ verifica dashboard. Tutto funzionante post-cleanup. ~10 min.
 
 ### Suggested ordering per la prossima sessione
 
-1. Smoke test E2E completo (login, CRUD, dashboard).
-2. Cutover finale + spegnimento Manus.
-3. (Phase B, separata) Refactor architettura FiC single-tenant +
+1. Cutover finale + spegnimento Manus.
+2. (Phase B, separata) Refactor architettura FiC single-tenant +
    bundle out-of-git.
 
 ### Commit principali della giornata (per riferimento)
 
 ```
+bbfcd8d feat(crud): products edit + stock movements UI + cascade delete   (Smoke fixes P2/P3/P4)
+bcef0fc chore(brand): rename Sucketo/SoKeto Inventory → SoKeto Gestionale  (Smoke fixes P1)
 3889acd feat(fic): hide per-retailer sync UI, add Integrations placeholder  (Step 4-prep Phase A)
 03bbe19 fix(fic): include scope param in OAuth authorize URL               (FIC OAuth fix)
 e26d754 revert: keep api/index.js in git (vercel pre-build pattern)        (Step 2 revert + Step 1b)
