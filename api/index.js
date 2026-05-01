@@ -472,22 +472,22 @@ var require_content_type = __commonJS({
       if (typeof header !== "string") {
         throw new TypeError("argument string is required to be a string");
       }
-      var index = header.indexOf(";");
-      var type = index !== -1 ? header.slice(0, index).trim() : header.trim();
+      var index2 = header.indexOf(";");
+      var type = index2 !== -1 ? header.slice(0, index2).trim() : header.trim();
       if (!TYPE_REGEXP.test(type)) {
         throw new TypeError("invalid media type");
       }
       var obj = new ContentType(type.toLowerCase());
-      if (index !== -1) {
+      if (index2 !== -1) {
         var key;
         var match;
         var value;
-        PARAM_REGEXP.lastIndex = index;
+        PARAM_REGEXP.lastIndex = index2;
         while (match = PARAM_REGEXP.exec(header)) {
-          if (match.index !== index) {
+          if (match.index !== index2) {
             throw new TypeError("invalid parameter format");
           }
-          index += match[0].length;
+          index2 += match[0].length;
           key = match[1].toLowerCase();
           value = match[2];
           if (value.charCodeAt(0) === 34) {
@@ -498,7 +498,7 @@ var require_content_type = __commonJS({
           }
           obj.parameters[key] = value;
         }
-        if (index !== header.length) {
+        if (index2 !== header.length) {
           throw new TypeError("invalid parameter format");
         }
       }
@@ -1059,16 +1059,16 @@ var require_debug = __commonJS({
         if ("string" !== typeof args[0]) {
           args.unshift("%O");
         }
-        var index = 0;
+        var index2 = 0;
         args[0] = args[0].replace(/%([a-zA-Z%])/g, function(match, format) {
           if (match === "%%") return match;
-          index++;
+          index2++;
           var formatter = exports2.formatters[format];
           if ("function" === typeof formatter) {
-            var val = args[index];
+            var val = args[index2];
             match = formatter.call(self2, val);
-            args.splice(index, 1);
-            index--;
+            args.splice(index2, 1);
+            index2--;
           }
           return match;
         });
@@ -1166,13 +1166,13 @@ var require_browser = __commonJS({
       if (!useColors2) return;
       var c = "color: " + this.color;
       args.splice(1, 0, c, "color: inherit");
-      var index = 0;
+      var index2 = 0;
       var lastC = 0;
       args[0].replace(/%[a-zA-Z%]/g, function(match) {
         if ("%%" === match) return;
-        index++;
+        index2++;
         if ("%c" === match) {
-          lastC = index;
+          lastC = index2;
         }
       });
       args.splice(lastC, 0, c);
@@ -5428,19 +5428,19 @@ var require_media_typer = __commonJS({
       if (typeof string4 !== "string") {
         throw new TypeError("argument string is required to be a string");
       }
-      var index = string4.indexOf(";");
-      var type = index !== -1 ? string4.substr(0, index) : string4;
+      var index2 = string4.indexOf(";");
+      var type = index2 !== -1 ? string4.substr(0, index2) : string4;
       var key;
       var match;
       var obj = splitType(type);
       var params = {};
       var value;
-      paramRegExp.lastIndex = index;
+      paramRegExp.lastIndex = index2;
       while (match = paramRegExp.exec(string4)) {
-        if (match.index !== index) {
+        if (match.index !== index2) {
           throw new TypeError("invalid parameter format");
         }
-        index += match[0].length;
+        index2 += match[0].length;
         key = match[1].toLowerCase();
         value = match[2];
         if (value[0] === '"') {
@@ -5448,7 +5448,7 @@ var require_media_typer = __commonJS({
         }
         params[key] = value;
       }
-      if (index !== -1 && index !== string4.length) {
+      if (index2 !== -1 && index2 !== string4.length) {
         throw new TypeError("invalid parameter format");
       }
       obj.parameters = params;
@@ -5480,10 +5480,10 @@ var require_media_typer = __commonJS({
       var type = match[1];
       var subtype = match[2];
       var suffix;
-      var index = subtype.lastIndexOf("+");
-      if (index !== -1) {
-        suffix = subtype.substr(index + 1);
-        subtype = subtype.substr(0, index);
+      var index2 = subtype.lastIndexOf("+");
+      if (index2 !== -1) {
+        suffix = subtype.substr(index2 + 1);
+        subtype = subtype.substr(0, index2);
       }
       var obj = {
         type,
@@ -14305,11 +14305,11 @@ var require_json = __commonJS({
       };
     }
     function createStrictSyntaxError(str, char2) {
-      var index = str.indexOf(char2);
+      var index2 = str.indexOf(char2);
       var partial2 = "";
-      if (index !== -1) {
-        partial2 = str.substring(0, index) + JSON_SYNTAX_CHAR;
-        for (var i = index + 1; i < str.length; i++) {
+      if (index2 !== -1) {
+        partial2 = str.substring(0, index2) + JSON_SYNTAX_CHAR;
+        for (var i = index2 + 1; i < str.length; i++) {
           partial2 += JSON_SYNTAX_CHAR;
         }
       }
@@ -14319,7 +14319,7 @@ var require_json = __commonJS({
       } catch (e) {
         return normalizeJsonSyntaxError(e, {
           message: e.message.replace(JSON_SYNTAX_REGEXP, function(placeholder) {
-            return str.substring(index, index + placeholder.length);
+            return str.substring(index2, index2 + placeholder.length);
           }),
           stack: e.stack
         });
@@ -16725,12 +16725,12 @@ var require_parse = __commonJS({
           obj = options.plainObjects ? /* @__PURE__ */ Object.create(null) : {};
           var cleanRoot = root.charAt(0) === "[" && root.charAt(root.length - 1) === "]" ? root.slice(1, -1) : root;
           var decodedRoot = options.decodeDotInKeys ? cleanRoot.replace(/%2E/g, ".") : cleanRoot;
-          var index = parseInt(decodedRoot, 10);
+          var index2 = parseInt(decodedRoot, 10);
           if (!options.parseArrays && decodedRoot === "") {
             obj = { 0: leaf };
-          } else if (!isNaN(index) && root !== decodedRoot && String(index) === decodedRoot && index >= 0 && (options.parseArrays && index <= options.arrayLimit)) {
+          } else if (!isNaN(index2) && root !== decodedRoot && String(index2) === decodedRoot && index2 >= 0 && (options.parseArrays && index2 <= options.arrayLimit)) {
             obj = [];
-            obj[index] = leaf;
+            obj[index2] = leaf;
           } else if (decodedRoot !== "__proto__") {
             obj[decodedRoot] = leaf;
           }
@@ -16977,10 +16977,10 @@ var require_urlencoded = __commonJS({
     }
     function parameterCount(body, limit) {
       var count = 0;
-      var index = 0;
-      while ((index = body.indexOf("&", index)) !== -1) {
+      var index2 = 0;
+      while ((index2 = body.indexOf("&", index2)) !== -1) {
         count++;
-        index++;
+        index2++;
         if (count === limit) {
           return void 0;
         }
@@ -17165,10 +17165,10 @@ var require_escape_html = __commonJS({
       }
       var escape3;
       var html = "";
-      var index = 0;
+      var index2 = 0;
       var lastIndex = 0;
-      for (index = match.index; index < str.length; index++) {
-        switch (str.charCodeAt(index)) {
+      for (index2 = match.index; index2 < str.length; index2++) {
+        switch (str.charCodeAt(index2)) {
           case 34:
             escape3 = "&quot;";
             break;
@@ -17187,13 +17187,13 @@ var require_escape_html = __commonJS({
           default:
             continue;
         }
-        if (lastIndex !== index) {
-          html += str.substring(lastIndex, index);
+        if (lastIndex !== index2) {
+          html += str.substring(lastIndex, index2);
         }
-        lastIndex = index + 1;
+        lastIndex = index2 + 1;
         html += escape3;
       }
-      return lastIndex !== index ? html + str.substring(lastIndex, index) : html;
+      return lastIndex !== index2 ? html + str.substring(lastIndex, index2) : html;
     }
   }
 });
@@ -18513,18 +18513,18 @@ var require_content_disposition = __commonJS({
       if (!match) {
         throw new TypeError("invalid type format");
       }
-      var index = match[0].length;
+      var index2 = match[0].length;
       var type = match[1].toLowerCase();
       var key;
       var names = [];
       var params = {};
       var value;
-      index = PARAM_REGEXP.lastIndex = match[0].substr(-1) === ";" ? index - 1 : index;
+      index2 = PARAM_REGEXP.lastIndex = match[0].substr(-1) === ";" ? index2 - 1 : index2;
       while (match = PARAM_REGEXP.exec(string4)) {
-        if (match.index !== index) {
+        if (match.index !== index2) {
           throw new TypeError("invalid parameter format");
         }
-        index += match[0].length;
+        index2 += match[0].length;
         key = match[1].toLowerCase();
         value = match[2];
         if (names.indexOf(key) !== -1) {
@@ -18545,7 +18545,7 @@ var require_content_disposition = __commonJS({
         }
         params[key] = value;
       }
-      if (index !== -1 && index !== string4.length) {
+      if (index2 !== -1 && index2 !== string4.length) {
         throw new TypeError("invalid parameter format");
       }
       return new ContentDisposition(type, params);
@@ -18887,13 +18887,13 @@ var require_range_parser = __commonJS({
       if (typeof str !== "string") {
         throw new TypeError("argument str must be a string");
       }
-      var index = str.indexOf("=");
-      if (index === -1) {
+      var index2 = str.indexOf("=");
+      if (index2 === -1) {
         return -2;
       }
-      var arr = str.slice(index + 1).split(",");
+      var arr = str.slice(index2 + 1).split(",");
       var ranges = [];
-      ranges.type = str.slice(0, index);
+      ranges.type = str.slice(0, index2);
       for (var i = 0; i < arr.length; i++) {
         var range = arr[i].split("-");
         var start = parseInt(range[0], 10);
@@ -18937,11 +18937,11 @@ var require_range_parser = __commonJS({
       combined.type = ranges.type;
       return combined;
     }
-    function mapWithIndex(range, index) {
+    function mapWithIndex(range, index2) {
       return {
         start: range.start,
         end: range.end,
-        index
+        index: index2
       };
     }
     function mapWithoutIndex(range) {
@@ -19037,10 +19037,10 @@ var require_send = __commonJS({
       debug("hidden %s", this._hidden);
       return this;
     }, "send.hidden: use dotfiles option");
-    SendStream.prototype.index = deprecate.function(function index(paths) {
-      var index2 = !paths ? [] : normalizeList(paths, "paths argument");
+    SendStream.prototype.index = deprecate.function(function index2(paths) {
+      var index3 = !paths ? [] : normalizeList(paths, "paths argument");
       debug("index %o", paths);
-      this._index = index2;
+      this._index = index3;
       return this;
     }, "send.index: pass index as option");
     SendStream.prototype.root = function root(path2) {
@@ -20784,17 +20784,17 @@ var require_charset = __commonJS({
         i
       };
     }
-    function getCharsetPriority(charset, accepted, index) {
+    function getCharsetPriority(charset, accepted, index2) {
       var priority = { o: -1, q: 0, s: 0 };
       for (var i = 0; i < accepted.length; i++) {
-        var spec = specify(charset, accepted[i], index);
+        var spec = specify(charset, accepted[i], index2);
         if (spec && (priority.s - spec.s || priority.q - spec.q || priority.o - spec.o) < 0) {
           priority = spec;
         }
       }
       return priority;
     }
-    function specify(charset, spec, index) {
+    function specify(charset, spec, index2) {
       var s = 0;
       if (spec.charset.toLowerCase() === charset.toLowerCase()) {
         s |= 1;
@@ -20802,7 +20802,7 @@ var require_charset = __commonJS({
         return null;
       }
       return {
-        i: index,
+        i: index2,
         o: spec.i,
         q: spec.q,
         s
@@ -20813,8 +20813,8 @@ var require_charset = __commonJS({
       if (!provided) {
         return accepts.filter(isQuality).sort(compareSpecs).map(getFullCharset);
       }
-      var priorities = provided.map(function getPriority(type, index) {
-        return getCharsetPriority(type, accepts, index);
+      var priorities = provided.map(function getPriority(type, index2) {
+        return getCharsetPriority(type, accepts, index2);
       });
       return priorities.filter(isQuality).sort(compareSpecs).map(function getCharset(priority) {
         return provided[priorities.indexOf(priority)];
@@ -20882,17 +20882,17 @@ var require_encoding = __commonJS({
         i
       };
     }
-    function getEncodingPriority(encoding, accepted, index) {
+    function getEncodingPriority(encoding, accepted, index2) {
       var priority = { o: -1, q: 0, s: 0 };
       for (var i = 0; i < accepted.length; i++) {
-        var spec = specify(encoding, accepted[i], index);
+        var spec = specify(encoding, accepted[i], index2);
         if (spec && (priority.s - spec.s || priority.q - spec.q || priority.o - spec.o) < 0) {
           priority = spec;
         }
       }
       return priority;
     }
-    function specify(encoding, spec, index) {
+    function specify(encoding, spec, index2) {
       var s = 0;
       if (spec.encoding.toLowerCase() === encoding.toLowerCase()) {
         s |= 1;
@@ -20900,7 +20900,7 @@ var require_encoding = __commonJS({
         return null;
       }
       return {
-        i: index,
+        i: index2,
         o: spec.i,
         q: spec.q,
         s
@@ -20911,8 +20911,8 @@ var require_encoding = __commonJS({
       if (!provided) {
         return accepts.filter(isQuality).sort(compareSpecs).map(getFullEncoding);
       }
-      var priorities = provided.map(function getPriority(type, index) {
-        return getEncodingPriority(type, accepts, index);
+      var priorities = provided.map(function getPriority(type, index2) {
+        return getEncodingPriority(type, accepts, index2);
       });
       return priorities.filter(isQuality).sort(compareSpecs).map(function getEncoding(priority) {
         return provided[priorities.indexOf(priority)];
@@ -20971,17 +20971,17 @@ var require_language = __commonJS({
         full
       };
     }
-    function getLanguagePriority(language, accepted, index) {
+    function getLanguagePriority(language, accepted, index2) {
       var priority = { o: -1, q: 0, s: 0 };
       for (var i = 0; i < accepted.length; i++) {
-        var spec = specify(language, accepted[i], index);
+        var spec = specify(language, accepted[i], index2);
         if (spec && (priority.s - spec.s || priority.q - spec.q || priority.o - spec.o) < 0) {
           priority = spec;
         }
       }
       return priority;
     }
-    function specify(language, spec, index) {
+    function specify(language, spec, index2) {
       var p = parseLanguage(language);
       if (!p) return null;
       var s = 0;
@@ -20995,7 +20995,7 @@ var require_language = __commonJS({
         return null;
       }
       return {
-        i: index,
+        i: index2,
         o: spec.i,
         q: spec.q,
         s
@@ -21006,8 +21006,8 @@ var require_language = __commonJS({
       if (!provided) {
         return accepts.filter(isQuality).sort(compareSpecs).map(getFullLanguage);
       }
-      var priorities = provided.map(function getPriority(type, index) {
-        return getLanguagePriority(type, accepts, index);
+      var priorities = provided.map(function getPriority(type, index2) {
+        return getLanguagePriority(type, accepts, index2);
       });
       return priorities.filter(isQuality).sort(compareSpecs).map(function getLanguage(priority) {
         return provided[priorities.indexOf(priority)];
@@ -21072,17 +21072,17 @@ var require_mediaType = __commonJS({
         i
       };
     }
-    function getMediaTypePriority(type, accepted, index) {
+    function getMediaTypePriority(type, accepted, index2) {
       var priority = { o: -1, q: 0, s: 0 };
       for (var i = 0; i < accepted.length; i++) {
-        var spec = specify(type, accepted[i], index);
+        var spec = specify(type, accepted[i], index2);
         if (spec && (priority.s - spec.s || priority.q - spec.q || priority.o - spec.o) < 0) {
           priority = spec;
         }
       }
       return priority;
     }
-    function specify(type, spec, index) {
+    function specify(type, spec, index2) {
       var p = parseMediaType(type);
       var s = 0;
       if (!p) {
@@ -21109,7 +21109,7 @@ var require_mediaType = __commonJS({
         }
       }
       return {
-        i: index,
+        i: index2,
         o: spec.i,
         q: spec.q,
         s
@@ -21120,8 +21120,8 @@ var require_mediaType = __commonJS({
       if (!provided) {
         return accepts.filter(isQuality).sort(compareSpecs).map(getFullType);
       }
-      var priorities = provided.map(function getPriority(type, index) {
-        return getMediaTypePriority(type, accepts, index);
+      var priorities = provided.map(function getPriority(type, index2) {
+        return getMediaTypePriority(type, accepts, index2);
       });
       return priorities.filter(isQuality).sort(compareSpecs).map(function getType(priority) {
         return provided[priorities.indexOf(priority)];
@@ -21138,22 +21138,22 @@ var require_mediaType = __commonJS({
     }
     function quoteCount(string4) {
       var count = 0;
-      var index = 0;
-      while ((index = string4.indexOf('"', index)) !== -1) {
+      var index2 = 0;
+      while ((index2 = string4.indexOf('"', index2)) !== -1) {
         count++;
-        index++;
+        index2++;
       }
       return count;
     }
     function splitKeyValuePair(str) {
-      var index = str.indexOf("=");
+      var index2 = str.indexOf("=");
       var key;
       var val;
-      if (index === -1) {
+      if (index2 === -1) {
         key = str;
       } else {
-        key = str.substr(0, index);
-        val = str.substr(index + 1);
+        key = str.substr(0, index2);
+        val = str.substr(index2 + 1);
       }
       return [key, val];
     }
@@ -21415,8 +21415,8 @@ var require_request = __commonJS({
         return proto;
       }
       var header = this.get("X-Forwarded-Proto") || proto;
-      var index = header.indexOf(",");
-      return index !== -1 ? header.substring(0, index).trim() : header.trim();
+      var index2 = header.indexOf(",");
+      return index2 !== -1 ? header.substring(0, index2).trim() : header.trim();
     });
     defineGetter(req, "secure", function secure() {
       return this.protocol === "https";
@@ -21451,8 +21451,8 @@ var require_request = __commonJS({
       }
       if (!host) return;
       var offset = host[0] === "[" ? host.indexOf("]") + 1 : 0;
-      var index = host.indexOf(":", offset);
-      return index !== -1 ? host.substring(0, index) : host;
+      var index2 = host.indexOf(":", offset);
+      return index2 !== -1 ? host.substring(0, index2) : host;
     });
     defineGetter(req, "host", deprecate.function(function host() {
       return this.hostname;
@@ -21527,20 +21527,20 @@ var require_cookie = __commonJS({
       var len = str.length;
       if (len < 2) return obj;
       var dec = opt && opt.decode || decode4;
-      var index = 0;
+      var index2 = 0;
       var eqIdx = 0;
       var endIdx = 0;
       do {
-        eqIdx = str.indexOf("=", index);
+        eqIdx = str.indexOf("=", index2);
         if (eqIdx === -1) break;
-        endIdx = str.indexOf(";", index);
+        endIdx = str.indexOf(";", index2);
         if (endIdx === -1) {
           endIdx = len;
         } else if (eqIdx > endIdx) {
-          index = str.lastIndexOf(";", eqIdx - 1) + 1;
+          index2 = str.lastIndexOf(";", eqIdx - 1) + 1;
           continue;
         }
-        var keyStartIdx = startIndex(str, index, eqIdx);
+        var keyStartIdx = startIndex(str, index2, eqIdx);
         var keyEndIdx = endIndex(str, eqIdx, keyStartIdx);
         var key = str.slice(keyStartIdx, keyEndIdx);
         if (!obj.hasOwnProperty(key)) {
@@ -21553,21 +21553,21 @@ var require_cookie = __commonJS({
           var val = str.slice(valStartIdx, valEndIdx);
           obj[key] = tryDecode(val, dec);
         }
-        index = endIdx + 1;
-      } while (index < len);
+        index2 = endIdx + 1;
+      } while (index2 < len);
       return obj;
     }
-    function startIndex(str, index, max) {
+    function startIndex(str, index2, max) {
       do {
-        var code = str.charCodeAt(index);
-        if (code !== 32 && code !== 9) return index;
-      } while (++index < max);
+        var code = str.charCodeAt(index2);
+        if (code !== 32 && code !== 9) return index2;
+      } while (++index2 < max);
       return max;
     }
-    function endIndex(str, index, min) {
-      while (index > min) {
-        var code = str.charCodeAt(--index);
-        if (code !== 32 && code !== 9) return index + 1;
+    function endIndex(str, index2, min) {
+      while (index2 > min) {
+        var code = str.charCodeAt(--index2);
+        if (code !== 32 && code !== 9) return index2 + 1;
       }
       return min;
     }
@@ -23182,12 +23182,12 @@ function withResolvers() {
 function listWithMember(arr, member) {
   return [...arr, member];
 }
-function listWithoutIndex(arr, index) {
-  return [...arr.slice(0, index), ...arr.slice(index + 1)];
+function listWithoutIndex(arr, index2) {
+  return [...arr.slice(0, index2), ...arr.slice(index2 + 1)];
 }
 function listWithoutMember(arr, member) {
-  const index = arr.indexOf(member);
-  if (index !== -1) return listWithoutIndex(arr, index);
+  const index2 = arr.indexOf(member);
+  if (index2 !== -1) return listWithoutIndex(arr, index2);
   return arr;
 }
 function makeResource(thing, dispose) {
@@ -24090,8 +24090,8 @@ async function resolveResponse(opts) {
       }), void 0];
       return res;
     });
-    const resultAsRPCResponse = results.map(([error46, result], index) => {
-      const call = info.calls[index];
+    const resultAsRPCResponse = results.map(([error46, result], index2) => {
+      const call = info.calls[index2];
       if (error46) {
         var _call$procedure$_def$4, _call$procedure5;
         return { error: getErrorShape({
@@ -24172,20 +24172,20 @@ var init_resolveResponse_DngSgha6 = __esm({
             message: '"input" needs to be an object when doing a batch call'
           });
           const acc = {};
-          for (const index of paths.keys()) {
-            const input = inputs[index];
-            if (input !== void 0) acc[index] = opts.router._def._config.transformer.input.deserialize(input);
+          for (const index2 of paths.keys()) {
+            const input = inputs[index2];
+            if (input !== void 0) acc[index2] = opts.router._def._config.transformer.input.deserialize(input);
           }
           return acc;
         });
-        const calls = await Promise.all(paths.map(async (path, index) => {
+        const calls = await Promise.all(paths.map(async (path, index2) => {
           const procedure = await getProcedureAtPath(opts.router, path);
           return {
             path,
             procedure,
             getRawInput: async () => {
               const inputs = await getInputs.read();
-              let input = inputs[index];
+              let input = inputs[index2];
               if ((procedure === null || procedure === void 0 ? void 0 : procedure._def.type) === "subscription") {
                 var _ref, _opts$headers$get;
                 const lastEventId = (_ref = (_opts$headers$get = opts.headers.get("last-event-id")) !== null && _opts$headers$get !== void 0 ? _opts$headers$get : opts.searchParams.get("lastEventId")) !== null && _ref !== void 0 ? _ref : opts.searchParams.get("Last-Event-Id");
@@ -24199,7 +24199,7 @@ var init_resolveResponse_DngSgha6 = __esm({
             },
             result: () => {
               var _getInputs$result;
-              return (_getInputs$result = getInputs.result()) === null || _getInputs$result === void 0 ? void 0 : _getInputs$result[index];
+              return (_getInputs$result = getInputs.result()) === null || _getInputs$result === void 0 ? void 0 : _getInputs$result[index2];
             }
           };
         }));
@@ -24880,16 +24880,16 @@ function createResolver(_defIn, resolver) {
   callerWrapper._def = _def;
   return callerWrapper;
 }
-async function callRecursive(index, _def, opts) {
+async function callRecursive(index2, _def, opts) {
   try {
-    const middleware = _def.middlewares[index];
+    const middleware = _def.middlewares[index2];
     const result = await middleware((0, import_objectSpread2$13.default)((0, import_objectSpread2$13.default)({}, opts), {}, {
       meta: _def.meta,
       input: opts.input,
       next(_nextOpts) {
         var _nextOpts$getRawInput;
         const nextOpts = _nextOpts;
-        return callRecursive(index + 1, _def, (0, import_objectSpread2$13.default)((0, import_objectSpread2$13.default)({}, opts), {}, {
+        return callRecursive(index2 + 1, _def, (0, import_objectSpread2$13.default)((0, import_objectSpread2$13.default)({}, opts), {}, {
           ctx: (nextOpts === null || nextOpts === void 0 ? void 0 : nextOpts.ctx) ? (0, import_objectSpread2$13.default)((0, import_objectSpread2$13.default)({}, opts.ctx), nextOpts.ctx) : opts.ctx,
           input: nextOpts && "input" in nextOpts ? nextOpts.input : opts.input,
           getRawInput: (_nextOpts$getRawInput = nextOpts === null || nextOpts === void 0 ? void 0 : nextOpts.getRawInput) !== null && _nextOpts$getRawInput !== void 0 ? _nextOpts$getRawInput : opts.getRawInput
@@ -27172,6 +27172,9 @@ var init_tracing_utils = __esm({
 });
 
 // node_modules/.pnpm/drizzle-orm@0.44.6_mysql2@3.15.1_postgres@3.4.9/node_modules/drizzle-orm/pg-core/unique-constraint.js
+function unique(name) {
+  return new UniqueOnConstraintBuilder(name);
+}
 function uniqueKeyName(table, columns) {
   return `${table[TableName]}_${columns.join("_")}_unique`;
 }
@@ -28434,8 +28437,8 @@ function haveSameKeys(left, right) {
   if (leftKeys.length !== rightKeys.length) {
     return false;
   }
-  for (const [index, key] of leftKeys.entries()) {
-    if (key !== rightKeys[index]) {
+  for (const [index2, key] of leftKeys.entries()) {
+    if (key !== rightKeys[index2]) {
       return false;
     }
   }
@@ -31253,23 +31256,23 @@ var init_result = __esm({
 // node_modules/.pnpm/postgres@3.4.9/node_modules/postgres/src/queue.js
 function Queue(initial = []) {
   let xs = initial.slice();
-  let index = 0;
+  let index2 = 0;
   return {
     get length() {
-      return xs.length - index;
+      return xs.length - index2;
     },
     remove: (x) => {
-      const index2 = xs.indexOf(x);
-      return index2 === -1 ? null : (xs.splice(index2, 1), x);
+      const index3 = xs.indexOf(x);
+      return index3 === -1 ? null : (xs.splice(index3, 1), x);
     },
     push: (x) => (xs.push(x), x),
     shift: () => {
-      const out = xs[index++];
-      if (index === xs.length) {
-        index = 0;
+      const out = xs[index2++];
+      if (index2 === xs.length) {
+        index2 = 0;
         xs = [];
       } else {
-        xs[index - 1] = void 0;
+        xs[index2 - 1] = void 0;
       }
       return out;
     }
@@ -31721,16 +31724,16 @@ function Connection(options, queues = {}, { onopen = noop2, onend = noop2, onclo
     ))(xs);
   }
   function DataRow(x) {
-    let index = 7;
+    let index2 = 7;
     let length2;
     let column;
     let value;
     const row = query.isRaw ? new Array(query.statement.columns.length) : {};
     for (let i = 0; i < query.statement.columns.length; i++) {
       column = query.statement.columns[i];
-      length2 = x.readInt32BE(index);
-      index += 4;
-      value = length2 === -1 ? null : query.isRaw === true ? x.subarray(index, index += length2) : column.parser === void 0 ? x.toString("utf8", index, index += length2) : column.parser.array === true ? column.parser(x.toString("utf8", index + 1, index += length2)) : column.parser(x.toString("utf8", index, index += length2));
+      length2 = x.readInt32BE(index2);
+      index2 += 4;
+      value = length2 === -1 ? null : query.isRaw === true ? x.subarray(index2, index2 += length2) : column.parser === void 0 ? x.toString("utf8", index2, index2 += length2) : column.parser.array === true ? column.parser(x.toString("utf8", index2 + 1, index2 += length2)) : column.parser(x.toString("utf8", index2, index2 += length2));
       query.isRaw ? row[i] = query.isRaw === true ? value : transform2.value.from ? transform2.value.from(value, column) : value : row[column.name] = transform2.value.from ? transform2.value.from(value, column) : value;
     }
     query.forEachFn ? query.forEachFn(transform2.row.from ? transform2.row.from(row) : row, result) : result[rows++] = transform2.row.from ? transform2.row.from(row) : row;
@@ -31821,23 +31824,23 @@ function Connection(options, queues = {}, { onopen = noop2, onend = noop2, onclo
       query.statement.columns = null;
     }
     const length2 = x.readUInt16BE(5);
-    let index = 7;
+    let index2 = 7;
     let start;
     query.statement.columns = Array(length2);
     for (let i = 0; i < length2; ++i) {
-      start = index;
-      while (x[index++] !== 0) ;
-      const table = x.readUInt32BE(index);
-      const number4 = x.readUInt16BE(index + 4);
-      const type = x.readUInt32BE(index + 6);
+      start = index2;
+      while (x[index2++] !== 0) ;
+      const table = x.readUInt32BE(index2);
+      const number4 = x.readUInt16BE(index2 + 4);
+      const type = x.readUInt32BE(index2 + 6);
       query.statement.columns[i] = {
-        name: transform2.column.from ? transform2.column.from(x.toString("utf8", start, index - 1)) : x.toString("utf8", start, index - 1),
+        name: transform2.column.from ? transform2.column.from(x.toString("utf8", start, index2 - 1)) : x.toString("utf8", start, index2 - 1),
         parser: parsers2[type],
         table,
         number: number4,
         type
       };
-      index += 18;
+      index2 += 18;
     }
     result.statement = query.statement;
     if (query.onlyDescribe)
@@ -31960,11 +31963,11 @@ function Connection(options, queues = {}, { onopen = noop2, onend = noop2, onclo
   function NotificationResponse(x) {
     if (!onnotify)
       return;
-    let index = 9;
-    while (x[index++] !== 0) ;
+    let index2 = 9;
+    while (x[index2++] !== 0) ;
     onnotify(
-      x.toString("utf8", 9, index - 1),
-      x.toString("utf8", index, x.length - 1)
+      x.toString("utf8", 9, index2 - 1),
+      x.toString("utf8", index2, x.length - 1)
     );
   }
   async function PortalSuspended() {
@@ -33001,6 +33004,9 @@ var init_selection_proxy = __esm({
 });
 
 // node_modules/.pnpm/drizzle-orm@0.44.6_mysql2@3.15.1_postgres@3.4.9/node_modules/drizzle-orm/pg-core/checks.js
+function check(name, value) {
+  return new CheckBuilder(name, value);
+}
 var CheckBuilder, Check;
 var init_checks = __esm({
   "node_modules/.pnpm/drizzle-orm@0.44.6_mysql2@3.15.1_postgres@3.4.9/node_modules/drizzle-orm/pg-core/checks.js"() {
@@ -33072,6 +33078,12 @@ var init_columns = __esm({
 });
 
 // node_modules/.pnpm/drizzle-orm@0.44.6_mysql2@3.15.1_postgres@3.4.9/node_modules/drizzle-orm/pg-core/indexes.js
+function index(name) {
+  return new IndexBuilderOn(false, name);
+}
+function uniqueIndex(name) {
+  return new IndexBuilderOn(true, name);
+}
 var IndexBuilderOn, IndexBuilder, Index;
 var init_indexes = __esm({
   "node_modules/.pnpm/drizzle-orm@0.44.6_mysql2@3.15.1_postgres@3.4.9/node_modules/drizzle-orm/pg-core/indexes.js"() {
@@ -33079,8 +33091,8 @@ var init_indexes = __esm({
     init_entity();
     init_columns();
     IndexBuilderOn = class {
-      constructor(unique, name) {
-        this.unique = unique;
+      constructor(unique2, name) {
+        this.unique = unique2;
         this.name = name;
       }
       static [entityKind] = "PgIndexBuilderOn";
@@ -33149,11 +33161,11 @@ var init_indexes = __esm({
       static [entityKind] = "PgIndexBuilder";
       /** @internal */
       config;
-      constructor(columns, unique, only, name, method = "btree") {
+      constructor(columns, unique2, only, name, method = "btree") {
         this.config = {
           name,
           columns,
-          unique,
+          unique: unique2,
           only,
           method
         };
@@ -33463,8 +33475,8 @@ var init_dialect = __esm({
           return void 0;
         }
         const joinsArray = [];
-        for (const [index, joinMeta] of joins.entries()) {
-          if (index === 0) {
+        for (const [index2, joinMeta] of joins.entries()) {
+          if (index2 === 0) {
             joinsArray.push(sql` `);
           }
           const table = joinMeta.table;
@@ -33491,7 +33503,7 @@ var init_dialect = __esm({
               sql`${sql.raw(joinMeta.joinType)} join${lateralSql} ${table}${onSql}`
             );
           }
-          if (index < joins.length - 1) {
+          if (index2 < joins.length - 1) {
             joinsArray.push(sql` `);
           }
         }
@@ -37352,17 +37364,23 @@ var init_postgres_js = __esm({
 });
 
 // drizzle/schema.ts
-var userRoleEnum, stockMovementTypeEnum, alertTypeEnum, alertStatusEnum, syncStatusEnum, users, retailers, products, inventory, stockMovements, alerts, syncLogs;
+var userRoleEnum, stockMovementTypeEnum, alertTypeEnum, alertStatusEnum, syncStatusEnum, locationTypeEnum, users, retailers, products, producers, productBatches, locations, inventoryByBatch, inventory, stockMovements, alerts, syncLogs;
 var init_schema2 = __esm({
   "drizzle/schema.ts"() {
     "use strict";
     init_drizzle_orm();
     init_pg_core();
     userRoleEnum = pgEnum("user_role", ["admin", "operator", "viewer"]);
-    stockMovementTypeEnum = pgEnum("stock_movement_type", ["IN", "OUT", "ADJUSTMENT"]);
+    stockMovementTypeEnum = pgEnum("stock_movement_type", [
+      "IN",
+      "OUT",
+      "ADJUSTMENT",
+      "RECEIPT_FROM_PRODUCER"
+    ]);
     alertTypeEnum = pgEnum("alert_type", ["LOW_STOCK", "EXPIRING", "EXPIRED"]);
     alertStatusEnum = pgEnum("alert_status", ["ACTIVE", "ACKNOWLEDGED", "RESOLVED"]);
     syncStatusEnum = pgEnum("sync_status", ["SUCCESS", "FAILED", "PARTIAL"]);
+    locationTypeEnum = pgEnum("location_type", ["central_warehouse", "retailer"]);
     users = pgTable("users", {
       id: uuid("id").primaryKey(),
       email: varchar("email", { length: 320 }).notNull().unique(),
@@ -37412,6 +37430,74 @@ var init_schema2 = __esm({
       createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
       updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull()
     });
+    producers = pgTable("producers", {
+      id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+      name: text("name").notNull(),
+      contactName: text("contactName"),
+      email: varchar("email", { length: 320 }),
+      phone: varchar("phone", { length: 50 }),
+      address: text("address"),
+      vatNumber: varchar("vatNumber", { length: 50 }),
+      notes: text("notes"),
+      createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+      updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull()
+    });
+    productBatches = pgTable(
+      "productBatches",
+      {
+        id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+        productId: uuid("productId").notNull().references(() => products.id, { onDelete: "restrict" }),
+        producerId: uuid("producerId").references(() => producers.id, {
+          onDelete: "set null"
+        }),
+        batchNumber: text("batchNumber").notNull(),
+        expirationDate: date("expirationDate").notNull(),
+        productionDate: date("productionDate"),
+        initialQuantity: integer("initialQuantity").notNull(),
+        notes: text("notes"),
+        createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull()
+      },
+      (t2) => [
+        unique("productBatches_product_batch_unique").on(t2.productId, t2.batchNumber),
+        check("productBatches_initial_qty_positive", sql`${t2.initialQuantity} > 0`),
+        index("productBatches_product_expiration_idx").on(t2.productId, t2.expirationDate)
+      ]
+    );
+    locations = pgTable(
+      "locations",
+      {
+        id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+        type: locationTypeEnum("type").notNull(),
+        name: text("name").notNull(),
+        retailerId: uuid("retailerId").references(() => retailers.id, {
+          onDelete: "cascade"
+        }),
+        isActive: boolean("isActive").default(true).notNull(),
+        createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull()
+      },
+      (t2) => [
+        check(
+          "locations_type_retailer_coherence",
+          sql`(${t2.type} = 'central_warehouse' AND ${t2.retailerId} IS NULL) OR (${t2.type} = 'retailer' AND ${t2.retailerId} IS NOT NULL)`
+        ),
+        uniqueIndex("locations_central_singleton").on(t2.type).where(sql`${t2.type} = 'central_warehouse'`),
+        index("locations_retailerId_idx").on(t2.retailerId).where(sql`${t2.retailerId} IS NOT NULL`)
+      ]
+    );
+    inventoryByBatch = pgTable(
+      "inventoryByBatch",
+      {
+        id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+        locationId: uuid("locationId").notNull().references(() => locations.id, { onDelete: "cascade" }),
+        batchId: uuid("batchId").notNull().references(() => productBatches.id, { onDelete: "restrict" }),
+        quantity: integer("quantity").default(0).notNull(),
+        updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull()
+      },
+      (t2) => [
+        unique("inventoryByBatch_location_batch_unique").on(t2.locationId, t2.batchId),
+        check("inventoryByBatch_quantity_nonneg", sql`${t2.quantity} >= 0`)
+      ]
+    );
     inventory = pgTable("inventory", {
       id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
       retailerId: uuid("retailerId").notNull(),
@@ -37424,8 +37510,8 @@ var init_schema2 = __esm({
     });
     stockMovements = pgTable("stockMovements", {
       id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-      inventoryId: uuid("inventoryId").notNull(),
-      retailerId: uuid("retailerId").notNull(),
+      inventoryId: uuid("inventoryId"),
+      retailerId: uuid("retailerId"),
       productId: uuid("productId").notNull(),
       type: stockMovementTypeEnum("type").notNull(),
       quantity: integer("quantity").notNull(),
@@ -37435,7 +37521,16 @@ var init_schema2 = __esm({
       sourceDocumentType: varchar("sourceDocumentType", { length: 50 }),
       notes: text("notes"),
       timestamp: timestamp("timestamp", { withTimezone: true }).defaultNow().notNull(),
-      createdBy: uuid("createdBy")
+      createdBy: uuid("createdBy"),
+      batchId: uuid("batchId").references(() => productBatches.id, {
+        onDelete: "set null"
+      }),
+      fromLocationId: uuid("fromLocationId").references(() => locations.id, {
+        onDelete: "set null"
+      }),
+      toLocationId: uuid("toLocationId").references(() => locations.id, {
+        onDelete: "set null"
+      })
     });
     alerts = pgTable("alerts", {
       id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -37517,6 +37612,11 @@ async function createRetailer(data) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const [row] = await db.insert(retailers).values(data).returning();
+  await db.insert(locations).values({
+    type: "retailer",
+    name: row.name,
+    retailerId: row.id
+  });
   return row;
 }
 async function updateRetailer(id, data) {
@@ -37528,7 +37628,7 @@ async function getRetailerDependentsCount(id) {
   const db = await getDb();
   if (!db) return { inventory: 0, stockMovements: 0, alerts: 0, syncLogs: 0 };
   const [inv, mov, alr, syn] = await Promise.all([
-    db.select({ c: sql`count(*)::int` }).from(inventory).where(eq(inventory.retailerId, id)),
+    db.select({ c: sql`count(*)::int` }).from(inventoryByBatch).innerJoin(locations, eq(inventoryByBatch.locationId, locations.id)).where(eq(locations.retailerId, id)),
     db.select({ c: sql`count(*)::int` }).from(stockMovements).where(eq(stockMovements.retailerId, id)),
     db.select({ c: sql`count(*)::int` }).from(alerts).where(eq(alerts.retailerId, id)),
     db.select({ c: sql`count(*)::int` }).from(syncLogs).where(eq(syncLogs.retailerId, id))
@@ -37584,10 +37684,239 @@ async function deleteProduct(id) {
   if (!db) throw new Error("Database not available");
   await db.delete(products).where(eq(products.id, id));
 }
-async function getInventoryByRetailer(retailerId) {
+async function getAllProducers() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(inventory).where(eq(inventory.retailerId, retailerId));
+  return db.select().from(producers).orderBy(producers.name);
+}
+async function getProducerById(id) {
+  const db = await getDb();
+  if (!db) return void 0;
+  const result = await db.select().from(producers).where(eq(producers.id, id)).limit(1);
+  return result[0];
+}
+async function createProducer(data) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.insert(producers).values(data).returning();
+  return row;
+}
+async function updateProducer(id, data) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(producers).set({ ...data, updatedAt: /* @__PURE__ */ new Date() }).where(eq(producers.id, id));
+}
+async function deleteProducer(id) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(producers).where(eq(producers.id, id));
+}
+async function getAllLocations() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(locations).orderBy(locations.type, locations.name);
+}
+async function getCentralWarehouseLocation() {
+  const db = await getDb();
+  if (!db) return void 0;
+  const [row] = await db.select().from(locations).where(eq(locations.type, "central_warehouse")).limit(1);
+  return row;
+}
+async function getRetailerLocation(retailerId) {
+  const db = await getDb();
+  if (!db) return void 0;
+  const [row] = await db.select().from(locations).where(and(eq(locations.type, "retailer"), eq(locations.retailerId, retailerId))).limit(1);
+  return row;
+}
+async function getBatchesByProduct(productId) {
+  const db = await getDb();
+  if (!db) return [];
+  const warehouse = await getCentralWarehouseLocation();
+  if (!warehouse) return [];
+  const rows = await db.select({
+    id: productBatches.id,
+    productId: productBatches.productId,
+    producerId: productBatches.producerId,
+    producerName: producers.name,
+    batchNumber: productBatches.batchNumber,
+    expirationDate: productBatches.expirationDate,
+    productionDate: productBatches.productionDate,
+    initialQuantity: productBatches.initialQuantity,
+    notes: productBatches.notes,
+    createdAt: productBatches.createdAt,
+    centralStock: inventoryByBatch.quantity
+  }).from(productBatches).leftJoin(producers, eq(productBatches.producerId, producers.id)).leftJoin(
+    inventoryByBatch,
+    and(
+      eq(inventoryByBatch.batchId, productBatches.id),
+      eq(inventoryByBatch.locationId, warehouse.id)
+    )
+  ).where(eq(productBatches.productId, productId)).orderBy(productBatches.expirationDate);
+  return rows;
+}
+async function createBatchWithReceipt(input) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const warehouse = await getCentralWarehouseLocation();
+  if (!warehouse) {
+    throw new Error("Magazzino centrale non configurato");
+  }
+  return await db.transaction(async (tx) => {
+    const [batch] = await tx.insert(productBatches).values({
+      productId: input.productId,
+      producerId: input.producerId,
+      batchNumber: input.batchNumber,
+      expirationDate: input.expirationDate,
+      productionDate: input.productionDate,
+      initialQuantity: input.initialQuantity,
+      notes: input.notes
+    }).returning();
+    await tx.insert(inventoryByBatch).values({
+      locationId: warehouse.id,
+      batchId: batch.id,
+      quantity: input.initialQuantity
+    });
+    await tx.insert(stockMovements).values({
+      productId: input.productId,
+      type: "RECEIPT_FROM_PRODUCER",
+      quantity: input.initialQuantity,
+      newQuantity: input.initialQuantity,
+      previousQuantity: 0,
+      batchId: batch.id,
+      toLocationId: warehouse.id,
+      createdBy: input.createdBy,
+      notes: input.notes
+    });
+    return batch;
+  });
+}
+async function deleteBatchIfFresh(batchId) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [batch] = await db.select().from(productBatches).where(eq(productBatches.id, batchId));
+  if (!batch) {
+    throw new Error("Lotto non trovato");
+  }
+  const warehouse = await getCentralWarehouseLocation();
+  if (!warehouse) {
+    throw new Error("Magazzino centrale non configurato");
+  }
+  const stocks = await db.select().from(inventoryByBatch).where(eq(inventoryByBatch.batchId, batchId));
+  const central = stocks.find((s) => s.locationId === warehouse.id);
+  const others = stocks.filter((s) => s.locationId !== warehouse.id);
+  if (others.length > 0 && others.some((s) => s.quantity > 0)) {
+    throw new Error(
+      "Lotto gi\xE0 distribuito a uno o pi\xF9 rivenditori, eliminazione non consentita"
+    );
+  }
+  if (!central || central.quantity !== batch.initialQuantity) {
+    throw new Error(
+      "Lotto gi\xE0 parzialmente uscito dal magazzino centrale, eliminazione non consentita"
+    );
+  }
+  await db.transaction(async (tx) => {
+    await tx.delete(stockMovements).where(eq(stockMovements.batchId, batchId));
+    await tx.delete(inventoryByBatch).where(eq(inventoryByBatch.batchId, batchId));
+    await tx.delete(productBatches).where(eq(productBatches.id, batchId));
+  });
+}
+async function getInventoryByLocationId(locationId) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    id: inventoryByBatch.id,
+    locationId: inventoryByBatch.locationId,
+    batchId: inventoryByBatch.batchId,
+    quantity: inventoryByBatch.quantity,
+    updatedAt: inventoryByBatch.updatedAt,
+    batchNumber: productBatches.batchNumber,
+    expirationDate: productBatches.expirationDate,
+    productionDate: productBatches.productionDate,
+    initialQuantity: productBatches.initialQuantity,
+    productId: products.id,
+    productSku: products.sku,
+    productName: products.name,
+    productUnit: products.unit,
+    productUnitPrice: products.unitPrice,
+    productMinStockThreshold: products.minStockThreshold,
+    producerId: producers.id,
+    producerName: producers.name
+  }).from(inventoryByBatch).innerJoin(productBatches, eq(inventoryByBatch.batchId, productBatches.id)).innerJoin(products, eq(productBatches.productId, products.id)).leftJoin(producers, eq(productBatches.producerId, producers.id)).where(eq(inventoryByBatch.locationId, locationId)).orderBy(products.name, productBatches.expirationDate);
+  return rows;
+}
+async function getInventoryByBatchByRetailer(retailerId) {
+  const location2 = await getRetailerLocation(retailerId);
+  if (!location2) return [];
+  const rows = await getInventoryByLocationId(location2.id);
+  return rows.map((r) => ({
+    id: r.id,
+    quantity: r.quantity,
+    expirationDate: r.expirationDate ? new Date(r.expirationDate) : null,
+    batchNumber: r.batchNumber,
+    product: {
+      id: r.productId,
+      sku: r.productSku,
+      name: r.productName,
+      unit: r.productUnit,
+      unitPrice: r.productUnitPrice,
+      minStockThreshold: r.productMinStockThreshold
+    }
+  }));
+}
+async function getWarehouseStockOverview() {
+  const db = await getDb();
+  if (!db) return [];
+  const warehouse = await getCentralWarehouseLocation();
+  if (!warehouse) return [];
+  const rows = await db.select({
+    productId: products.id,
+    productSku: products.sku,
+    productName: products.name,
+    productCategory: products.category,
+    productUnit: products.unit,
+    productUnitPrice: products.unitPrice,
+    batchId: productBatches.id,
+    batchNumber: productBatches.batchNumber,
+    expirationDate: productBatches.expirationDate,
+    initialQuantity: productBatches.initialQuantity,
+    quantity: inventoryByBatch.quantity,
+    producerName: producers.name
+  }).from(inventoryByBatch).innerJoin(productBatches, eq(inventoryByBatch.batchId, productBatches.id)).innerJoin(products, eq(productBatches.productId, products.id)).leftJoin(producers, eq(productBatches.producerId, producers.id)).where(eq(inventoryByBatch.locationId, warehouse.id)).orderBy(products.name, productBatches.expirationDate);
+  const byProduct = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    let entry = byProduct.get(r.productId);
+    if (!entry) {
+      entry = {
+        productId: r.productId,
+        productSku: r.productSku,
+        productName: r.productName,
+        productCategory: r.productCategory,
+        productUnit: r.productUnit,
+        productUnitPrice: r.productUnitPrice,
+        totalStock: 0,
+        activeBatchCount: 0,
+        nearestExpiration: null,
+        batches: []
+      };
+      byProduct.set(r.productId, entry);
+    }
+    entry.totalStock += r.quantity;
+    if (r.quantity > 0) entry.activeBatchCount += 1;
+    if (r.quantity > 0 && (!entry.nearestExpiration || r.expirationDate < entry.nearestExpiration)) {
+      entry.nearestExpiration = r.expirationDate;
+    }
+    entry.batches.push({
+      batchId: r.batchId,
+      batchNumber: r.batchNumber,
+      expirationDate: r.expirationDate,
+      initialQuantity: r.initialQuantity,
+      quantity: r.quantity,
+      producerName: r.producerName
+    });
+  }
+  return Array.from(byProduct.values()).sort(
+    (a, b2) => a.productName.localeCompare(b2.productName)
+  );
 }
 async function getInventoryItem(retailerId, productId) {
   const db = await getDb();
@@ -37617,11 +37946,6 @@ async function getStockMovementsByRetailer(retailerId, limit = 100) {
   const db = await getDb();
   if (!db) return [];
   return db.select().from(stockMovements).where(eq(stockMovements.retailerId, retailerId)).orderBy(desc(stockMovements.timestamp)).limit(limit);
-}
-async function getStockMovementsByProduct(productId, limit = 100) {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(stockMovements).where(eq(stockMovements.productId, productId)).orderBy(desc(stockMovements.timestamp)).limit(limit);
 }
 async function getActiveAlerts() {
   const db = await getDb();
@@ -37666,35 +37990,47 @@ async function getDashboardStats() {
   const db = await getDb();
   if (!db) return EMPTY_DASHBOARD_STATS;
   try {
-    const [retailerCountRows, productCountRows, alertCountRows, inventoryRows] = await Promise.all([
+    const [retailerCountRows, productCountRows, alertCountRows, batchInventoryRows] = await Promise.all([
       db.select({ c: sql`count(*)::int` }).from(retailers),
       db.select({ c: sql`count(*)::int` }).from(products),
       db.select({ c: sql`count(*)::int` }).from(alerts).where(eq(alerts.status, "ACTIVE")),
       db.select({
-        quantity: inventory.quantity,
-        expirationDate: inventory.expirationDate,
+        locationId: inventoryByBatch.locationId,
+        productId: productBatches.productId,
+        quantity: inventoryByBatch.quantity,
+        expirationDate: productBatches.expirationDate,
         unitPrice: products.unitPrice,
-        minStockThreshold: products.minStockThreshold
-      }).from(inventory).innerJoin(products, eq(inventory.productId, products.id))
+        minStockThreshold: products.minStockThreshold,
+        locationType: locations.type
+      }).from(inventoryByBatch).innerJoin(productBatches, eq(inventoryByBatch.batchId, productBatches.id)).innerJoin(products, eq(productBatches.productId, products.id)).innerJoin(locations, eq(inventoryByBatch.locationId, locations.id)).where(eq(locations.type, "retailer"))
     ]);
     let totalInventoryValue = 0;
-    let lowStockItems = 0;
     let expiringItems = 0;
     const now = Date.now();
-    for (const item of inventoryRows) {
+    const stockByPair = /* @__PURE__ */ new Map();
+    for (const item of batchInventoryRows) {
       const price = item.unitPrice ? parseFloat(item.unitPrice) : NaN;
       if (!Number.isNaN(price)) {
         totalInventoryValue += price * item.quantity;
-      }
-      if (item.quantity < (item.minStockThreshold ?? 10)) {
-        lowStockItems++;
       }
       if (item.expirationDate) {
         const days = Math.floor(
           (new Date(item.expirationDate).getTime() - now) / 864e5
         );
-        if (days > 0 && days <= 30) expiringItems++;
+        if (days > 0 && days <= 30 && item.quantity > 0) expiringItems++;
       }
+      const key = `${item.locationId}::${item.productId}`;
+      const cur = stockByPair.get(key);
+      const threshold = item.minStockThreshold ?? 10;
+      if (cur) {
+        cur.qty += item.quantity;
+      } else {
+        stockByPair.set(key, { qty: item.quantity, threshold });
+      }
+    }
+    let lowStockItems = 0;
+    for (const v of Array.from(stockByPair.values())) {
+      if (v.qty < v.threshold) lowStockItems++;
     }
     return {
       totalRetailers: retailerCountRows[0]?.c ?? 0,
@@ -39223,10 +39559,10 @@ function toFormData(obj, formData, options) {
         value = JSON.stringify(value);
       } else if (utils_default.isArray(value) && isFlatArray(value) || (utils_default.isFileList(value) || utils_default.endsWith(key, "[]")) && (arr = utils_default.toArray(value))) {
         key = removeBrackets(key);
-        arr.forEach(function each(el, index) {
+        arr.forEach(function each(el, index2) {
           !(utils_default.isUndefined(el) || el === null) && formData.append(
             // eslint-disable-next-line no-nested-ternary
-            indexes === true ? renderKey([key], index, dots) : indexes === null ? key : key + "[]",
+            indexes === true ? renderKey([key], index2, dots) : indexes === null ? key : key + "[]",
             convertValue(el)
           );
         });
@@ -39572,11 +39908,11 @@ function arrayToObject(arr) {
   return obj;
 }
 function formDataToJSON(formData) {
-  function buildPath(path, value, target, index) {
-    let name = path[index++];
+  function buildPath(path, value, target, index2) {
+    let name = path[index2++];
     if (name === "__proto__") return true;
     const isNumericKey = Number.isFinite(+name);
-    const isLast = index >= path.length;
+    const isLast = index2 >= path.length;
     name = !name && utils_default.isArray(target) ? target.length : name;
     if (isLast) {
       if (utils_default.hasOwnProp(target, name)) {
@@ -39589,7 +39925,7 @@ function formDataToJSON(formData) {
     if (!target[name] || !utils_default.isObject(target[name])) {
       target[name] = [];
     }
-    const result = buildPath(path, value, target[name], index);
+    const result = buildPath(path, value, target[name], index2);
     if (result && utils_default.isArray(target[name])) {
       target[name] = arrayToObject(target[name]);
     }
@@ -42917,9 +43253,9 @@ var init_CancelToken = __esm({
         if (!this._listeners) {
           return;
         }
-        const index = this._listeners.indexOf(listener);
-        if (index !== -1) {
-          this._listeners.splice(index, 1);
+        const index2 = this._listeners.indexOf(listener);
+        if (index2 !== -1) {
+          this._listeners.splice(index2, 1);
         }
       }
       toAbortSignal() {
@@ -45500,11 +45836,11 @@ function isValidJWT(token, algorithm = null) {
     return false;
   }
 }
-function handleArrayResult(result, final, index) {
+function handleArrayResult(result, final, index2) {
   if (result.issues.length) {
-    final.issues.push(...prefixIssues(index, result.issues));
+    final.issues.push(...prefixIssues(index2, result.issues));
   }
-  final.value[index] = result.value;
+  final.value[index2] = result.value;
 }
 function handlePropertyResult(result, final, key, input) {
   if (result.issues.length) {
@@ -45615,14 +45951,14 @@ function mergeValues(a, b2) {
       return { valid: false, mergeErrorPath: [] };
     }
     const newArray = [];
-    for (let index = 0; index < a.length; index++) {
-      const itemA = a[index];
-      const itemB = b2[index];
+    for (let index2 = 0; index2 < a.length; index2++) {
+      const itemA = a[index2];
+      const itemB = b2[index2];
       const sharedValue = mergeValues(itemA, itemB);
       if (!sharedValue.valid) {
         return {
           valid: false,
-          mergeErrorPath: [index, ...sharedValue.mergeErrorPath]
+          mergeErrorPath: [index2, ...sharedValue.mergeErrorPath]
         };
       }
       newArray.push(sharedValue.data);
@@ -45647,11 +45983,11 @@ function handleIntersectionResults(result, left, right) {
   result.value = merged.data;
   return result;
 }
-function handleTupleResult(result, final, index) {
+function handleTupleResult(result, final, index2) {
   if (result.issues.length) {
-    final.issues.push(...prefixIssues(index, result.issues));
+    final.issues.push(...prefixIssues(index2, result.issues));
   }
-  final.value[index] = result.value;
+  final.value[index2] = result.value;
 }
 function handleMapResult(keyResult, valueResult, final, key, input, inst, ctx) {
   if (keyResult.issues.length) {
@@ -55883,7 +56219,7 @@ function _function(params) {
     output: params?.output ?? unknown()
   });
 }
-function check(fn) {
+function check2(fn) {
   const ch = new $ZodCheck({
     check: "custom"
     // ...util.normalizeParams(params),
@@ -55962,7 +56298,7 @@ var init_schemas2 = __esm({
       inst.safeDecode = (data, params) => safeDecode2(inst, data, params);
       inst.safeEncodeAsync = async (data, params) => safeEncodeAsync2(inst, data, params);
       inst.safeDecodeAsync = async (data, params) => safeDecodeAsync2(inst, data, params);
-      inst.refine = (check2, params) => inst.check(refine(check2, params));
+      inst.refine = (check3, params) => inst.check(refine(check3, params));
       inst.superRefine = (refinement) => inst.check(superRefine(refinement));
       inst.overwrite = (fn) => inst.check(_overwrite(fn));
       inst.optional = () => optional2(inst);
@@ -56636,7 +56972,7 @@ __export(external_exports, {
   bigint: () => bigint3,
   boolean: () => boolean3,
   catch: () => _catch2,
-  check: () => check,
+  check: () => check2,
   cidrv4: () => cidrv42,
   cidrv6: () => cidrv62,
   clone: () => clone,
@@ -57536,8 +57872,8 @@ var require_accessDeep = __commonJS({
       for (var i = 0; i < path.length - 1; i++) {
         var key = path[i];
         if (is_1.isArray(parent)) {
-          var index = +key;
-          parent = parent[index];
+          var index2 = +key;
+          parent = parent[index2];
         } else if (is_1.isPlainObject(parent)) {
           parent = parent[key];
         } else if (is_1.isSet(parent)) {
@@ -57775,14 +58111,14 @@ var require_plainer = __commonJS({
       var transformed = (_a = transformationResult === null || transformationResult === void 0 ? void 0 : transformationResult.value) !== null && _a !== void 0 ? _a : object2;
       var transformedValue = is_1.isArray(transformed) ? [] : {};
       var innerAnnotations = {};
-      util_1.forEach(transformed, function(value, index) {
-        var recursiveResult = exports2.walker(value, identities, superJson, dedupe, __spreadArray2(__spreadArray2([], __read2(path)), [index]), __spreadArray2(__spreadArray2([], __read2(objectsInThisPath)), [object2]), seenObjects);
-        transformedValue[index] = recursiveResult.transformedValue;
+      util_1.forEach(transformed, function(value, index2) {
+        var recursiveResult = exports2.walker(value, identities, superJson, dedupe, __spreadArray2(__spreadArray2([], __read2(path)), [index2]), __spreadArray2(__spreadArray2([], __read2(objectsInThisPath)), [object2]), seenObjects);
+        transformedValue[index2] = recursiveResult.transformedValue;
         if (is_1.isArray(recursiveResult.annotations)) {
-          innerAnnotations[index] = recursiveResult.annotations;
+          innerAnnotations[index2] = recursiveResult.annotations;
         } else if (is_1.isPlainObject(recursiveResult.annotations)) {
           util_1.forEach(recursiveResult.annotations, function(tree, key) {
-            innerAnnotations[pathstringifier_1.escapeKey(index) + "." + key] = tree;
+            innerAnnotations[pathstringifier_1.escapeKey(index2) + "." + key] = tree;
           });
         }
       });
@@ -79789,7 +80125,7 @@ var routers_exports = {};
 __export(routers_exports, {
   appRouter: () => appRouter
 });
-var uuid5, userRoleSchema, appRouter;
+var uuid5, userRoleSchema, dateString, appRouter;
 var init_routers = __esm({
   "server/routers.ts"() {
     "use strict";
@@ -79800,6 +80136,7 @@ var init_routers = __esm({
     init_db2();
     uuid5 = external_exports.string().uuid();
     userRoleSchema = external_exports.enum(["admin", "operator", "viewer"]);
+    dateString = external_exports.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Formato data atteso YYYY-MM-DD");
     appRouter = router2({
       system: systemRouter,
       // ============= AUTH =============
@@ -79856,49 +80193,58 @@ var init_routers = __esm({
         getById: protectedProcedure.input(external_exports.object({ id: uuid5 })).query(async ({ input }) => {
           return await getRetailerById(input.id);
         }),
+        /**
+         * Phase B M1: rifatto sul nuovo modello.
+         *   - `inventory` array popolato da `inventoryByBatch` per la
+         *     retailer location, con shape compatibile col vecchio frontend
+         *     (id, quantity, expirationDate, batchNumber, product).
+         *   - `recentMovements` resta sulla tabella legacy (read-only): in M2
+         *     conterrà TRANSFER + RETAIL_OUT, oggi è 0 righe per quasi tutti.
+         *   - `stats` ora calcolate su lotti + scadenze del nuovo modello;
+         *     `lowStockCount` aggregato per (location, product) confrontato
+         *     con `minStockThreshold` di `products`.
+         */
         getDetails: protectedProcedure.input(external_exports.object({ id: uuid5 })).query(async ({ input }) => {
           const retailer = await getRetailerById(input.id);
           if (!retailer) return null;
-          const inventoryItems = await getInventoryByRetailer(input.id);
+          const inventoryItems = await getInventoryByBatchByRetailer(input.id);
           const recentMovements = await getStockMovementsByRetailer(input.id, 50);
           const retailerAlerts = await getAlertsByRetailer(input.id);
-          const enrichedInventory = await Promise.all(
-            inventoryItems.map(async (item) => {
-              const product = await getProductById(item.productId);
-              return { ...item, product };
-            })
-          );
           const enrichedMovements = await Promise.all(
             recentMovements.map(async (movement) => {
               const product = await getProductById(movement.productId);
               return { ...movement, product };
             })
           );
+          const qtyByProduct = /* @__PURE__ */ new Map();
           let totalValue = 0;
-          let lowStockCount = 0;
           let expiringCount = 0;
-          for (const item of enrichedInventory) {
-            if (item.product?.unitPrice) {
-              const price = parseFloat(item.product.unitPrice);
-              if (!isNaN(price)) {
-                totalValue += price * item.quantity;
-              }
-            }
-            if (item.product && item.quantity < (item.product.minStockThreshold || 10)) {
-              lowStockCount++;
+          const now = Date.now();
+          for (const item of inventoryItems) {
+            const price = item.product?.unitPrice ? parseFloat(item.product.unitPrice) : NaN;
+            if (!Number.isNaN(price)) {
+              totalValue += price * item.quantity;
             }
             if (item.expirationDate) {
-              const daysUntilExpiry = Math.floor(
-                (new Date(item.expirationDate).getTime() - Date.now()) / (1e3 * 60 * 60 * 24)
+              const days = Math.floor(
+                (item.expirationDate.getTime() - now) / 864e5
               );
-              if (daysUntilExpiry <= 30 && daysUntilExpiry > 0) {
-                expiringCount++;
-              }
+              if (days > 0 && days <= 30 && item.quantity > 0) expiringCount++;
             }
+            if (item.product?.id) {
+              const cur = qtyByProduct.get(item.product.id);
+              const threshold = item.product.minStockThreshold ?? 10;
+              if (cur) cur.qty += item.quantity;
+              else qtyByProduct.set(item.product.id, { qty: item.quantity, threshold });
+            }
+          }
+          let lowStockCount = 0;
+          for (const v of Array.from(qtyByProduct.values())) {
+            if (v.qty < v.threshold) lowStockCount++;
           }
           return {
             retailer,
-            inventory: enrichedInventory,
+            inventory: inventoryItems,
             recentMovements: enrichedMovements,
             alerts: retailerAlerts,
             stats: {
@@ -80017,64 +80363,120 @@ var init_routers = __esm({
           return { success: true };
         })
       }),
-      // ============= INVENTORY =============
-      inventory: router2({
-        getByRetailer: protectedProcedure.input(external_exports.object({ retailerId: uuid5 })).query(async ({ input }) => {
-          return await getInventoryByRetailer(input.retailerId);
+      // ============= PRODUCERS (Phase B M1) =============
+      producers: router2({
+        list: protectedProcedure.query(async () => {
+          return await getAllProducers();
         }),
-        upsert: writerProcedure.input(
-          external_exports.object({
-            retailerId: uuid5,
-            productId: uuid5,
-            quantity: external_exports.number(),
-            expirationDate: external_exports.date().optional(),
-            batchNumber: external_exports.string().optional()
-          })
-        ).mutation(async ({ input }) => {
-          return await upsertInventory(input);
-        })
-      }),
-      // ============= STOCK MOVEMENTS =============
-      // NOTA: la creazione/cancellazione movimenti dall'UI è disabilitata
-      // (placeholder pulsante "Aggiungi Movimento" in RetailerDetail). Il
-      // sistema lotti FEFO completo arriva in Phase B post-cutover. Le
-      // procedure restano disponibili per importazioni programmatiche e
-      // per future estensioni.
-      stockMovements: router2({
+        getById: protectedProcedure.input(external_exports.object({ id: uuid5 })).query(async ({ input }) => {
+          return await getProducerById(input.id);
+        }),
         create: writerProcedure.input(
           external_exports.object({
-            inventoryId: uuid5,
-            retailerId: uuid5,
+            name: external_exports.string().min(1),
+            contactName: external_exports.string().optional(),
+            email: external_exports.string().email().optional().or(external_exports.literal("")),
+            phone: external_exports.string().optional(),
+            address: external_exports.string().optional(),
+            vatNumber: external_exports.string().optional(),
+            notes: external_exports.string().optional()
+          })
+        ).mutation(async ({ input }) => {
+          const { email: email3, ...rest } = input;
+          return await createProducer({
+            ...rest,
+            email: email3 && email3.length > 0 ? email3 : void 0
+          });
+        }),
+        update: writerProcedure.input(
+          external_exports.object({
+            id: uuid5,
+            name: external_exports.string().min(1).optional(),
+            contactName: external_exports.string().optional(),
+            email: external_exports.string().email().optional().or(external_exports.literal("")),
+            phone: external_exports.string().optional(),
+            address: external_exports.string().optional(),
+            vatNumber: external_exports.string().optional(),
+            notes: external_exports.string().optional()
+          })
+        ).mutation(async ({ input }) => {
+          const { id, email: email3, ...rest } = input;
+          await updateProducer(id, {
+            ...rest,
+            email: email3 && email3.length > 0 ? email3 : null
+          });
+          return { success: true };
+        }),
+        delete: writerProcedure.input(external_exports.object({ id: uuid5 })).mutation(async ({ input }) => {
+          await deleteProducer(input.id);
+          return { success: true };
+        })
+      }),
+      // ============= PRODUCT BATCHES (Phase B M1) =============
+      productBatches: router2({
+        listByProduct: protectedProcedure.input(external_exports.object({ productId: uuid5 })).query(async ({ input }) => {
+          return await getBatchesByProduct(input.productId);
+        }),
+        /**
+         * Crea un lotto + ingresso al magazzino centrale (atomico).
+         * Movimento generato: RECEIPT_FROM_PRODUCER.
+         */
+        create: writerProcedure.input(
+          external_exports.object({
             productId: uuid5,
-            type: external_exports.enum(["IN", "OUT", "ADJUSTMENT"]),
-            quantity: external_exports.number(),
-            previousQuantity: external_exports.number().optional(),
-            newQuantity: external_exports.number().optional(),
-            sourceDocument: external_exports.string().optional(),
-            sourceDocumentType: external_exports.string().optional(),
+            producerId: uuid5.optional(),
+            batchNumber: external_exports.string().min(1),
+            expirationDate: dateString,
+            productionDate: dateString.optional(),
+            initialQuantity: external_exports.number().int().positive(),
             notes: external_exports.string().optional()
           })
         ).mutation(async ({ input, ctx }) => {
-          return await createStockMovement({
-            ...input,
+          return await createBatchWithReceipt({
+            productId: input.productId,
+            producerId: input.producerId ?? null,
+            batchNumber: input.batchNumber,
+            expirationDate: input.expirationDate,
+            productionDate: input.productionDate ?? null,
+            initialQuantity: input.initialQuantity,
+            notes: input.notes ?? null,
             createdBy: ctx.user.id
           });
         }),
-        getByRetailer: protectedProcedure.input(
-          external_exports.object({
-            retailerId: uuid5,
-            limit: external_exports.number().optional()
-          })
-        ).query(async ({ input }) => {
-          return await getStockMovementsByRetailer(input.retailerId, input.limit);
+        /**
+         * Cancellazione consentita solo se il lotto è ancora "intatto"
+         * (stock centrale = initialQuantity, nessuna distribuzione).
+         */
+        delete: writerProcedure.input(external_exports.object({ id: uuid5 })).mutation(async ({ input }) => {
+          await deleteBatchIfFresh(input.id);
+          return { success: true };
+        })
+      }),
+      // ============= LOCATIONS (Phase B M1) =============
+      locations: router2({
+        list: protectedProcedure.query(async () => {
+          return await getAllLocations();
         }),
-        getByProduct: protectedProcedure.input(
-          external_exports.object({
-            productId: uuid5,
-            limit: external_exports.number().optional()
-          })
-        ).query(async ({ input }) => {
-          return await getStockMovementsByProduct(input.productId, input.limit);
+        getCentralWarehouse: protectedProcedure.query(async () => {
+          return await getCentralWarehouseLocation() ?? null;
+        }),
+        getByRetailer: protectedProcedure.input(external_exports.object({ retailerId: uuid5 })).query(async ({ input }) => {
+          return await getRetailerLocation(input.retailerId) ?? null;
+        })
+      }),
+      // ============= INVENTORY BY BATCH (Phase B M1) =============
+      inventoryByBatch: router2({
+        listByLocation: protectedProcedure.input(external_exports.object({ locationId: uuid5 })).query(async ({ input }) => {
+          return await getInventoryByLocationId(input.locationId);
+        }),
+        listByRetailer: protectedProcedure.input(external_exports.object({ retailerId: uuid5 })).query(async ({ input }) => {
+          return await getInventoryByBatchByRetailer(input.retailerId);
+        })
+      }),
+      // ============= WAREHOUSE OVERVIEW (Phase B M1) =============
+      warehouse: router2({
+        getStockOverview: protectedProcedure.query(async () => {
+          return await getWarehouseStockOverview();
         })
       }),
       // ============= ALERTS =============
@@ -80115,6 +80517,9 @@ var init_routers = __esm({
         })
       }),
       // ============= FATTURE IN CLOUD SYNC =============
+      // Phase B M3: refactor in arrivo (single-tenant, multi-provider).
+      // Mantenuta in M1 con shape attuale per non rompere
+      // FattureInCloudSync.tsx (UI già nascosta in produzione).
       sync: router2({
         syncRetailer: writerProcedure.input(external_exports.object({ retailerId: uuid5 })).mutation(async ({ input }) => {
           const { syncRetailerData: syncRetailerData2 } = await Promise.resolve().then(() => (init_fattureincloud_sync(), fattureincloud_sync_exports));

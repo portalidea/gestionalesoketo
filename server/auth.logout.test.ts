@@ -41,7 +41,10 @@ function createAuthContext(): { ctx: TrpcContext; clearedCookies: CookieCall[] }
   return { ctx, clearedCookies };
 }
 
-describe("auth.logout", () => {
+// TODO: pre-M1 questo test era già rotto (procedure `auth.logout` rimossa
+// dopo migrazione a Supabase Auth: il logout è gestito client-side da
+// supabase.auth.signOut()). Da riscrivere o eliminare a freddo.
+describe.skip("auth.logout", () => {
   it("clears the session cookie and reports success", async () => {
     const { ctx, clearedCookies } = createAuthContext();
     const caller = appRouter.createCaller(ctx);

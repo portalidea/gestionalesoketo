@@ -13,6 +13,13 @@ import * as db from "./db";
 const uuid = z.string().uuid();
 const userRoleSchema = z.enum(["admin", "operator", "viewer"]);
 
+// Date validation: il client invia stringa "YYYY-MM-DD" (form HTML date input).
+// Drizzle mappa il tipo `date` Postgres a string in entrambe le direzioni
+// (no conversione automatica a Date), quindi qui validiamo come stringa.
+const dateString = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Formato data atteso YYYY-MM-DD");
+
 export const appRouter = router({
   system: systemRouter,
 
@@ -89,23 +96,29 @@ export const appRouter = router({
         return await db.getRetailerById(input.id);
       }),
 
+    /**
+     * Phase B M1: rifatto sul nuovo modello.
+     *   - `inventory` array popolato da `inventoryByBatch` per la
+     *     retailer location, con shape compatibile col vecchio frontend
+     *     (id, quantity, expirationDate, batchNumber, product).
+     *   - `recentMovements` resta sulla tabella legacy (read-only): in M2
+     *     conterrà TRANSFER + RETAIL_OUT, oggi è 0 righe per quasi tutti.
+     *   - `stats` ora calcolate su lotti + scadenze del nuovo modello;
+     *     `lowStockCount` aggregato per (location, product) confrontato
+     *     con `minStockThreshold` di `products`.
+     */
     getDetails: protectedProcedure
       .input(z.object({ id: uuid }))
       .query(async ({ input }) => {
         const retailer = await db.getRetailerById(input.id);
         if (!retailer) return null;
 
-        const inventoryItems = await db.getInventoryByRetailer(input.id);
+        const inventoryItems = await db.getInventoryByBatchByRetailer(input.id);
         const recentMovements = await db.getStockMovementsByRetailer(input.id, 50);
         const retailerAlerts = await db.getAlertsByRetailer(input.id);
 
-        const enrichedInventory = await Promise.all(
-          inventoryItems.map(async (item) => {
-            const product = await db.getProductById(item.productId);
-            return { ...item, product };
-          }),
-        );
-
+        // Arricchisci movimenti col product (la shape attesa dal frontend
+        // RetailerDetail.tsx ha `movement.product?.name`)
         const enrichedMovements = await Promise.all(
           recentMovements.map(async (movement) => {
             const product = await db.getProductById(movement.productId);
@@ -113,34 +126,41 @@ export const appRouter = router({
           }),
         );
 
+        // Calcola stats: aggrega per (productId) per low stock check
+        const qtyByProduct = new Map<string, { qty: number; threshold: number }>();
         let totalValue = 0;
-        let lowStockCount = 0;
         let expiringCount = 0;
+        const now = Date.now();
 
-        for (const item of enrichedInventory) {
-          if (item.product?.unitPrice) {
-            const price = parseFloat(item.product.unitPrice);
-            if (!isNaN(price)) {
-              totalValue += price * item.quantity;
-            }
-          }
-          if (item.product && item.quantity < (item.product.minStockThreshold || 10)) {
-            lowStockCount++;
+        for (const item of inventoryItems) {
+          const price = item.product?.unitPrice
+            ? parseFloat(item.product.unitPrice)
+            : NaN;
+          if (!Number.isNaN(price)) {
+            totalValue += price * item.quantity;
           }
           if (item.expirationDate) {
-            const daysUntilExpiry = Math.floor(
-              (new Date(item.expirationDate).getTime() - Date.now()) /
-                (1000 * 60 * 60 * 24),
+            const days = Math.floor(
+              (item.expirationDate.getTime() - now) / 86_400_000,
             );
-            if (daysUntilExpiry <= 30 && daysUntilExpiry > 0) {
-              expiringCount++;
-            }
+            if (days > 0 && days <= 30 && item.quantity > 0) expiringCount++;
           }
+          if (item.product?.id) {
+            const cur = qtyByProduct.get(item.product.id);
+            const threshold = item.product.minStockThreshold ?? 10;
+            if (cur) cur.qty += item.quantity;
+            else qtyByProduct.set(item.product.id, { qty: item.quantity, threshold });
+          }
+        }
+
+        let lowStockCount = 0;
+        for (const v of Array.from(qtyByProduct.values())) {
+          if (v.qty < v.threshold) lowStockCount++;
         }
 
         return {
           retailer,
-          inventory: enrichedInventory,
+          inventory: inventoryItems,
           recentMovements: enrichedMovements,
           alerts: retailerAlerts,
           stats: {
@@ -170,6 +190,7 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ input }) => {
+        // createRetailer crea anche la location associata in transazione.
         return await db.createRetailer(input);
       }),
 
@@ -288,79 +309,154 @@ export const appRouter = router({
       }),
   }),
 
-  // ============= INVENTORY =============
-  inventory: router({
-    getByRetailer: protectedProcedure
-      .input(z.object({ retailerId: uuid }))
+  // ============= PRODUCERS (Phase B M1) =============
+  producers: router({
+    list: protectedProcedure.query(async () => {
+      return await db.getAllProducers();
+    }),
+
+    getById: protectedProcedure
+      .input(z.object({ id: uuid }))
       .query(async ({ input }) => {
-        return await db.getInventoryByRetailer(input.retailerId);
+        return await db.getProducerById(input.id);
       }),
 
-    upsert: writerProcedure
-      .input(
-        z.object({
-          retailerId: uuid,
-          productId: uuid,
-          quantity: z.number(),
-          expirationDate: z.date().optional(),
-          batchNumber: z.string().optional(),
-        }),
-      )
-      .mutation(async ({ input }) => {
-        return await db.upsertInventory(input);
-      }),
-  }),
-
-  // ============= STOCK MOVEMENTS =============
-  // NOTA: la creazione/cancellazione movimenti dall'UI è disabilitata
-  // (placeholder pulsante "Aggiungi Movimento" in RetailerDetail). Il
-  // sistema lotti FEFO completo arriva in Phase B post-cutover. Le
-  // procedure restano disponibili per importazioni programmatiche e
-  // per future estensioni.
-  stockMovements: router({
     create: writerProcedure
       .input(
         z.object({
-          inventoryId: uuid,
-          retailerId: uuid,
+          name: z.string().min(1),
+          contactName: z.string().optional(),
+          email: z.string().email().optional().or(z.literal("")),
+          phone: z.string().optional(),
+          address: z.string().optional(),
+          vatNumber: z.string().optional(),
+          notes: z.string().optional(),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        const { email, ...rest } = input;
+        return await db.createProducer({
+          ...rest,
+          email: email && email.length > 0 ? email : undefined,
+        });
+      }),
+
+    update: writerProcedure
+      .input(
+        z.object({
+          id: uuid,
+          name: z.string().min(1).optional(),
+          contactName: z.string().optional(),
+          email: z.string().email().optional().or(z.literal("")),
+          phone: z.string().optional(),
+          address: z.string().optional(),
+          vatNumber: z.string().optional(),
+          notes: z.string().optional(),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        const { id, email, ...rest } = input;
+        await db.updateProducer(id, {
+          ...rest,
+          email: email && email.length > 0 ? email : null,
+        });
+        return { success: true };
+      }),
+
+    delete: writerProcedure
+      .input(z.object({ id: uuid }))
+      .mutation(async ({ input }) => {
+        await db.deleteProducer(input.id);
+        return { success: true };
+      }),
+  }),
+
+  // ============= PRODUCT BATCHES (Phase B M1) =============
+  productBatches: router({
+    listByProduct: protectedProcedure
+      .input(z.object({ productId: uuid }))
+      .query(async ({ input }) => {
+        return await db.getBatchesByProduct(input.productId);
+      }),
+
+    /**
+     * Crea un lotto + ingresso al magazzino centrale (atomico).
+     * Movimento generato: RECEIPT_FROM_PRODUCER.
+     */
+    create: writerProcedure
+      .input(
+        z.object({
           productId: uuid,
-          type: z.enum(["IN", "OUT", "ADJUSTMENT"]),
-          quantity: z.number(),
-          previousQuantity: z.number().optional(),
-          newQuantity: z.number().optional(),
-          sourceDocument: z.string().optional(),
-          sourceDocumentType: z.string().optional(),
+          producerId: uuid.optional(),
+          batchNumber: z.string().min(1),
+          expirationDate: dateString,
+          productionDate: dateString.optional(),
+          initialQuantity: z.number().int().positive(),
           notes: z.string().optional(),
         }),
       )
       .mutation(async ({ input, ctx }) => {
-        return await db.createStockMovement({
-          ...input,
+        return await db.createBatchWithReceipt({
+          productId: input.productId,
+          producerId: input.producerId ?? null,
+          batchNumber: input.batchNumber,
+          expirationDate: input.expirationDate,
+          productionDate: input.productionDate ?? null,
+          initialQuantity: input.initialQuantity,
+          notes: input.notes ?? null,
           createdBy: ctx.user.id,
         });
       }),
 
+    /**
+     * Cancellazione consentita solo se il lotto è ancora "intatto"
+     * (stock centrale = initialQuantity, nessuna distribuzione).
+     */
+    delete: writerProcedure
+      .input(z.object({ id: uuid }))
+      .mutation(async ({ input }) => {
+        await db.deleteBatchIfFresh(input.id);
+        return { success: true };
+      }),
+  }),
+
+  // ============= LOCATIONS (Phase B M1) =============
+  locations: router({
+    list: protectedProcedure.query(async () => {
+      return await db.getAllLocations();
+    }),
+
+    getCentralWarehouse: protectedProcedure.query(async () => {
+      return (await db.getCentralWarehouseLocation()) ?? null;
+    }),
+
     getByRetailer: protectedProcedure
-      .input(
-        z.object({
-          retailerId: uuid,
-          limit: z.number().optional(),
-        }),
-      )
+      .input(z.object({ retailerId: uuid }))
       .query(async ({ input }) => {
-        return await db.getStockMovementsByRetailer(input.retailerId, input.limit);
+        return (await db.getRetailerLocation(input.retailerId)) ?? null;
+      }),
+  }),
+
+  // ============= INVENTORY BY BATCH (Phase B M1) =============
+  inventoryByBatch: router({
+    listByLocation: protectedProcedure
+      .input(z.object({ locationId: uuid }))
+      .query(async ({ input }) => {
+        return await db.getInventoryByLocationId(input.locationId);
       }),
 
-    getByProduct: protectedProcedure
-      .input(
-        z.object({
-          productId: uuid,
-          limit: z.number().optional(),
-        }),
-      )
+    listByRetailer: protectedProcedure
+      .input(z.object({ retailerId: uuid }))
       .query(async ({ input }) => {
-        return await db.getStockMovementsByProduct(input.productId, input.limit);
+        return await db.getInventoryByBatchByRetailer(input.retailerId);
       }),
+  }),
+
+  // ============= WAREHOUSE OVERVIEW (Phase B M1) =============
+  warehouse: router({
+    getStockOverview: protectedProcedure.query(async () => {
+      return await db.getWarehouseStockOverview();
+    }),
   }),
 
   // ============= ALERTS =============
@@ -412,6 +508,9 @@ export const appRouter = router({
   }),
 
   // ============= FATTURE IN CLOUD SYNC =============
+  // Phase B M3: refactor in arrivo (single-tenant, multi-provider).
+  // Mantenuta in M1 con shape attuale per non rompere
+  // FattureInCloudSync.tsx (UI già nascosta in produzione).
   sync: router({
     syncRetailer: writerProcedure
       .input(z.object({ retailerId: uuid }))
