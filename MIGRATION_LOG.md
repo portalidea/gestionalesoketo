@@ -8,6 +8,175 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-05-01 — 🎯 Phase B Milestone 2 — COMPLETATA
+
+### TL;DR
+
+Operatività completa magazzino → retailer. M2 chiude il loop core
+del sistema lotti FEFO: ora si possono trasferire lotti dal
+magazzino centrale ai rivenditori (con suggerimento FEFO automatico)
+e scartare lotti scaduti / non più vendibili (`EXPIRY_WRITE_OFF`).
+Tab Movimenti del retailer ora popolata, mostra storico TRANSFER +
+RETAIL_OUT (M4) + EXPIRY_WRITE_OFF.
+
+Tabella `inventory` legacy droppata (Step 1 preparatorio commit
+`eb41c07`). Procedure FiC sync stub fino a M3.
+
+Sistema in produzione su `gestionale.soketo.it`. Operativo
+end-to-end per il caso d'uso E-Keto Food (anagrafica completa +
+ricezione produttore + gestione magazzino centrale + trasferimenti
+a retailer + visibilità per lotto + write-off scaduti).
+
+### Step 1 (preparatorio) — Drop legacy + disable FiC sync
+
+Migration `0004_phase_b_m2_transfer_writeoff.sql`:
+- `ALTER TYPE stock_movement_type ADD VALUE 'TRANSFER',
+  'EXPIRY_WRITE_OFF'`
+- `ALTER TABLE stockMovements ADD COLUMN notesInternal text` +
+  `COMMENT ON COLUMN` esplicativo (audit log automatico backend)
+- `DROP TABLE inventory` (M1 ha già migrato i dati a
+  `inventoryByBatch` come lotti placeholder LEGACY-{uuid})
+
+Backend cleanup:
+- Rimossi 3 helper `@deprecated` da `db.ts`: `getInventoryItem`,
+  `upsertInventory`, `createStockMovement`
+- `deleteRetailer` non chiama più `tx.delete(inventory)` (FK
+  CASCADE su locations basta)
+- `drizzle/schema.ts`: rimossa def `inventory` pgTable
+- `scripts/seed.ts`: rimossa sezione inventoryData (script ora
+  idempotente solo per retailers + products)
+
+FiC sync stub fino a M3:
+- `routers.sync.syncRetailer` ora throws `TRPCError` con code
+  `PRECONDITION_FAILED` e messaggio "Sincronizzazione FiC
+  temporaneamente disabilitata — refactor architetturale in corso
+  (Milestone 3)"
+- Funzioni interne `syncInventory` + `syncMovements` stub no-op
+  con `console.warn`
+
+Verify post-apply: 10 tabelle public (era 11), 5 migrations
+tracked, enum esteso. **Rollback procedure M2 Step 1**: ricreare
+tabella `inventory` con DDL da migration 0000 + RLS da 0002,
+restore dati da `backups/dump-pre-m2-2026-05-01.sql` (le 2 righe
+storiche), revert commit chore(legacy) `eb41c07`.
+
+### Step 2 (M2 vero) — TRANSFER + EXPIRY_WRITE_OFF + UI
+
+**Backend tRPC** (commit `f44f0a3`):
+
+- `stockMovements.transfer({productId, batchId, retailerId,
+  quantity, notes?, generateProforma?})` — atomico in transaction:
+  SELECT FOR UPDATE su inventoryByBatch(central, batch), verifica
+  stock, decrementa centrale + upsert retailer, log TRANSFER con
+  `notesInternal` audit. Se `generateProforma=true` → 412 con msg
+  "FiC integration in M3"
+- `stockMovements.expiryWriteOff({batchId, locationId, quantity,
+  notes?})` — atomico, decrementa stock + log EXPIRY_WRITE_OFF
+- `productBatches.suggestForTransfer({productId, retailerId})` —
+  lotti FEFO ordered `expirationDate ASC`, solo con centralStock
+  > 0
+- `stockMovements.listByRetailer({retailerId, limit?})` — query
+  location-based (`fromLocationId | toLocationId`) joined con
+  product/batch/locations names; fallback su retailerId legacy
+  per movements pre-M2
+- `stockMovements.listByLocation({locationId, limit?})` — generico
+
+Refactor:
+- `getBatchesByProduct` esteso con `retailerStock` (subquery
+  `COALESCE SUM cross-retailer`)
+- `getInventoryByBatchByRetailer` espone `batchId`, `locationId`,
+  `producerName` per supportare action Scarta in UI
+- `retailers.getDetails`: rimosso enrichment ridondante
+  `recentMovements.map → product object`; ora la shape già include
+  productName/Sku/batchNumber inline
+
+**UI**:
+
+- `Warehouse.tsx`: bottone "→ Trasferisci" su riga prodotto;
+  Dialog Transfer con Retailer Select + Lotto Select FEFO
+  (auto-select primo) + Qty (max = stock centrale del lotto) +
+  checkbox "Genera proforma su FiC" DISABLED con Tooltip
+  "Disponibile in Milestone 3"; action Scarta (XCircle) su lotto
+  in dettaglio se scadenza ≤ 7gg
+- `RetailerDetail.tsx`: tab Inventario refactor (aggregato per
+  prodotto, riga espandibile con dettaglio lotti, action Scarta su
+  ciascun lotto); tab Movimenti popolata con badge colorati per
+  tipo (TRANSFER blue, EXPIRY_WRITE_OFF red, RECEIPT green) e
+  colonna "Da → A" con location names
+- `ProductDetail.tsx`: nella sezione Lotti aggiunta colonna "Stock
+  retailer" (somma cross-retailer) e action Scarta sui lotti con
+  scadenza ≤ 7gg al magazzino centrale
+
+### Smoke produzione (post-deploy `f44f0a3`)
+
+Le procedure 412 PRECONDITION_FAILED mostrano `path` corretto →
+routing OK. Test funzionale (login admin → /warehouse → +
+Aggiungi lotto → Trasferisci → /retailers/:id) da eseguire
+manualmente.
+
+### Test funzionale guidato
+
+Per validare end-to-end M2 in produzione:
+1. Login admin su `gestionale.soketo.it`
+2. `/products/<id>` → "+ Aggiungi lotto" con Producer test, batch
+   "TEST-M2", scadenza tra 6 mesi, qty 50 → verifica creazione su
+   `/warehouse`
+3. `/warehouse` → riga prodotto → "Trasferisci" → seleziona retailer
+   + lotto FEFO suggerito + qty 30 → conferma
+4. Verifica:
+   - `/warehouse`: stock centrale del lotto -30 (50 → 20)
+   - `/retailers/:id` tab Inventario: prodotto con lotto +30
+   - `/retailers/:id` tab Movimenti: nuova riga TRANSFER con badge
+     blue, "Da Magazzino Centrale → A {retailer.name}"
+5. Crea lotto fittizio "TEST-EXP" scadenza ieri + qty 10
+6. `/products/<id>` riga lotto TEST-EXP → action Scarta
+   (XCircle visibile perché < 7gg) → conferma 10
+7. Verifica: stock centrale del lotto = 0, movimento
+   EXPIRY_WRITE_OFF in `/retailers/:id` (no, su warehouse: dovrai
+   guardare via `/api/trpc/stockMovements.listByLocation`)
+
+### Commit del giorno (M2)
+
+```
+f44f0a3 feat(m2): TRANSFER warehouse→retailer + EXPIRY_WRITE_OFF
+        + tab Movimenti popolata
+eb41c07 chore(legacy): drop inventory table + disable FiC sync
+        helpers (refactor in M3)
+```
+
+### Roadmap aggiornata (allineata con visione proprietario)
+
+| ID | Titolo | Stato |
+|---|---|---|
+| ✅ M1 | Schema lotti FEFO + producers + warehouse + sezione Lotti UI | DONE |
+| ✅ M2 | TRANSFER + EXPIRY_WRITE_OFF + tab Movimenti retailer + drop legacy | DONE |
+| 🟡 M2.5 | UX refactor tabellari per power users (filtri/sort/export, bulk actions, tabelle compatte ad alta densità — feedback raccolti durante uso operativo M2) | NEXT |
+| 🟡 M3 | FiC refactor single-tenant: `system_integrations` (singleton), `retailer.fic_client_id`, riabilitazione `sync.syncRetailer` con nuovo modello, generazione proforma su TRANSFER | |
+| 🟡 M4 | Integrazioni multi-provider gestionali retailer (Mago, TeamSystem, Danea, …): architettura plug-in, RETAIL_OUT importati automatici, mapping prodotti per provider | |
+| 🟡 M5 | Upload PDF DDT con AI auto-extraction: caricamento DDT cartaceo → estrazione lotti/quantità via Claude Vision → review umana → creazione movimenti TRANSFER | |
+| 🟡 M6 | Portale retailer self-service: auth multi-tenant, catalogo con prezzi base + tabella `pricingTiers` (sconti per soglia ordine totale), carrello Excel-like con calcolo sconti real-time, alert upselling soglia, generazione proforma FiC integrata, storico ordini retailer, vista magazzino retailer (lotti+scadenze), caricamento vendite manuale (sostituito da M4 quando disponibile) | |
+
+### Stato sistema dopo M2
+
+- **In produzione**: schema completo a lotti, anagrafiche, ricezione,
+  trasferimenti, write-off scaduti, dashboard, report
+- **Operativamente sufficiente** per E-Keto Food per gestire la
+  rotazione lotti retail (legge alimentare)
+- **Tech debt aperto**:
+  - `stockMovements.inventoryId` dead column (drop in M3 con
+    cleanup FiC)
+  - 3 test files `describe.skip` (pre-M1, riscrittura su nuovo
+    schema posticipata)
+  - `trpc.ai.chat` codice morto in `AIChatBox.tsx`/
+    `ComponentShowcase.tsx`
+  - `api/index.js` 3.2MB tracked in git (Vercel pattern check
+    pre-build)
+  - `SUPABASE_JWT_SECRET` in env Vercel non usata
+  - Movements legacy enum `IN/OUT/ADJUSTMENT` (mantenuti per
+    retrocompatibilità)
+
+---
+
 ## 2026-05-01 — 🎯 Phase B Milestone 1 — COMPLETATA (Step 4 UI)
 
 ### TL;DR
