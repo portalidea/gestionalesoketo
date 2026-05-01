@@ -872,7 +872,10 @@ export default function ProductDetail() {
       </div>
 
       {/* ====================== Dialog WRITE-OFF ====================== */}
-      <AlertDialog
+      {/* Dialog (non AlertDialog): Radix AlertDialogAction chiude il
+          dialog tramite onClick interno PRIMA del form submit nativo
+          → form rimosso, mutation mai eseguita. M2.0.1 fix. */}
+      <Dialog
         open={writeOffTarget !== null}
         onOpenChange={(open) => {
           if (!open) {
@@ -882,11 +885,11 @@ export default function ProductDetail() {
           }
         }}
       >
-        <AlertDialogContent>
+        <DialogContent>
           <form onSubmit={submitWriteOff}>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Scarta lotto</AlertDialogTitle>
-              <AlertDialogDescription>
+            <DialogHeader>
+              <DialogTitle>Scarta lotto</DialogTitle>
+              <DialogDescription>
                 Scarto del lotto{" "}
                 <strong className="font-mono">
                   {writeOffTarget?.batchNumber}
@@ -897,8 +900,8 @@ export default function ProductDetail() {
                   : "?"}
                 ) al magazzino centrale. Verrà registrato un movimento{" "}
                 <strong>EXPIRY_WRITE_OFF</strong>.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
+              </DialogDescription>
+            </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
                 <Label htmlFor="writeOffQty">
@@ -925,9 +928,15 @@ export default function ProductDetail() {
                 />
               </div>
             </div>
-            <AlertDialogFooter>
-              <AlertDialogCancel type="button">Annulla</AlertDialogCancel>
-              <AlertDialogAction
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setWriteOffTarget(null)}
+              >
+                Annulla
+              </Button>
+              <Button
                 type="submit"
                 disabled={writeOffMutation.isPending}
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -936,11 +945,11 @@ export default function ProductDetail() {
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 )}
                 Scarta
-              </AlertDialogAction>
-            </AlertDialogFooter>
+              </Button>
+            </DialogFooter>
           </form>
-        </AlertDialogContent>
-      </AlertDialog>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

@@ -11,6 +11,14 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -759,7 +767,11 @@ export default function RetailerDetail() {
       </div>
 
       {/* ====================== Dialog WRITE-OFF ====================== */}
-      <AlertDialog
+      {/* Usiamo Dialog (non AlertDialog): AlertDialogAction di Radix
+          chiude il dialog tramite onClick interno PRIMA che il submit
+          nativo del form si propaghi → form rimosso dal DOM, mutation
+          mai eseguita ("silent failure"). Vedi MIGRATION_LOG M2.0.1. */}
+      <Dialog
         open={writeOffTarget !== null}
         onOpenChange={(open) => {
           if (!open) {
@@ -769,19 +781,19 @@ export default function RetailerDetail() {
           }
         }}
       >
-        <AlertDialogContent>
+        <DialogContent>
           <form onSubmit={submitWriteOff}>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Scarta lotto</AlertDialogTitle>
-              <AlertDialogDescription>
+            <DialogHeader>
+              <DialogTitle>Scarta lotto</DialogTitle>
+              <DialogDescription>
                 Stai scartando unità del lotto{" "}
                 <strong className="font-mono">
                   {writeOffTarget?.batchNumber}
                 </strong>{" "}
                 ({writeOffTarget?.productName}). Verrà registrato un movimento{" "}
                 <strong>EXPIRY_WRITE_OFF</strong>. Operazione irreversibile.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
+              </DialogDescription>
+            </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
                 <Label htmlFor="writeOffQty">
@@ -808,9 +820,15 @@ export default function RetailerDetail() {
                 />
               </div>
             </div>
-            <AlertDialogFooter>
-              <AlertDialogCancel type="button">Annulla</AlertDialogCancel>
-              <AlertDialogAction
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setWriteOffTarget(null)}
+              >
+                Annulla
+              </Button>
+              <Button
                 type="submit"
                 disabled={writeOffMutation.isPending}
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -819,11 +837,11 @@ export default function RetailerDetail() {
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 )}
                 Scarta
-              </AlertDialogAction>
-            </AlertDialogFooter>
+              </Button>
+            </DialogFooter>
           </form>
-        </AlertDialogContent>
-      </AlertDialog>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

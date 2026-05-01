@@ -575,23 +575,32 @@ export async function transferBatchToRetailer(input: {
       });
     }
 
-    // Audit metadata
+    // Lookup batch + retailer per audit. Guard esplicito su batch:
+    // se non esiste, transaction rollback e throw chiaro.
     const [batch] = await tx
-      .select({ batchNumber: productBatches.batchNumber })
+      .select({
+        batchNumber: productBatches.batchNumber,
+        productId: productBatches.productId,
+      })
       .from(productBatches)
       .where(eq(productBatches.id, input.batchId));
+    if (!batch) {
+      throw new Error(`Lotto ${input.batchId} non trovato`);
+    }
     const [retailer] = await tx
       .select({ name: retailers.name })
       .from(retailers)
       .where(eq(retailers.id, input.retailerId));
 
-    const auditNote = `Trasferito lotto ${batch?.batchNumber ?? "?"} ×${input.quantity} → ${retailer?.name ?? "?"}`;
+    const auditNote = `Trasferito lotto ${batch.batchNumber} ×${input.quantity} → ${retailer?.name ?? "?"}`;
 
-    // Log movimento
+    // Log movimento. Usiamo `batch.productId` come fonte di verità
+    // (FK certificata) anziché `input.productId` per evitare incoerenze
+    // se il caller passasse un productId sbagliato.
     const [movement] = await tx
       .insert(stockMovements)
       .values({
-        productId: input.productId,
+        productId: batch.productId,
         type: "TRANSFER",
         quantity: input.quantity,
         previousQuantity: central.quantity,
@@ -650,7 +659,9 @@ export async function expiryWriteOff(input: {
       .set({ quantity: stock.quantity - input.quantity, updatedAt: new Date() })
       .where(eq(inventoryByBatch.id, stock.id));
 
-    // Audit metadata
+    // Lookup batch + location per audit + productId NOT NULL su stockMovements.
+    // Guard esplicito: se batch non esiste, transaction rollback e throw chiaro
+    // (non popoliamo productId con valori "fallback" che farebbero record orphan).
     const [batch] = await tx
       .select({
         batchNumber: productBatches.batchNumber,
@@ -659,17 +670,20 @@ export async function expiryWriteOff(input: {
       })
       .from(productBatches)
       .where(eq(productBatches.id, input.batchId));
+    if (!batch) {
+      throw new Error(`Lotto ${input.batchId} non trovato`);
+    }
     const [loc] = await tx
       .select({ name: locations.name })
       .from(locations)
       .where(eq(locations.id, input.locationId));
 
-    const auditNote = `Scarto lotto ${batch?.batchNumber ?? "?"} (scad ${batch?.expirationDate ?? "?"}) ×${input.quantity} da ${loc?.name ?? "?"}`;
+    const auditNote = `Scarto lotto ${batch.batchNumber} (scad ${batch.expirationDate}) ×${input.quantity} da ${loc?.name ?? "?"}`;
 
     const [movement] = await tx
       .insert(stockMovements)
       .values({
-        productId: batch?.productId ?? input.batchId, // fallback safety
+        productId: batch.productId,
         type: "EXPIRY_WRITE_OFF",
         quantity: input.quantity,
         previousQuantity: stock.quantity,

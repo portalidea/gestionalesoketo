@@ -1,14 +1,4 @@
 import DashboardLayout from "@/components/DashboardLayout";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -715,7 +705,9 @@ export default function Warehouse() {
       </Dialog>
 
       {/* ====================== Dialog WRITE-OFF ====================== */}
-      <AlertDialog
+      {/* Dialog (non AlertDialog) per evitare l'auto-close di
+          Radix Action che interrompe il form submit. M2.0.1 fix. */}
+      <Dialog
         open={writeOffTarget !== null}
         onOpenChange={(open) => {
           if (!open) {
@@ -725,11 +717,11 @@ export default function Warehouse() {
           }
         }}
       >
-        <AlertDialogContent>
+        <DialogContent>
           <form onSubmit={submitWriteOff}>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Scarta lotto</AlertDialogTitle>
-              <AlertDialogDescription>
+            <DialogHeader>
+              <DialogTitle>Scarta lotto</DialogTitle>
+              <DialogDescription>
                 Scarto del lotto{" "}
                 <strong className="font-mono">
                   {writeOffTarget?.batchNumber}
@@ -743,8 +735,8 @@ export default function Warehouse() {
                   : "?"}
                 ). Verrà registrato un movimento <strong>EXPIRY_WRITE_OFF</strong>{" "}
                 e lo stock decrementato di conseguenza.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
+              </DialogDescription>
+            </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
                 <Label htmlFor="writeOffQty">
@@ -771,9 +763,15 @@ export default function Warehouse() {
                 />
               </div>
             </div>
-            <AlertDialogFooter>
-              <AlertDialogCancel type="button">Annulla</AlertDialogCancel>
-              <AlertDialogAction
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setWriteOffTarget(null)}
+              >
+                Annulla
+              </Button>
+              <Button
                 type="submit"
                 disabled={writeOffMutation.isPending}
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -782,11 +780,11 @@ export default function Warehouse() {
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 )}
                 Scarta
-              </AlertDialogAction>
-            </AlertDialogFooter>
+              </Button>
+            </DialogFooter>
           </form>
-        </AlertDialogContent>
-      </AlertDialog>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

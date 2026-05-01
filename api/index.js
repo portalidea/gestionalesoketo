@@ -37888,11 +37888,17 @@ async function transferBatchToRetailer(input) {
         quantity: input.quantity
       });
     }
-    const [batch] = await tx.select({ batchNumber: productBatches.batchNumber }).from(productBatches).where(eq(productBatches.id, input.batchId));
+    const [batch] = await tx.select({
+      batchNumber: productBatches.batchNumber,
+      productId: productBatches.productId
+    }).from(productBatches).where(eq(productBatches.id, input.batchId));
+    if (!batch) {
+      throw new Error(`Lotto ${input.batchId} non trovato`);
+    }
     const [retailer] = await tx.select({ name: retailers.name }).from(retailers).where(eq(retailers.id, input.retailerId));
-    const auditNote = `Trasferito lotto ${batch?.batchNumber ?? "?"} \xD7${input.quantity} \u2192 ${retailer?.name ?? "?"}`;
+    const auditNote = `Trasferito lotto ${batch.batchNumber} \xD7${input.quantity} \u2192 ${retailer?.name ?? "?"}`;
     const [movement] = await tx.insert(stockMovements).values({
-      productId: input.productId,
+      productId: batch.productId,
       type: "TRANSFER",
       quantity: input.quantity,
       previousQuantity: central.quantity,
@@ -37930,11 +37936,13 @@ async function expiryWriteOff(input) {
       productId: productBatches.productId,
       expirationDate: productBatches.expirationDate
     }).from(productBatches).where(eq(productBatches.id, input.batchId));
+    if (!batch) {
+      throw new Error(`Lotto ${input.batchId} non trovato`);
+    }
     const [loc] = await tx.select({ name: locations.name }).from(locations).where(eq(locations.id, input.locationId));
-    const auditNote = `Scarto lotto ${batch?.batchNumber ?? "?"} (scad ${batch?.expirationDate ?? "?"}) \xD7${input.quantity} da ${loc?.name ?? "?"}`;
+    const auditNote = `Scarto lotto ${batch.batchNumber} (scad ${batch.expirationDate}) \xD7${input.quantity} da ${loc?.name ?? "?"}`;
     const [movement] = await tx.insert(stockMovements).values({
-      productId: batch?.productId ?? input.batchId,
-      // fallback safety
+      productId: batch.productId,
       type: "EXPIRY_WRITE_OFF",
       quantity: input.quantity,
       previousQuantity: stock.quantity,
