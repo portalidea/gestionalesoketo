@@ -29,7 +29,19 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -51,6 +63,7 @@ import {
   Calendar,
   ChevronDown,
   ChevronRight,
+  Link2,
   Loader2,
   Mail,
   MapPin,
@@ -58,6 +71,7 @@ import {
   Phone,
   RefreshCw,
   Store,
+  Tag,
   Trash2,
   TrendingUp,
   Truck,
@@ -101,7 +115,30 @@ export default function RetailerDetail() {
     onError: (err) => toast.error(err.message),
   });
 
-  // ============== Write-off state ==============
+  // ============== M3 commercial config ==============
+  const { data: packages } = trpc.pricingPackages.list.useQuery();
+  const { data: ficStatus } = trpc.ficIntegration.getStatus.useQuery();
+  const { data: ficClientsData } = trpc.ficClients.list.useQuery(undefined, {
+    enabled: !!ficStatus?.connected,
+    retry: false,
+  });
+  const assignPackageMut = trpc.retailers.assignPackage.useMutation({
+    onSuccess: () => {
+      utils.retailers.getDetails.invalidate();
+      utils.retailers.getById.invalidate();
+      toast.success("Pacchetto aggiornato");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const assignFicClientMut = trpc.retailers.assignFicClient.useMutation({
+    onSuccess: () => {
+      utils.retailers.getDetails.invalidate();
+      utils.retailers.getById.invalidate();
+      toast.success("Cliente FiC aggiornato");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const [writeOffTarget, setWriteOffTarget] = useState<WriteOffTarget | null>(
     null,
   );
@@ -481,6 +518,111 @@ export default function RetailerDetail() {
                 <p className="text-sm text-muted-foreground">{retailer.notes}</p>
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        {/* Configurazione commerciale (M3) */}
+        <Card className="border-border bg-card">
+          <CardHeader>
+            <CardTitle>Configurazione commerciale</CardTitle>
+            <CardDescription>
+              Pacchetto sconto e mapping cliente FiC. Entrambi sono obbligatori per
+              generare proforma su transfer.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <Tag className="h-4 w-4 text-primary" />
+                  Pacchetto commerciale
+                </Label>
+                <Select
+                  value={retailer.pricingPackageId ?? "__none__"}
+                  onValueChange={(v) =>
+                    assignPackageMut.mutate({
+                      retailerId: retailer.id,
+                      packageId: v === "__none__" ? null : v,
+                    })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Nessun pacchetto" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">— Nessuno —</SelectItem>
+                    {packages?.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name} (-{parseFloat(p.discountPercent).toFixed(0)}%)
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {!retailer.pricingPackageId && (
+                  <p className="text-xs text-yellow-500">
+                    Senza pacchetto non è possibile generare proforma.
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <Link2 className="h-4 w-4 text-primary" />
+                  Cliente FiC associato
+                </Label>
+                {!ficStatus?.connected ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div>
+                        <Select disabled value="">
+                          <SelectTrigger>
+                            <SelectValue placeholder="FiC non connesso" />
+                          </SelectTrigger>
+                          <SelectContent />
+                        </Select>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      Connetti Fatture in Cloud da /settings/integrations per attivare.
+                    </TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <>
+                    <Select
+                      value={
+                        retailer.ficClientId != null
+                          ? String(retailer.ficClientId)
+                          : "__none__"
+                      }
+                      onValueChange={(v) =>
+                        assignFicClientMut.mutate({
+                          retailerId: retailer.id,
+                          ficClientId: v === "__none__" ? null : parseInt(v, 10),
+                        })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Seleziona cliente FiC" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">— Nessuno —</SelectItem>
+                        {ficClientsData?.clients.map((c) => (
+                          <SelectItem key={c.id} value={String(c.id)}>
+                            {c.name}
+                            {c.vat_number ? ` · P.IVA ${c.vat_number}` : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {!retailer.ficClientId && (
+                      <p className="text-xs text-yellow-500">
+                        Senza mapping cliente FiC non è possibile generare proforma.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
           </CardContent>
         </Card>
 

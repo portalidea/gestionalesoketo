@@ -31,6 +31,7 @@ import {
   PanelLeft,
   Plug,
   Store,
+  Tag,
   Users,
   Warehouse,
 } from "lucide-react";
@@ -50,6 +51,7 @@ const baseMenuItems = [
 ];
 
 const adminMenuItems = [
+  { icon: Tag, label: "Pacchetti", path: "/settings/packages" },
   { icon: Users, label: "Team", path: "/settings/team" },
   { icon: Plug, label: "Integrazioni", path: "/settings/integrations" },
 ];

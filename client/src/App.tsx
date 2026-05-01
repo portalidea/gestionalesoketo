@@ -10,6 +10,7 @@ import Home from "./pages/Home";
 import Integrations from "./pages/Integrations";
 import Login from "./pages/Login";
 import Movements from "./pages/Movements";
+import Packages from "./pages/Packages";
 import ProducerDetail from "./pages/ProducerDetail";
 import Producers from "./pages/Producers";
 import ProductDetail from "./pages/ProductDetail";
@@ -37,6 +38,7 @@ function Router() {
       <Route path="/alerts" component={Alerts} />
       <Route path="/reports" component={Reports} />
       <Route path="/settings/team" component={Team} />
+      <Route path="/settings/packages" component={Packages} />
       <Route path="/settings/integrations" component={Integrations} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />

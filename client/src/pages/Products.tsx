@@ -17,6 +17,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Table,
   TableBody,
   TableCell,
@@ -38,7 +45,18 @@ export default function Products() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const utils = trpc.useUtils();
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    sku: string;
+    name: string;
+    description: string;
+    category: string;
+    supplierName: string;
+    unitPrice: string;
+    unit: string;
+    minStockThreshold: number;
+    expiryWarningDays: number;
+    vatRate: "4.00" | "5.00" | "10.00" | "22.00";
+  }>({
     sku: "",
     name: "",
     description: "",
@@ -48,6 +66,7 @@ export default function Products() {
     unit: "",
     minStockThreshold: 10,
     expiryWarningDays: 30,
+    vatRate: "10.00",
   });
 
   const createMutation = trpc.products.create.useMutation({
@@ -65,6 +84,7 @@ export default function Products() {
         unit: "",
         minStockThreshold: 10,
         expiryWarningDays: 30,
+        vatRate: "10.00",
       });
     },
     onError: (err) => toast.error(err.message),
@@ -228,6 +248,28 @@ export default function Products() {
                       />
                     </div>
                   </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="vatRate">Aliquota IVA *</Label>
+                    <Select
+                      value={formData.vatRate}
+                      onValueChange={(v) =>
+                        setFormData({
+                          ...formData,
+                          vatRate: v as typeof formData.vatRate,
+                        })
+                      }
+                    >
+                      <SelectTrigger id="vatRate">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="4.00">4% (super-ridotta)</SelectItem>
+                        <SelectItem value="5.00">5% (ridotta)</SelectItem>
+                        <SelectItem value="10.00">10% (alimentari, default)</SelectItem>
+                        <SelectItem value="22.00">22% (ordinaria, birre/bevande)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
@@ -260,6 +302,7 @@ export default function Products() {
                       <TableHead>SKU</TableHead>
                       <TableHead>Categoria</TableHead>
                       <TableHead className="text-right">Prezzo</TableHead>
+                      <TableHead className="text-right">IVA</TableHead>
                       <TableHead className="text-right">Min</TableHead>
                       <TableHead className="text-right">Stock centrale</TableHead>
                       <TableHead className="text-right">Stock totale</TableHead>
@@ -302,6 +345,9 @@ export default function Products() {
                             ) : (
                               <span className="text-muted-foreground">-</span>
                             )}
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground font-mono text-xs">
+                            {parseFloat(p.vatRate).toFixed(0)}%
                           </TableCell>
                           <TableCell className="text-right text-muted-foreground">
                             {minStock}

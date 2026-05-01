@@ -305,6 +305,7 @@ export async function getAllProducts() {
       minStockThreshold: products.minStockThreshold,
       expiryWarningDays: products.expiryWarningDays,
       imageUrl: products.imageUrl,
+      vatRate: products.vatRate,
       createdAt: products.createdAt,
       updatedAt: products.updatedAt,
       centralStock: centralStockExpr,
