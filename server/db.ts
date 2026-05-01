@@ -20,6 +20,16 @@ import {
   locations,
   Location,
   inventoryByBatch,
+  // Phase B M3
+  pricingPackages,
+  PricingPackage,
+  InsertPricingPackage,
+  systemIntegrations,
+  SystemIntegration,
+  InsertSystemIntegration,
+  proformaQueue,
+  ProformaQueue,
+  InsertProformaQueue,
 } from "../drizzle/schema";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -1420,5 +1430,356 @@ export async function getDashboardStats() {
     console.error("[dashboard] getStats failed:", error);
     throw error;
   }
+}
+
+/**
+ * Phase B M3: lookup minimale di un batch per arricchire descrizione
+ * proforma e audit trail. Ritorna solo i campi user-facing (batchNumber +
+ * expirationDate string YYYY-MM-DD).
+ */
+export async function getBatchByIdMinimal(
+  batchId: string,
+): Promise<{ batchNumber: string; expirationDate: string } | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const r = await db
+    .select({
+      batchNumber: productBatches.batchNumber,
+      expirationDate: productBatches.expirationDate,
+    })
+    .from(productBatches)
+    .where(eq(productBatches.id, batchId))
+    .limit(1);
+  return r[0];
+}
+
+// ============= PRICING PACKAGES (Phase B M3) =============
+
+export async function getAllPricingPackages(): Promise<PricingPackage[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(pricingPackages).orderBy(pricingPackages.sortOrder);
+}
+
+export async function getPricingPackageById(id: string): Promise<PricingPackage | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const r = await db.select().from(pricingPackages).where(eq(pricingPackages.id, id)).limit(1);
+  return r[0];
+}
+
+export async function createPricingPackage(data: InsertPricingPackage): Promise<PricingPackage> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.insert(pricingPackages).values(data).returning();
+  return row;
+}
+
+export async function updatePricingPackage(
+  id: string,
+  data: Partial<InsertPricingPackage>,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(pricingPackages)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(pricingPackages.id, id));
+}
+
+export async function deletePricingPackage(id: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  // ON DELETE SET NULL su retailers.pricingPackageId: i retailer associati
+  // restano senza pacchetto e dovranno riassegnare prima del prossimo proforma.
+  await db.delete(pricingPackages).where(eq(pricingPackages.id, id));
+}
+
+export async function assignPackageToRetailer(
+  retailerId: string,
+  packageId: string | null,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(retailers)
+    .set({ pricingPackageId: packageId, updatedAt: new Date() })
+    .where(eq(retailers.id, retailerId));
+}
+
+export async function assignFicClientToRetailer(
+  retailerId: string,
+  ficClientId: number | null,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(retailers)
+    .set({ ficClientId, updatedAt: new Date() })
+    .where(eq(retailers.id, retailerId));
+}
+
+/**
+ * Calcola anteprima prezzi proforma per un retailer.
+ *
+ * Server-side authoritative: tutta la math gira qui, frontend solo display.
+ * Arrotondamenti a 2 decimali per ogni linea (coerenza FiC); i totali
+ * sommano linee già arrotondate.
+ *
+ * Throw esplicito (con messaggi user-facing in italiano) sui casi:
+ * - retailer senza pacchetto → PRECONDITION
+ * - prodotto inesistente → riferimento sbagliato dal caller
+ * - prodotto senza unitPrice valorizzato → impossibile calcolare
+ */
+export async function calculatePricingForRetailer(input: {
+  retailerId: string;
+  items: Array<{ productId: string; qty: number }>;
+}): Promise<{
+  items: Array<{
+    productId: string;
+    productSku: string;
+    productName: string;
+    qty: number;
+    unitPriceBase: string;
+    discountPercent: string;
+    unitPriceFinal: string;
+    vatRate: string;
+    lineTotalNet: string;
+    lineTotalGross: string;
+  }>;
+  subtotalNet: string;
+  vatAmount: string;
+  total: string;
+  packageId: string;
+  packageName: string;
+  packageDiscount: string;
+}> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const [retailer] = await db
+    .select()
+    .from(retailers)
+    .where(eq(retailers.id, input.retailerId))
+    .limit(1);
+  if (!retailer) throw new Error("Rivenditore non trovato");
+  if (!retailer.pricingPackageId) {
+    throw new Error("Rivenditore senza pacchetto commerciale assegnato");
+  }
+
+  const [pkg] = await db
+    .select()
+    .from(pricingPackages)
+    .where(eq(pricingPackages.id, retailer.pricingPackageId))
+    .limit(1);
+  if (!pkg) throw new Error("Pacchetto commerciale del rivenditore non trovato");
+
+  const productIds = Array.from(new Set(input.items.map((i) => i.productId)));
+  if (productIds.length === 0) throw new Error("Nessun prodotto da quotare");
+  const prodRows = await db
+    .select()
+    .from(products)
+    .where(sql`${products.id} = ANY(${productIds}::uuid[])`);
+  const prodMap = new Map(prodRows.map((p) => [p.id, p] as const));
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const discount = parseFloat(pkg.discountPercent);
+
+  let subtotalNet = 0;
+  let total = 0;
+  const lines: Awaited<ReturnType<typeof calculatePricingForRetailer>>["items"] = [];
+
+  for (const it of input.items) {
+    const p = prodMap.get(it.productId);
+    if (!p) throw new Error(`Prodotto ${it.productId} non trovato`);
+    const basePriceRaw = p.unitPrice ? parseFloat(p.unitPrice) : NaN;
+    if (!Number.isFinite(basePriceRaw) || basePriceRaw <= 0) {
+      throw new Error(
+        `Prodotto ${p.sku} senza prezzo base configurato — impossibile calcolare proforma`,
+      );
+    }
+    const vatRate = parseFloat(p.vatRate);
+    const unitPriceFinal = round2(basePriceRaw * (1 - discount / 100));
+    const lineNet = round2(unitPriceFinal * it.qty);
+    const lineGross = round2(lineNet * (1 + vatRate / 100));
+
+    subtotalNet += lineNet;
+    total += lineGross;
+
+    lines.push({
+      productId: p.id,
+      productSku: p.sku,
+      productName: p.name,
+      qty: it.qty,
+      unitPriceBase: basePriceRaw.toFixed(2),
+      discountPercent: discount.toFixed(2),
+      unitPriceFinal: unitPriceFinal.toFixed(2),
+      vatRate: vatRate.toFixed(2),
+      lineTotalNet: lineNet.toFixed(2),
+      lineTotalGross: lineGross.toFixed(2),
+    });
+  }
+
+  const subtotalRounded = round2(subtotalNet);
+  const totalRounded = round2(total);
+  const vatAmount = round2(totalRounded - subtotalRounded);
+
+  return {
+    items: lines,
+    subtotalNet: subtotalRounded.toFixed(2),
+    vatAmount: vatAmount.toFixed(2),
+    total: totalRounded.toFixed(2),
+    packageId: pkg.id,
+    packageName: pkg.name,
+    packageDiscount: discount.toFixed(2),
+  };
+}
+
+// ============= SYSTEM INTEGRATIONS (Phase B M3) =============
+
+export async function getSystemIntegration(
+  type: string,
+): Promise<SystemIntegration | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const r = await db
+    .select()
+    .from(systemIntegrations)
+    .where(eq(systemIntegrations.type, type))
+    .limit(1);
+  return r[0];
+}
+
+export async function upsertSystemIntegration(
+  data: InsertSystemIntegration,
+): Promise<SystemIntegration> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await getSystemIntegration(data.type);
+  if (existing) {
+    const [row] = await db
+      .update(systemIntegrations)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(systemIntegrations.id, existing.id))
+      .returning();
+    return row;
+  }
+  const [row] = await db.insert(systemIntegrations).values(data).returning();
+  return row;
+}
+
+export async function deleteSystemIntegration(type: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(systemIntegrations).where(eq(systemIntegrations.type, type));
+}
+
+// ============= PROFORMA QUEUE (Phase B M3) =============
+
+export async function enqueueProforma(input: {
+  transferMovementId: string;
+  payload: unknown;
+  initialError?: string;
+}): Promise<ProformaQueue> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db
+    .insert(proformaQueue)
+    .values({
+      transferMovementId: input.transferMovementId,
+      payload: input.payload as object,
+      status: input.initialError ? "failed" : "pending",
+      attempts: input.initialError ? 1 : 0,
+      lastError: input.initialError ?? null,
+      lastAttemptAt: input.initialError ? new Date() : null,
+    })
+    .returning();
+  return row;
+}
+
+export async function getProformaQueueList(filter?: {
+  status?: "pending" | "processing" | "success" | "failed";
+}): Promise<ProformaQueue[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const q = db.select().from(proformaQueue).orderBy(desc(proformaQueue.createdAt));
+  if (filter?.status) {
+    return q.where(eq(proformaQueue.status, filter.status)) as unknown as Promise<
+      ProformaQueue[]
+    >;
+  }
+  return q;
+}
+
+export async function getProformaQueueByMovement(
+  movementId: string,
+): Promise<ProformaQueue | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const r = await db
+    .select()
+    .from(proformaQueue)
+    .where(eq(proformaQueue.transferMovementId, movementId))
+    .limit(1);
+  return r[0];
+}
+
+export async function markProformaQueueFailed(
+  id: string,
+  error: string,
+): Promise<ProformaQueue | undefined> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db
+    .update(proformaQueue)
+    .set({
+      status: "failed",
+      attempts: sql`${proformaQueue.attempts} + 1`,
+      lastError: error.slice(0, 4000),
+      lastAttemptAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(proformaQueue.id, id))
+    .returning();
+  return row;
+}
+
+export async function markProformaQueueProcessing(id: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(proformaQueue)
+    .set({
+      status: "processing",
+      lastAttemptAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(proformaQueue.id, id));
+}
+
+export async function markProformaQueueSuccess(id: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(proformaQueue)
+    .set({
+      status: "success",
+      lastError: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(proformaQueue.id, id));
+}
+
+export async function setStockMovementProforma(
+  movementId: string,
+  ficProformaId: number,
+  ficProformaNumber: string,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(stockMovements)
+    .set({ ficProformaId, ficProformaNumber })
+    .where(eq(stockMovements.id, movementId));
 }
 

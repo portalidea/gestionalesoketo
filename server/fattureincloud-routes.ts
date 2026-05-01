@@ -6,9 +6,65 @@
 import { Router } from "express";
 import { exchangeCodeForTokens, getOAuthConfig } from "./fattureincloud-oauth";
 import { syncRetailerData } from "./fattureincloud-sync";
+import { completeFicOAuth } from "./fic-integration";
 import * as db from "./db";
 
 const router = Router();
+
+/**
+ * Phase B M3 — Single-tenant OAuth callback.
+ *
+ * Distinto dal callback legacy `/fattureincloud/callback` (per-retailer).
+ * Single-tenant: 1 sola integrazione di sistema in `systemIntegrations`,
+ * non legata a un retailer specifico. State validato come marker statico.
+ *
+ * Su success: chiude la finestra popup e notifica il parent via postMessage.
+ */
+router.get("/fattureincloud/sso/callback", async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    if (!code || typeof code !== "string") {
+      return res.status(400).send("Missing authorization code");
+    }
+    if (state !== "soketo-single-tenant") {
+      return res.status(400).send("Invalid state — expected single-tenant marker");
+    }
+
+    const result = await completeFicOAuth(code);
+
+    res.send(`
+      <!DOCTYPE html>
+      <html><head><title>FiC connesso</title>
+      <style>body{font-family:system-ui;background:#0a0a0a;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}.container{text-align:center;padding:2rem}.success-icon{font-size:4rem;margin-bottom:1rem}h1{color:#10b981;margin-bottom:1rem}p{color:#9ca3af;margin-bottom:2rem}button{background:#10b981;color:#fff;border:0;padding:.75rem 2rem;border-radius:.5rem;font-size:1rem;cursor:pointer}button:hover{background:#059669}</style>
+      </head><body>
+      <div class="container">
+        <div class="success-icon">✓</div>
+        <h1>Fatture in Cloud connesso</h1>
+        <p>Account: ${result.companyName}<br>Company ID FiC: ${result.companyId}</p>
+        <button onclick="window.close()">Chiudi</button>
+        <script>
+          setTimeout(() => {
+            window.opener?.postMessage({ type: 'fic_sso_success', companyId: ${result.companyId} }, '*');
+            setTimeout(() => window.close(), 1000);
+          }, 1500);
+        </script>
+      </div></body></html>
+    `);
+  } catch (err: any) {
+    console.error("[fic sso callback] error:", err);
+    const msg = (err?.message ?? "errore").toString().replace(/[<>]/g, "");
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html><head><title>Errore</title>
+      <style>body{font-family:system-ui;background:#0a0a0a;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}.container{text-align:center;padding:2rem}.error-icon{font-size:4rem;margin-bottom:1rem}h1{color:#ef4444}p{color:#9ca3af}</style>
+      </head><body><div class="container">
+        <div class="error-icon">✗</div>
+        <h1>Errore connessione FiC</h1>
+        <p>${msg}</p>
+      </div></body></html>
+    `);
+  }
+});
 
 /**
  * OAuth2 Callback - Riceve authorization code e completa autenticazione

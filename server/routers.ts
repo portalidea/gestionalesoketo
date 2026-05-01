@@ -10,9 +10,18 @@ import {
 } from "./_core/trpc";
 import { supabaseAdmin } from "./_core/supabase";
 import * as db from "./db";
+import {
+  createFicProforma,
+  disconnectFic,
+  getFicAuthorizationUrl,
+  getFicClients,
+  getFicStatus,
+  refreshFicClients,
+} from "./fic-integration";
 
 const uuid = z.string().uuid();
 const userRoleSchema = z.enum(["admin", "operator", "viewer"]);
+const vatRateSchema = z.enum(["4.00", "5.00", "10.00", "22.00"]);
 
 // Date validation: il client invia stringa "YYYY-MM-DD" (form HTML date input).
 // Drizzle mappa il tipo `date` Postgres a string in entrambe le direzioni
@@ -222,6 +231,42 @@ export const appRouter = router({
         await db.deleteRetailer(input.id);
         return { success: true };
       }),
+
+    /**
+     * Phase B M3: assegna/rimuove pacchetto commerciale.
+     * Pre-condition per generazione proforma su TRANSFER.
+     */
+    assignPackage: writerProcedure
+      .input(z.object({ retailerId: uuid, packageId: uuid.nullable() }))
+      .mutation(async ({ input }) => {
+        if (input.packageId) {
+          const pkg = await db.getPricingPackageById(input.packageId);
+          if (!pkg) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Pacchetto commerciale non trovato",
+            });
+          }
+        }
+        await db.assignPackageToRetailer(input.retailerId, input.packageId);
+        return { success: true };
+      }),
+
+    /**
+     * Phase B M3: associa retailer a cliente FiC (single-tenant).
+     * Pre-condition per generazione proforma su TRANSFER.
+     */
+    assignFicClient: writerProcedure
+      .input(
+        z.object({
+          retailerId: uuid,
+          ficClientId: z.number().int().positive().nullable(),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        await db.assignFicClientToRetailer(input.retailerId, input.ficClientId);
+        return { success: true };
+      }),
   }),
 
   // ============= PRODUCTS =============
@@ -260,6 +305,7 @@ export const appRouter = router({
           minStockThreshold: z.number().optional(),
           expiryWarningDays: z.number().optional(),
           imageUrl: z.string().optional(),
+          vatRate: vatRateSchema.optional(),
         }),
       )
       .mutation(async ({ input }) => {
@@ -285,6 +331,7 @@ export const appRouter = router({
           minStockThreshold: z.number().optional(),
           expiryWarningDays: z.number().optional(),
           imageUrl: z.string().optional(),
+          vatRate: vatRateSchema.optional(),
         }),
       )
       .mutation(async ({ input }) => {
@@ -447,14 +494,39 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ input, ctx }) => {
+        // Phase B M3: se generateProforma=true, valida pre-condizioni PRIMA
+        // del transfer. Se mancano dati il movement non parte (no scrittura).
+        let retailer: Awaited<ReturnType<typeof db.getRetailerById>> = undefined;
         if (input.generateProforma) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message:
-              "Generazione proforma FiC non disponibile — feature attiva in Milestone 3",
-          });
+          retailer = await db.getRetailerById(input.retailerId);
+          if (!retailer) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Retailer non trovato" });
+          }
+          if (!retailer.pricingPackageId) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "Pacchetto commerciale non assegnato al rivenditore — assegnalo prima di generare proforma",
+            });
+          }
+          if (!retailer.ficClientId) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "Cliente FiC non mappato per questo rivenditore — mappalo prima di generare proforma",
+            });
+          }
+          const fic = await getFicStatus();
+          if (!fic.connected) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: "Fatture in Cloud non connesso — connetti l'integrazione",
+            });
+          }
         }
-        return await db.transferBatchToRetailer({
+
+        // Esegui il transfer (movement registrato anche se proforma fallisce)
+        const movement = await db.transferBatchToRetailer({
           productId: input.productId,
           batchId: input.batchId,
           retailerId: input.retailerId,
@@ -462,6 +534,62 @@ export const appRouter = router({
           notes: input.notes ?? null,
           createdBy: ctx.user.id,
         });
+
+        if (!input.generateProforma || !retailer || !retailer.ficClientId) {
+          return { movement, proforma: null };
+        }
+
+        // Calcola pricing + lookup batch info per descrizione FiC
+        let pricingResult: Awaited<ReturnType<typeof db.calculatePricingForRetailer>>;
+        try {
+          pricingResult = await db.calculatePricingForRetailer({
+            retailerId: input.retailerId,
+            items: [{ productId: input.productId, qty: input.quantity }],
+          });
+        } catch (e) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: (e as Error).message,
+          });
+        }
+
+        const batchInfo = await db.getBatchByIdMinimal(input.batchId);
+        const batchSuffix = batchInfo
+          ? ` — Lotto ${batchInfo.batchNumber}, scad. ${batchInfo.expirationDate}`
+          : "";
+
+        const payload = {
+          ficClientId: retailer.ficClientId,
+          date: new Date().toISOString().slice(0, 10),
+          notesInternal: `Generato da TRANSFER ${movement.id}${batchSuffix}`,
+          items: pricingResult.items.map((it) => ({
+            description: `${it.productName}${batchSuffix}`,
+            qty: it.qty,
+            unitPriceFinal: it.unitPriceFinal,
+            vatRate: it.vatRate,
+          })),
+        };
+
+        try {
+          const proforma = await createFicProforma(payload);
+          await db.setStockMovementProforma(movement.id, proforma.id, proforma.number);
+          return {
+            movement: { ...movement, ficProformaId: proforma.id, ficProformaNumber: proforma.number },
+            proforma: { id: proforma.id, number: proforma.number, queued: false },
+          };
+        } catch (e) {
+          // Salva in coda per retry manuale: il movement procede comunque.
+          const errMsg = (e as Error).message ?? "FiC API error";
+          const queueRow = await db.enqueueProforma({
+            transferMovementId: movement.id,
+            payload,
+            initialError: errMsg,
+          });
+          return {
+            movement,
+            proforma: { id: null, number: null, queued: true, queueId: queueRow.id, lastError: errMsg },
+          };
+        }
       }),
 
     /**
@@ -634,6 +762,221 @@ export const appRouter = router({
     getStats: protectedProcedure.query(async () => {
       return await db.getDashboardStats();
     }),
+  }),
+
+  // ============= PRICING PACKAGES (Phase B M3) =============
+  pricingPackages: router({
+    list: protectedProcedure.query(async () => {
+      return await db.getAllPricingPackages();
+    }),
+
+    create: adminProcedure
+      .input(
+        z.object({
+          name: z.string().min(1).max(100),
+          discountPercent: z.number().min(0).max(100),
+          description: z.string().optional(),
+          sortOrder: z.number().int().optional(),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        return await db.createPricingPackage({
+          name: input.name,
+          discountPercent: input.discountPercent.toFixed(2),
+          description: input.description ?? null,
+          sortOrder: input.sortOrder ?? 0,
+        });
+      }),
+
+    update: adminProcedure
+      .input(
+        z.object({
+          id: uuid,
+          name: z.string().min(1).max(100).optional(),
+          discountPercent: z.number().min(0).max(100).optional(),
+          description: z.string().nullable().optional(),
+          sortOrder: z.number().int().optional(),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        const { id, discountPercent, ...rest } = input;
+        await db.updatePricingPackage(id, {
+          ...rest,
+          ...(discountPercent !== undefined
+            ? { discountPercent: discountPercent.toFixed(2) }
+            : {}),
+        });
+        return { success: true };
+      }),
+
+    delete: adminProcedure
+      .input(z.object({ id: uuid }))
+      .mutation(async ({ input }) => {
+        await db.deletePricingPackage(input.id);
+        return { success: true };
+      }),
+  }),
+
+  // ============= PRICING CALCULATION (Phase B M3) =============
+  pricing: router({
+    calculateForRetailer: protectedProcedure
+      .input(
+        z.object({
+          retailerId: uuid,
+          items: z
+            .array(
+              z.object({
+                productId: uuid,
+                qty: z.number().int().positive(),
+              }),
+            )
+            .min(1),
+        }),
+      )
+      .query(async ({ input }) => {
+        try {
+          return await db.calculatePricingForRetailer(input);
+        } catch (e) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: (e as Error).message,
+          });
+        }
+      }),
+  }),
+
+  // ============= FIC INTEGRATION (Phase B M3) =============
+  ficIntegration: router({
+    getStatus: protectedProcedure.query(async () => {
+      return await getFicStatus();
+    }),
+
+    startOAuth: adminProcedure.query(async () => {
+      try {
+        return { url: getFicAuthorizationUrl() };
+      } catch (e) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: (e as Error).message,
+        });
+      }
+    }),
+
+    disconnect: adminProcedure.mutation(async () => {
+      await disconnectFic();
+      return { success: true };
+    }),
+  }),
+
+  // ============= FIC CLIENTS CACHE (Phase B M3) =============
+  ficClients: router({
+    list: protectedProcedure.query(async () => {
+      try {
+        return await getFicClients(false);
+      } catch (e) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: (e as Error).message,
+        });
+      }
+    }),
+
+    refresh: writerProcedure.mutation(async () => {
+      try {
+        return await refreshFicClients();
+      } catch (e) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: (e as Error).message,
+        });
+      }
+    }),
+  }),
+
+  // ============= PROFORMA QUEUE (Phase B M3) =============
+  proformaQueue: router({
+    list: protectedProcedure
+      .input(
+        z
+          .object({
+            status: z.enum(["pending", "processing", "success", "failed"]).optional(),
+          })
+          .optional(),
+      )
+      .query(async ({ input }) => {
+        return await db.getProformaQueueList({ status: input?.status });
+      }),
+
+    getByMovement: protectedProcedure
+      .input(z.object({ movementId: uuid }))
+      .query(async ({ input }) => {
+        return (await db.getProformaQueueByMovement(input.movementId)) ?? null;
+      }),
+
+    /**
+     * Retry MANUALE: ritenta la generazione proforma per la riga in coda.
+     * Se la chiamata FiC ha successo: aggiorna lo stockMovement con
+     * id/number proforma, marca queue=success.
+     * Se fallisce: incrementa attempts, aggiorna lastError, status=failed.
+     * Se attempts >= maxAttempts: rifiuta con 412 (l'admin deve cancellare
+     * o investigare manualmente).
+     */
+    retry: writerProcedure
+      .input(z.object({ id: uuid }))
+      .mutation(async ({ input }) => {
+        const list = await db.getProformaQueueList();
+        const row = list.find((r) => r.id === input.id);
+        if (!row) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Riga in coda non trovata" });
+        }
+        if (row.status === "success") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Proforma già generata — niente da ritentare",
+          });
+        }
+        if (row.attempts >= row.maxAttempts) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Max attempts (${row.maxAttempts}) raggiunto — investiga il problema o cancella la riga`,
+          });
+        }
+
+        await db.markProformaQueueProcessing(row.id);
+        try {
+          const payload = row.payload as Parameters<typeof createFicProforma>[0];
+          const proforma = await createFicProforma(payload);
+          await db.setStockMovementProforma(
+            row.transferMovementId,
+            proforma.id,
+            proforma.number,
+          );
+          await db.markProformaQueueSuccess(row.id);
+          return {
+            success: true,
+            proformaId: proforma.id,
+            proformaNumber: proforma.number,
+          };
+        } catch (e) {
+          const errMsg = (e as Error).message ?? "FiC API error";
+          await db.markProformaQueueFailed(row.id, errMsg);
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `Retry fallito: ${errMsg}`,
+          });
+        }
+      }),
+
+    delete: writerProcedure
+      .input(z.object({ id: uuid }))
+      .mutation(async ({ input }) => {
+        const dbRef = await db.getDb();
+        if (!dbRef) throw new Error("Database not available");
+        const { proformaQueue: pq } = await import("../drizzle/schema");
+        const { eq } = await import("drizzle-orm");
+        await dbRef.delete(pq).where(eq(pq.id, input.id));
+        return { success: true };
+      }),
   }),
 
   // ============= FATTURE IN CLOUD SYNC =============
