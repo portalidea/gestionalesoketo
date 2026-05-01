@@ -8,6 +8,165 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-05-01 — 🎯 Phase B Milestone 2.5 — UX power user (tabellari + /movements)
+
+### TL;DR
+
+Refactor 3 pagine indice (Products, Retailers, Producers) da
+card grid a Table shadcn ad alta densità per uso operativo
+quotidiano. Nuova pagina globale `/movements` con filtri (tipo,
+location, batch search, range date) e paginazione 50 per pagina.
+Sidebar riordinata con voce "Movimenti" tra "Magazzino Centrale"
+e "Rivenditori".
+
+Backend: 3 procedure list estese con stats calcolate via subquery
+inline (centralStock/totalStock/batchCount/nearestExpiration per
+prodotti; activeBatchCount/totalStock/inventoryValue per
+retailer; batchCount per producer). Nuova procedure
+`stockMovements.listAll(filters, limit, offset)` per la pagina
+globale con count totale per paginazione.
+
+### Backend (`server/db.ts` + `server/routers.ts`)
+
+**`getAllProducts`** (procedure `products.list`):
+shape sovra-insieme retro-compatibile. Aggiunti 4 campi
+calcolati via subquery inline:
+- `centralStock`: sum qty in `inventoryByBatch` su location
+  type `central_warehouse`
+- `totalStock`: sum cross-location
+- `activeBatchCount`: count batches con qty > 0
+- `nearestExpiration`: min `expirationDate` tra batches con
+  qty > 0
+
+Performance accettabile per cataloghi dell'ordine di decine di
+prodotti (subquery N+0 = una query con N×4 sub-aggregati).
+
+**`getAllRetailers`** (procedure `retailers.list`):
+- `activeBatchCount` (count `inventoryByBatch` con qty > 0
+  presso retailer location)
+- `totalStock` (sum qty cross-batches)
+- `inventoryValue` (sum qty × `products.unitPrice`, cast
+  varchar→numeric con `NULLIF` empty-string-safe)
+
+**`getAllProducers`** (procedure `producers.list`):
+- `batchCount` (count `productBatches` totali, anche scaricati
+  a 0)
+
+**`stockMovements.listAll`** (nuova): filtri opzionali
+`type | locationId | batchSearch | startDate | endDate`,
+`limit` (default 50, max 200), `offset`. Returns
+`{ items, total }`. Filtro location `OR(fromLocationId, toLocationId)`,
+batchSearch `ILIKE %x%` su `productBatches.batchNumber`.
+
+### UI
+
+**`/products`** (`Products.tsx`) — refactor totale:
+- Tabella 9 colonne: Nome (clickable row) · SKU · Categoria ·
+  Prezzo · Min · Stock centrale (rosso se < min) · Stock totale
+  · Lotti attivi · Scadenza più vicina (badge orange < 30gg,
+  red scaduto)
+- Mantenuto Dialog "+ Nuovo Prodotto"
+- Click intera riga → `/products/:id`
+
+**`/retailers`** (`Retailers.tsx`) — refactor totale:
+- Tabella 7 colonne: Nome · Tipo attività · Città · Email
+  (mailto con `e.stopPropagation`) · Lotti attivi · Stock
+  totale · Valore inventario €
+- Click intera riga → `/retailers/:id` (eccezione mailto)
+
+**`/producers`** (`Producers.tsx`) — refactor totale:
+- Tabella 6 colonne: Nome · Contact · Email (mailto) ·
+  Telefono (tel:) · P.IVA · Lotti forniti
+- Click intera riga → `/producers/:id` (eccezione mailto/tel)
+
+**No colonna Azioni/Trash** sulle 3 tabelle. Decisione utente:
+delete via pagina detail per ridurre click accidentali su
+azione cascade-pesante.
+
+**`/movements`** (NEW `Movements.tsx`) — pagina globale:
+- 5 filtri sopra la tabella (Tipo Select, Location Select,
+  Batch Input + debounce 300ms, Da/A date pickers HTML5),
+  bottone Reset visibile se filtri attivi
+- Tabella 7 colonne: Data/Ora (dd/MM/yyyy HH:mm locale it) ·
+  Tipo (badge colorato) · Lotto (button → `/products/:id`) ·
+  Prodotto (button → idem) · Qty · Da → A (location names) ·
+  Note (truncate 60ch + Tooltip Radix con full text)
+- Paginazione 50 per pagina, bottoni Precedente/Successiva,
+  label "Pagina X di Y · Z totali"
+- Reset a pagina 1 al cambio filtro (useEffect dependency)
+- Empty state differenziato (filtri attivi → suggerisce reset,
+  vuoto totale → spiega niente movimenti registrati)
+
+### Sidebar (`DashboardLayout.tsx`)
+
+Reorder + nuova voce:
+
+```
+Dashboard          (LayoutDashboard)
+Produttori         (Factory)
+Prodotti           (Package)
+Magazzino Centrale (Warehouse)
+Movimenti          (ArrowLeftRight)  ← NEW M2.5
+Rivenditori        (Store)
+Alert              (AlertTriangle)
+Reportistica       (BarChart3)
+[admin] Team / Integrazioni
+```
+
+### Decisioni di design
+
+- **Filtro Tipo Movimenti single-select** (con opzione "Tutti")
+  invece di multi-select. Multi-select richiederebbe Combobox
+  custom su pattern `Command + Popover` shadcn (~50 righe
+  code + accessibility). Single copre il 90% dei use case
+  ("solo TRANSFER", "solo write-off"). Multi-select offerto
+  come M2.5+1 se servirà.
+- **No mobile responsive cards** per le 4 tabelle: power user
+  desktop. `overflow-x-auto` come scroll safety net.
+- **Click intera riga = navigazione**, eccezioni con
+  `e.stopPropagation()` su mailto / tel / button celle
+  cliccabili (lotto/prodotto in /movements).
+
+### Smoke produzione
+
+- `tsc --noEmit` clean
+- `pnpm build`: vite OK · esbuild api/index.js 3.2 MB
+- 4 commit logici come da piano:
+
+```
+37f422a feat(ui): pagina globale /movements con filtri e
+        paginazione (M2.5)
+71dc830 feat(ui): tabellari Products/Retailers/Producers +
+        sidebar reorder (M2.5)
+94d1b7d feat(backend): extend list procedures + listAll
+        movements (M2.5)
+```
+
+### Test funzionale (browser)
+
+1. `/products` → tabella, click riga → /products/:id ✓
+2. `/retailers` → tabella, click email → mailto, click riga →
+   /retailers/:id ✓
+3. `/producers` → tabella, click telefono → tel:, click riga
+   → /producers/:id ✓
+4. `/movements` → tabella, filtri:
+   - Tipo TRANSFER → solo trasferimenti
+   - Location centrale → solo movimenti warehouse
+   - Batch "TEST" → solo lotti che matchano
+   - Range date → finestra temporale
+   - Reset → torna a tutti
+5. Click su lotto in /movements → naviga a /products/:id
+
+### Tech debt creato in M2.5
+
+- Performance subquery inline in `getAllProducts`/Retailers:
+  per cataloghi piccoli (decine) OK. Se il prodotto cresce a
+  centinaia, refactor in singola query con CTE.
+- Niente sort header cliccabili nelle tabelle: ordinamento
+  fisso server-side per nome ASC. Se servirà, M2.5+2.
+
+---
+
 ## 2026-05-01 — 🐞 Bugfix M2.0.1 — write-off silent failure
 
 ### Sintomo
