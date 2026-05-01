@@ -33,6 +33,8 @@ export const stockMovementTypeEnum = pgEnum("stock_movement_type", [
   "OUT",
   "ADJUSTMENT",
   "RECEIPT_FROM_PRODUCER",
+  "TRANSFER",
+  "EXPIRY_WRITE_OFF",
 ]);
 export const alertTypeEnum = pgEnum("alert_type", ["LOW_STOCK", "EXPIRING", "EXPIRED"]);
 export const alertStatusEnum = pgEnum("alert_status", ["ACTIVE", "ACKNOWLEDGED", "RESOLVED"]);
@@ -235,28 +237,6 @@ export type InventoryByBatch = typeof inventoryByBatch.$inferSelect;
 export type InsertInventoryByBatch = typeof inventoryByBatch.$inferInsert;
 
 /**
- * Inventory legacy — sostituita da `inventoryByBatch` in M1, droppata in M2.
- * Lasciata in place perché contiene ancora le 2 righe seed pre-migrate
- * (consultabili come storico). Nessuna procedure tRPC legge più questa
- * tabella in M1.
- *
- * @deprecated Use `inventoryByBatch`.
- */
-export const inventory = pgTable("inventory", {
-  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  retailerId: uuid("retailerId").notNull(),
-  productId: uuid("productId").notNull(),
-  quantity: integer("quantity").default(0).notNull(),
-  expirationDate: timestamp("expirationDate", { withTimezone: true }),
-  batchNumber: varchar("batchNumber", { length: 100 }),
-  lastUpdated: timestamp("lastUpdated", { withTimezone: true }).defaultNow().notNull(),
-  createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
-});
-
-export type Inventory = typeof inventory.$inferSelect;
-export type InsertInventory = typeof inventory.$inferInsert;
-
-/**
  * Stock movements — log immutabile movimenti magazzino.
  *
  * Phase B M1:
@@ -264,6 +244,14 @@ export type InsertInventory = typeof inventory.$inferInsert;
  *   `RECEIPT_FROM_PRODUCER` (produttore → magazzino centrale) non ha
  *   né inventoryId legacy né retailerId.
  * - Nuovi FK opzionali: `batchId`, `fromLocationId`, `toLocationId`.
+ *
+ * Phase B M2:
+ * - Esteso enum `stock_movement_type` con `TRANSFER` e `EXPIRY_WRITE_OFF`.
+ * - Aggiunto campo `notesInternal` per audit log automatici lato backend
+ *   (es. "Generato da TRANSFER warehouse→retailer X"), distinto da `notes`
+ *   user-facing.
+ * - `inventoryId` resta come dead column nullable (drop in M3 col cleanup
+ *   completo del refactor FiC).
  */
 export const stockMovements = pgTable("stockMovements", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -277,6 +265,7 @@ export const stockMovements = pgTable("stockMovements", {
   sourceDocument: varchar("sourceDocument", { length: 255 }),
   sourceDocumentType: varchar("sourceDocumentType", { length: 50 }),
   notes: text("notes"),
+  notesInternal: text("notesInternal"),
   timestamp: timestamp("timestamp", { withTimezone: true }).defaultNow().notNull(),
   createdBy: uuid("createdBy"),
   batchId: uuid("batchId").references(() => productBatches.id, {

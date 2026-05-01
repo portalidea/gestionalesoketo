@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { systemRouter } from "./_core/systemRouter";
 import {
@@ -512,11 +513,21 @@ export const appRouter = router({
   // Mantenuta in M1 con shape attuale per non rompere
   // FattureInCloudSync.tsx (UI già nascosta in produzione).
   sync: router({
+    /**
+     * Phase B M2: disabilitata in attesa del refactor FiC single-tenant
+     * (Milestone 3). La tabella `inventory` legacy è stata droppata e gli
+     * helper `db.upsertInventory`/`getInventoryItem` rimossi: una sync ora
+     * fallirebbe silenziosamente. Risposta 412 esplicita per chiunque la
+     * chiamasse via UI residua o API direct.
+     */
     syncRetailer: writerProcedure
       .input(z.object({ retailerId: uuid }))
-      .mutation(async ({ input }) => {
-        const { syncRetailerData } = await import("./fattureincloud-sync");
-        return await syncRetailerData(input.retailerId);
+      .mutation(async () => {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Sincronizzazione FiC temporaneamente disabilitata — refactor architetturale in corso (Milestone 3)",
+        });
       }),
 
     getAuthUrl: writerProcedure

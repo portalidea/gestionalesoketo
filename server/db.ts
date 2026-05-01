@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, inArray } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -7,10 +7,7 @@ import {
   InsertRetailer,
   products,
   InsertProduct,
-  inventory,
-  InsertInventory,
   stockMovements,
-  InsertStockMovement,
   alerts,
   InsertAlert,
   syncLogs,
@@ -167,7 +164,7 @@ export async function getRetailerDependentsCount(id: string) {
  * applicative non hanno FK a livello DB, quindi vanno pulite app-side.
  *
  * Sequenza:
- *   1. alerts, stockMovements, inventory legacy, syncLogs (no FK → DELETE manuale)
+ *   1. alerts, stockMovements, syncLogs (no FK → DELETE manuale)
  *   2. retailers row → trigger CASCADE elimina locations → CASCADE elimina inventoryByBatch
  */
 export async function deleteRetailer(id: string) {
@@ -176,7 +173,6 @@ export async function deleteRetailer(id: string) {
   await db.transaction(async (tx) => {
     await tx.delete(alerts).where(eq(alerts.retailerId, id));
     await tx.delete(stockMovements).where(eq(stockMovements.retailerId, id));
-    await tx.delete(inventory).where(eq(inventory.retailerId, id));
     await tx.delete(syncLogs).where(eq(syncLogs.retailerId, id));
     await tx.delete(retailers).where(eq(retailers.id, id));
   });
@@ -616,51 +612,6 @@ export async function getWarehouseStockOverview() {
   );
 }
 
-// ============= LEGACY HELPERS (FiC sync, M3 scope) =============
-//
-// I 3 helper sotto operano sulle tabelle `inventory` e `stockMovements`
-// legacy nel modello pre-M1 (1 riga inventory per coppia retailer+product,
-// movimenti con type IN/OUT/ADJUSTMENT). Sono usati solo da
-// `server/fattureincloud-sync.ts`. Verranno rimossi quando il refactor FiC
-// (M3) li sostituirà con il modello a lotti / multi-provider.
-//
-// @deprecated rimuovere quando FiC sync passa al nuovo modello (M3).
-
-export async function getInventoryItem(retailerId: string, productId: string) {
-  const db = await getDb();
-  if (!db) return undefined;
-  const result = await db
-    .select()
-    .from(inventory)
-    .where(and(eq(inventory.retailerId, retailerId), eq(inventory.productId, productId)))
-    .limit(1);
-  return result[0];
-}
-
-export async function upsertInventory(data: InsertInventory) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const existing = await getInventoryItem(data.retailerId, data.productId);
-  if (existing) {
-    await db
-      .update(inventory)
-      .set({ ...data, lastUpdated: new Date() })
-      .where(eq(inventory.id, existing.id));
-    return existing.id;
-  } else {
-    const [row] = await db.insert(inventory).values(data).returning({ id: inventory.id });
-    return row.id;
-  }
-}
-
-export async function createStockMovement(data: InsertStockMovement) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const [row] = await db.insert(stockMovements).values(data).returning();
-  return row;
-}
-
 // ============= STOCK MOVEMENTS =============
 
 /**
@@ -849,5 +800,3 @@ export async function getDashboardStats() {
   }
 }
 
-// Re-export per uso interno (es. routers che lookup product dentro getDetails)
-export { inArray };

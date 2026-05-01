@@ -16,7 +16,7 @@ loadEnv();
 
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { inventory, products, retailers } from "../drizzle/schema";
+import { products, retailers } from "../drizzle/schema";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -75,17 +75,12 @@ const productData: ProductRow[] = [
   { oldId: 30008, sku: "TEST-1771360365598", name: "Pane Keto Test", category: "Pane", unitPrice: "5.99", unit: "pz", minStockThreshold: 10, createdAt: "2026-02-17 20:32:45" },
 ];
 
-type InventoryRow = {
-  oldRetailerId: number;
-  oldProductId: number;
-  quantity: number;
-  createdAt: string;
-};
-
-const inventoryData: InventoryRow[] = [
-  { oldRetailerId: 30008, oldProductId: 30005, quantity: 3, createdAt: "2026-02-17 20:05:05" },
-  { oldRetailerId: 30011, oldProductId: 30007, quantity: 3, createdAt: "2026-02-17 20:32:45" },
-];
+// Phase B M2: la tabella `inventory` legacy è stata droppata. Il seed
+// originale popolava 2 righe inventory (oldRetailerId 30008/30011) che
+// sono state migrate da migration 0003 in productBatches placeholder
+// LEGACY-{uuid} su `inventoryByBatch` per le retailer location. Questo
+// seed è ora idempotente e si limita a retailers + products (utile per
+// disaster recovery del progetto Supabase con storia pre-cutover).
 
 async function main() {
   console.log("[seed] Connessione a", databaseUrl!.replace(/:[^:@]+@/, ":***@"));
@@ -137,24 +132,15 @@ async function main() {
   }
   console.log(`[seed] Inseriti ${productData.length} products.`);
 
-  for (const inv of inventoryData) {
-    const retailerUuid = retailerIdMap.get(inv.oldRetailerId);
-    const productUuid = productIdMap.get(inv.oldProductId);
-    if (!retailerUuid || !productUuid) {
-      throw new Error(
-        `[seed] Mapping mancante per inventory: retailer=${inv.oldRetailerId} product=${inv.oldProductId}`,
-      );
-    }
-    const ts = new Date(`${inv.createdAt}Z`);
-    await db.insert(inventory).values({
-      retailerId: retailerUuid,
-      productId: productUuid,
-      quantity: inv.quantity,
-      createdAt: ts,
-      lastUpdated: ts,
-    });
-  }
-  console.log(`[seed] Inseriti ${inventoryData.length} inventory rows.`);
+  // Phase B M2: nessun seed di inventory legacy (tabella droppata).
+  // Per popolare lotti reali usare l'UI (`/products/:id` → "+ Aggiungi
+  // lotto") o uno script Phase B dedicato (TODO M2+).
+
+  // Suppress unused warnings for legacy mapping arrays (non serve più
+  // creare inventory rows; le mappe restano disponibili per future
+  // estensioni che vorranno usare oldId).
+  void retailerIdMap;
+  void productIdMap;
 
   await client.end();
   console.log("[seed] Done.");

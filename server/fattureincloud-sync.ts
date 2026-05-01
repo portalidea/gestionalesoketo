@@ -183,100 +183,39 @@ async function syncProducts(
 
 /**
  * Sincronizza inventario da Fatture in Cloud
+ *
+ * Phase B M2: stub no-op. La tabella `inventory` legacy è stata
+ * droppata e gli helper `db.upsertInventory` rimossi. Il refactor
+ * single-tenant FiC arriverà in Milestone 3 e introdurrà mapping su
+ * `inventoryByBatch` + lotti FEFO.
  */
 async function syncInventory(
-  retailerId: string,
-  companyId: number,
-  accessToken: string
+  _retailerId: string,
+  _companyId: number,
+  _accessToken: string,
 ): Promise<number> {
-  const ficProducts = await fetchProducts(companyId, accessToken);
-  let synced = 0;
-
-  for (const ficProduct of ficProducts) {
-    try {
-      if (!ficProduct.stock?.current) continue;
-
-      // Trova prodotto interno
-      const internalProduct = await db.getProductBySku(
-        ficProduct.code || `FIC-${ficProduct.id}`
-      );
-      if (!internalProduct) continue;
-
-      // Upsert inventario
-      await db.upsertInventory({
-        retailerId,
-        productId: internalProduct.id,
-        quantity: ficProduct.stock.current,
-      });
-
-      synced++;
-    } catch (error) {
-      console.error(`[Sync] Failed to sync inventory for ${ficProduct.code}:`, error);
-    }
-  }
-
-  return synced;
+  console.warn(
+    "[Sync] syncInventory disabled until M3 FiC refactor (single-tenant + lots)",
+  );
+  return 0;
 }
 
 /**
  * Sincronizza movimenti stock da documenti
+ *
+ * Phase B M2: stub no-op. Stesso motivo di `syncInventory`.
  */
 async function syncMovements(
-  retailerId: string,
-  companyId: number,
-  accessToken: string,
-  startDate: string,
-  endDate: string
+  _retailerId: string,
+  _companyId: number,
+  _accessToken: string,
+  _startDate: string,
+  _endDate: string,
 ): Promise<number> {
-  const documents = await fetchDocuments(companyId, accessToken, startDate, endDate);
-  const movements = extractStockMovementsFromDocuments(documents, retailerId);
-  let synced = 0;
-
-  for (const movement of movements) {
-    try {
-      // Trova prodotto
-      const product = await db.getProductBySku(movement.productCode);
-      if (!product) continue;
-
-      // Trova inventario
-      const inventoryItem = await db.getInventoryItem(retailerId, product.id);
-      if (!inventoryItem) continue;
-
-      // Calcola nuova quantità
-      const previousQty = inventoryItem.quantity;
-      const newQty =
-        movement.type === "IN"
-          ? previousQty + movement.quantity
-          : previousQty - movement.quantity;
-
-      // Registra movimento
-      await db.createStockMovement({
-        inventoryId: inventoryItem.id,
-        retailerId,
-        productId: product.id,
-        type: movement.type,
-        quantity: movement.quantity,
-        previousQuantity: previousQty,
-        newQuantity: newQty,
-        sourceDocument: movement.documentNumber,
-        sourceDocumentType: movement.documentType,
-        notes: `Sincronizzato da Fatture in Cloud`,
-      });
-
-      // Aggiorna inventario
-      await db.upsertInventory({
-        retailerId,
-        productId: product.id,
-        quantity: newQty,
-      });
-
-      synced++;
-    } catch (error) {
-      console.error(`[Sync] Failed to sync movement for ${movement.productCode}:`, error);
-    }
-  }
-
-  return synced;
+  console.warn(
+    "[Sync] syncMovements disabled until M3 FiC refactor (single-tenant + lots)",
+  );
+  return 0;
 }
 
 /**

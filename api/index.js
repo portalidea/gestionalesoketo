@@ -37364,7 +37364,7 @@ var init_postgres_js = __esm({
 });
 
 // drizzle/schema.ts
-var userRoleEnum, stockMovementTypeEnum, alertTypeEnum, alertStatusEnum, syncStatusEnum, locationTypeEnum, users, retailers, products, producers, productBatches, locations, inventoryByBatch, inventory, stockMovements, alerts, syncLogs;
+var userRoleEnum, stockMovementTypeEnum, alertTypeEnum, alertStatusEnum, syncStatusEnum, locationTypeEnum, users, retailers, products, producers, productBatches, locations, inventoryByBatch, stockMovements, alerts, syncLogs;
 var init_schema2 = __esm({
   "drizzle/schema.ts"() {
     "use strict";
@@ -37375,7 +37375,9 @@ var init_schema2 = __esm({
       "IN",
       "OUT",
       "ADJUSTMENT",
-      "RECEIPT_FROM_PRODUCER"
+      "RECEIPT_FROM_PRODUCER",
+      "TRANSFER",
+      "EXPIRY_WRITE_OFF"
     ]);
     alertTypeEnum = pgEnum("alert_type", ["LOW_STOCK", "EXPIRING", "EXPIRED"]);
     alertStatusEnum = pgEnum("alert_status", ["ACTIVE", "ACKNOWLEDGED", "RESOLVED"]);
@@ -37498,16 +37500,6 @@ var init_schema2 = __esm({
         check("inventoryByBatch_quantity_nonneg", sql`${t2.quantity} >= 0`)
       ]
     );
-    inventory = pgTable("inventory", {
-      id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-      retailerId: uuid("retailerId").notNull(),
-      productId: uuid("productId").notNull(),
-      quantity: integer("quantity").default(0).notNull(),
-      expirationDate: timestamp("expirationDate", { withTimezone: true }),
-      batchNumber: varchar("batchNumber", { length: 100 }),
-      lastUpdated: timestamp("lastUpdated", { withTimezone: true }).defaultNow().notNull(),
-      createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull()
-    });
     stockMovements = pgTable("stockMovements", {
       id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
       inventoryId: uuid("inventoryId"),
@@ -37520,6 +37512,7 @@ var init_schema2 = __esm({
       sourceDocument: varchar("sourceDocument", { length: 255 }),
       sourceDocumentType: varchar("sourceDocumentType", { length: 50 }),
       notes: text("notes"),
+      notesInternal: text("notesInternal"),
       timestamp: timestamp("timestamp", { withTimezone: true }).defaultNow().notNull(),
       createdBy: uuid("createdBy"),
       batchId: uuid("batchId").references(() => productBatches.id, {
@@ -37646,7 +37639,6 @@ async function deleteRetailer(id) {
   await db.transaction(async (tx) => {
     await tx.delete(alerts).where(eq(alerts.retailerId, id));
     await tx.delete(stockMovements).where(eq(stockMovements.retailerId, id));
-    await tx.delete(inventory).where(eq(inventory.retailerId, id));
     await tx.delete(syncLogs).where(eq(syncLogs.retailerId, id));
     await tx.delete(retailers).where(eq(retailers.id, id));
   });
@@ -37917,30 +37909,6 @@ async function getWarehouseStockOverview() {
   return Array.from(byProduct.values()).sort(
     (a, b2) => a.productName.localeCompare(b2.productName)
   );
-}
-async function getInventoryItem(retailerId, productId) {
-  const db = await getDb();
-  if (!db) return void 0;
-  const result = await db.select().from(inventory).where(and(eq(inventory.retailerId, retailerId), eq(inventory.productId, productId))).limit(1);
-  return result[0];
-}
-async function upsertInventory(data) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const existing = await getInventoryItem(data.retailerId, data.productId);
-  if (existing) {
-    await db.update(inventory).set({ ...data, lastUpdated: /* @__PURE__ */ new Date() }).where(eq(inventory.id, existing.id));
-    return existing.id;
-  } else {
-    const [row] = await db.insert(inventory).values(data).returning({ id: inventory.id });
-    return row.id;
-  }
-}
-async function createStockMovement(data) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const [row] = await db.insert(stockMovements).values(data).returning();
-  return row;
 }
 async function getStockMovementsByRetailer(retailerId, limit = 100) {
   const db = await getDb();
@@ -43606,27 +43574,6 @@ async function fetchProducts(companyId, accessToken) {
     throw error46;
   }
 }
-async function fetchDocuments(companyId, accessToken, startDate, endDate, documentType) {
-  try {
-    const params = new URLSearchParams({
-      date_from: startDate,
-      date_to: endDate
-    });
-    if (documentType) {
-      params.append("type", documentType);
-    }
-    const response = await makeAuthenticatedRequest(
-      companyId,
-      `/issued_documents?${params.toString()}`,
-      accessToken,
-      "GET"
-    );
-    return response.data || [];
-  } catch (error46) {
-    console.error("[FattureInCloud API] Failed to fetch documents:", error46);
-    throw error46;
-  }
-}
 function mapFICProductToInternal(ficProduct) {
   return {
     sku: ficProduct.code || `FIC-${ficProduct.id}`,
@@ -43637,37 +43584,6 @@ function mapFICProductToInternal(ficProduct) {
     unit: ficProduct.measure_unit || null,
     fattureInCloudId: ficProduct.id.toString()
   };
-}
-function extractStockMovementsFromDocuments(documents, _retailerId) {
-  const movements = [];
-  for (const doc of documents) {
-    const movementType = determineMovementType(doc.type);
-    if (!movementType) continue;
-    for (const item of doc.items || []) {
-      movements.push({
-        productCode: item.code,
-        productName: item.name,
-        quantity: Math.abs(item.quantity),
-        type: movementType,
-        documentType: doc.type,
-        documentNumber: doc.numeration,
-        date: doc.date
-      });
-    }
-  }
-  return movements;
-}
-function determineMovementType(documentType) {
-  const incomingTypes = ["purchase_order", "delivery_note_in", "order"];
-  const outgoingTypes = ["invoice", "delivery_note", "credit_note", "receipt"];
-  const normalizedType = documentType.toLowerCase();
-  if (incomingTypes.some((t2) => normalizedType.includes(t2))) {
-    return "IN";
-  }
-  if (outgoingTypes.some((t2) => normalizedType.includes(t2))) {
-    return "OUT";
-  }
-  return null;
 }
 async function testConnection(companyId, accessToken) {
   try {
@@ -43686,10 +43602,6 @@ var init_fattureincloud_api = __esm({
 });
 
 // server/fattureincloud-sync.ts
-var fattureincloud_sync_exports = {};
-__export(fattureincloud_sync_exports, {
-  syncRetailerData: () => syncRetailerData
-});
 async function syncRetailerData(retailerId) {
   const result = {
     success: false,
@@ -43801,63 +43713,17 @@ async function syncProducts(retailerId, companyId, accessToken) {
   }
   return synced;
 }
-async function syncInventory(retailerId, companyId, accessToken) {
-  const ficProducts = await fetchProducts(companyId, accessToken);
-  let synced = 0;
-  for (const ficProduct of ficProducts) {
-    try {
-      if (!ficProduct.stock?.current) continue;
-      const internalProduct = await getProductBySku(
-        ficProduct.code || `FIC-${ficProduct.id}`
-      );
-      if (!internalProduct) continue;
-      await upsertInventory({
-        retailerId,
-        productId: internalProduct.id,
-        quantity: ficProduct.stock.current
-      });
-      synced++;
-    } catch (error46) {
-      console.error(`[Sync] Failed to sync inventory for ${ficProduct.code}:`, error46);
-    }
-  }
-  return synced;
+async function syncInventory(_retailerId, _companyId, _accessToken) {
+  console.warn(
+    "[Sync] syncInventory disabled until M3 FiC refactor (single-tenant + lots)"
+  );
+  return 0;
 }
-async function syncMovements(retailerId, companyId, accessToken, startDate, endDate) {
-  const documents = await fetchDocuments(companyId, accessToken, startDate, endDate);
-  const movements = extractStockMovementsFromDocuments(documents, retailerId);
-  let synced = 0;
-  for (const movement of movements) {
-    try {
-      const product = await getProductBySku(movement.productCode);
-      if (!product) continue;
-      const inventoryItem = await getInventoryItem(retailerId, product.id);
-      if (!inventoryItem) continue;
-      const previousQty = inventoryItem.quantity;
-      const newQty = movement.type === "IN" ? previousQty + movement.quantity : previousQty - movement.quantity;
-      await createStockMovement({
-        inventoryId: inventoryItem.id,
-        retailerId,
-        productId: product.id,
-        type: movement.type,
-        quantity: movement.quantity,
-        previousQuantity: previousQty,
-        newQuantity: newQty,
-        sourceDocument: movement.documentNumber,
-        sourceDocumentType: movement.documentType,
-        notes: `Sincronizzato da Fatture in Cloud`
-      });
-      await upsertInventory({
-        retailerId,
-        productId: product.id,
-        quantity: newQty
-      });
-      synced++;
-    } catch (error46) {
-      console.error(`[Sync] Failed to sync movement for ${movement.productCode}:`, error46);
-    }
-  }
-  return synced;
+async function syncMovements(_retailerId, _companyId, _accessToken, _startDate, _endDate) {
+  console.warn(
+    "[Sync] syncMovements disabled until M3 FiC refactor (single-tenant + lots)"
+  );
+  return 0;
 }
 async function refreshTokenForRetailer(retailer) {
   const config2 = getOAuthConfig();
@@ -44084,6 +43950,14 @@ var init_fattureincloud_routes = __esm({
       }
     });
     fattureincloud_routes_default = router;
+  }
+});
+
+// node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/dist/index.mjs
+var init_dist = __esm({
+  "node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/dist/index.mjs"() {
+    init_tracked_Blz8XOf1();
+    init_initTRPC_CB9uBez5();
   }
 });
 
@@ -56200,7 +56074,7 @@ function templateLiteral(parts, params) {
     ...util_exports.normalizeParams(params)
   });
 }
-function lazy(getter) {
+function lazy2(getter) {
   return new ZodLazy({
     type: "lazy",
     getter
@@ -56250,7 +56124,7 @@ function _instanceof(cls, params = {
   return inst;
 }
 function json2(params) {
-  const jsonSchema = lazy(() => {
+  const jsonSchema = lazy2(() => {
     return union2([string2(params), number2(), boolean3(), _null3(), array(jsonSchema), record(string2(), jsonSchema)]);
   });
   return jsonSchema;
@@ -57022,7 +56896,7 @@ __export(external_exports, {
   jwt: () => jwt,
   keyof: () => keyof,
   ksuid: () => ksuid2,
-  lazy: () => lazy,
+  lazy: () => lazy2,
   length: () => _length,
   literal: () => literal,
   locales: () => locales_exports,
@@ -57145,14 +57019,6 @@ var init_const = __esm({
     ONE_YEAR_MS = 1e3 * 60 * 60 * 24 * 365;
     UNAUTHED_ERR_MSG = "Please login (10001)";
     NOT_ADMIN_ERR_MSG = "You do not have required permission (10002)";
-  }
-});
-
-// node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/dist/index.mjs
-var init_dist = __esm({
-  "node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/dist/index.mjs"() {
-    init_tracked_Blz8XOf1();
-    init_initTRPC_CB9uBez5();
   }
 });
 
@@ -80129,6 +79995,7 @@ var uuid5, userRoleSchema, dateString, appRouter;
 var init_routers = __esm({
   "server/routers.ts"() {
     "use strict";
+    init_dist();
     init_zod();
     init_systemRouter();
     init_trpc();
@@ -80521,9 +80388,18 @@ var init_routers = __esm({
       // Mantenuta in M1 con shape attuale per non rompere
       // FattureInCloudSync.tsx (UI già nascosta in produzione).
       sync: router2({
-        syncRetailer: writerProcedure.input(external_exports.object({ retailerId: uuid5 })).mutation(async ({ input }) => {
-          const { syncRetailerData: syncRetailerData2 } = await Promise.resolve().then(() => (init_fattureincloud_sync(), fattureincloud_sync_exports));
-          return await syncRetailerData2(input.retailerId);
+        /**
+         * Phase B M2: disabilitata in attesa del refactor FiC single-tenant
+         * (Milestone 3). La tabella `inventory` legacy è stata droppata e gli
+         * helper `db.upsertInventory`/`getInventoryItem` rimossi: una sync ora
+         * fallirebbe silenziosamente. Risposta 412 esplicita per chiunque la
+         * chiamasse via UI residua o API direct.
+         */
+        syncRetailer: writerProcedure.input(external_exports.object({ retailerId: uuid5 })).mutation(async () => {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Sincronizzazione FiC temporaneamente disabilitata \u2014 refactor architetturale in corso (Milestone 3)"
+          });
         }),
         getAuthUrl: writerProcedure.input(external_exports.object({ retailerId: uuid5 })).query(async ({ input }) => {
           const { getAuthorizationUrl: getAuthorizationUrl2, getOAuthConfig: getOAuthConfig2 } = await Promise.resolve().then(() => (init_fattureincloud_oauth(), fattureincloud_oauth_exports));
