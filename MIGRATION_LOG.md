@@ -8,6 +8,129 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-05-01 — 🐞 Bugfix M2.0.1 — write-off silent failure
+
+### Sintomo
+
+Click su "Scarta" (XCircle) di un lotto in `/retailers/:id`,
+`/warehouse` o `/products/:id` apriva il dialog correttamente,
+permetteva di inserire quantità + note, ma la conferma non
+produceva alcun effetto: nessun toast (né success né error),
+nessun network request, nessun record `EXPIRY_WRITE_OFF`
+creato in `stockMovements`, stock invariato. Sintomo identico
+nei 3 punti UI.
+
+Diagnosi iniziale dell'utente: ipotizzato `productId NOT NULL`
+violation nell'INSERT. Workaround SQL manuale (con `productId`
+esplicito) funzionante.
+
+### Causa reale
+
+**Bug strutturale shadcn/Radix UI**, non backend. L'INSERT su
+`stockMovements` con `productId` valido **non veniva mai
+eseguito** perché la mutation tRPC non partiva.
+
+Tutti e 3 i dialoghi write-off usavano:
+
+```tsx
+<AlertDialog>
+  <AlertDialogContent>
+    <form onSubmit={submitWriteOff}>
+      <AlertDialogFooter>
+        <AlertDialogCancel>Annulla</AlertDialogCancel>
+        <AlertDialogAction type="submit">Scarta</AlertDialogAction>
+      </AlertDialogFooter>
+    </form>
+  </AlertDialogContent>
+</AlertDialog>
+```
+
+`AlertDialogPrimitive.Action` di Radix UI ha un onClick interno
+che invoca `setOpen(false)`. Quando `open` diventa `false`,
+React unmount-a `AlertDialogContent` (e quindi il `<form>`)
+**prima** che l'evento `submit` nativo si propaghi dal
+button al form. Risultato: `submitWriteOff` non viene mai
+chiamato, `writeOffMutation.mutate(...)` mai invocato.
+
+L'inganno: il workaround SQL manuale funzionava e suggeriva
+un problema su `productId`, ma in realtà il record giusto
+sarebbe stato creato dal backend (la guard `batch?.productId`
+con FK certificata avrebbe popolato correttamente). Solo che
+il backend non veniva mai chiamato.
+
+### Fix
+
+**UI (3 file)**: sostituito `<AlertDialog>` con `<Dialog>` per
+i form write-off, e `<AlertDialogAction type="submit">` con
+`<Button type="submit">` standard. Radix Dialog (vs Alert) non
+gestisce auto-dismiss su button click → il submit nativo del
+browser viene processato regolarmente.
+
+`<AlertDialog>` mantenuto solo per le conferme **yes/no senza
+form** (delete retailer, delete producer, delete batch — tutti
+quelli usano `onClick={() => mutation.mutate(...)}` non
+`type="submit"`).
+
+**Backend cleanup (db.ts)**:
+- `expiryWriteOff`: rimosso fallback nonsense
+  `productId: batch?.productId ?? input.batchId` (un batchId
+  come fallback per productId è semanticamente sbagliato).
+  Sostituito con guard `if (!batch) throw "Lotto non trovato"`
+  + uso diretto `batch.productId`.
+- `transferBatchToRetailer`: aggiunto stesso guard. Cambiato
+  `productId: input.productId` → `productId: batch.productId`
+  (fonte di verità: il batch via FK, non l'input del caller
+  che potrebbe in teoria mismatchare).
+
+### File modificati
+
+```
+client/src/pages/RetailerDetail.tsx   write-off dialog → Dialog
+client/src/pages/Warehouse.tsx        write-off dialog → Dialog
+                                       + rimosso import AlertDialog unused
+client/src/pages/ProductDetail.tsx    write-off dialog → Dialog
+                                       (mantenuto AlertDialog su
+                                        delete prodotto/lotto)
+server/db.ts                          guard `if (!batch) throw` su
+                                       expiryWriteOff +
+                                       transferBatchToRetailer
+```
+
+### Verifica funzionale (da eseguire in browser autenticato)
+
+1. Login admin su `gestionale.soketo.it`
+2. `/retailers/<un retailer con lotti>` → tab Inventario →
+   espandi prodotto → click XCircle su lotto → dialog si apre
+3. Inserisci quantità ≤ stock → "Scarta" → atteso:
+   - Dialog si chiude
+   - Toast verde "Lotto scartato"
+   - Stock decrementato in `inventoryByBatch`
+   - Tab Movimenti retailer mostra nuovo `EXPIRY_WRITE_OFF`
+     con badge rosso e `Da {retailer location}`
+4. Test errore: ripetere con quantità > stock disponibile →
+   atteso toast rosso con messaggio
+   "Stock insufficiente: disponibili X, richiesti Y"
+5. Test su `/warehouse` (lotto centrale scaduto < 7gg) e
+   `/products/<id>` sezione Lotti: stesso flow, stesso esito
+   atteso
+
+### Lezione
+
+Per form complessi dentro un dialog usare sempre `<Dialog>`
+shadcn (Radix `Dialog`), non `<AlertDialog>` (Radix
+`AlertDialog`). `AlertDialog` è destinato a conferme yes/no
+con `<AlertDialogAction onClick={...}>` (no form, no submit).
+Mescolare `<form onSubmit>` con `<AlertDialogAction
+type="submit">` produce silent failure.
+
+### Commit
+
+```
+a6e8721 fix(m2): write-off dialog form submit + db guards
+```
+
+---
+
 ## 2026-05-01 — 🎯 Phase B Milestone 2 — COMPLETATA
 
 ### TL;DR
