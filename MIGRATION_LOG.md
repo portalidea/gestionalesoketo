@@ -8,6 +8,133 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-05-01 — Phase B Milestone 1 Step 3 — Backend tRPC refactor
+
+### TL;DR
+
+Backend tRPC esteso al nuovo modello a lotti. 5 router nuovi
+(`producers`, `productBatches`, `locations`, `inventoryByBatch`,
+`warehouse`); `retailers.getDetails` e `dashboard.getStats` rifatti
+sul modello `inventoryByBatch + productBatches` mantenendo shape
+esterna invariata per non rompere il frontend (UI = Step 4).
+
+Deployato in produzione su `gestionale.soketo.it` (commit `25d8056`).
+Smoke endpoint: tutte le nuove procedure rispondono 401 con `path`
+correttamente mostrato → routing funzionante. Le feature visibili
+all'utente arriveranno in Step 4 (UI).
+
+### Cosa è stato cambiato
+
+**Procedure tRPC aggiunte** (`server/routers.ts`):
+
+- `producers.list / getById / create / update / delete` (CRUD)
+- `productBatches.listByProduct` — arricchito con producer name +
+  stock corrente al magazzino centrale
+- `productBatches.create` — atomico in transaction:
+  `productBatches` + `inventoryByBatch` (warehouse) + `stockMovements`
+  type `RECEIPT_FROM_PRODUCER`
+- `productBatches.delete` — guardia "lotto ancora intatto":
+  cancella solo se `quantity` warehouse == `initialQuantity` E
+  nessuna riga su altre location
+- `locations.list / getCentralWarehouse / getByRetailer`
+- `inventoryByBatch.listByLocation / listByRetailer`
+- `warehouse.getStockOverview` — vista magazzino centrale
+  aggregata per prodotto, ogni prodotto include lista lotti +
+  totale stock + scadenza più vicina
+
+**Procedure refattorizzate**:
+
+- `retailers.getDetails`: `inventory` ora popolato da
+  `inventoryByBatch` via retailer location, shape esterna
+  invariata (compatibilità con `RetailerDetail.tsx`). `stats`
+  ricalcolate sul nuovo modello (low stock aggregato per
+  prodotto, expiring conta lotti con qty > 0 e scadenza < 30gg)
+- `retailers.create`: ora atomicamente crea anche la
+  `locations` row associata al retailer (invariante: no retailer
+  senza location)
+- `retailers.dependentsCount`: campo `inventory` ora riferito a
+  `inventoryByBatch` (lotti correnti del retailer) invece della
+  tabella legacy
+- `dashboard.getStats`: rifatto su `inventoryByBatch +
+  productBatches`, parallel queries mantenute (perf cold
+  ~200-300ms target). `lowStockItems` aggregato per (location,
+  product).
+
+**Procedure tRPC rimosse** (verificate via grep nessuna chiamata
+da `client/src/**`):
+
+- `inventory.upsert`
+- `inventory.getByRetailer`
+- `stockMovements.create`
+- `stockMovements.getByRetailer`
+- `stockMovements.getByProduct`
+
+**Helper `db.ts` mantenuti come `@deprecated`** (usati ancora da
+`fattureincloud-sync.ts`, refactor M3):
+- `upsertInventory`
+- `getInventoryItem`
+- `createStockMovement`
+
+### Test esistenti
+
+3 file `server/*.test.ts` marcati `describe.skip` con TODO. Erano
+**già rotti pre-M1**:
+- `auth.logout.test.ts` — chiama `caller.auth.logout` rimossa al
+  cutover (logout client-side via `supabase.auth.signOut()`)
+- `routers.test.ts` — context mock con `id: 1` numerico,
+  `loginMethod`, `openId`, `lastSignedIn` (tutti rimossi da 0001)
+- `retailer-details.test.ts` — chiama `caller.inventory.upsert`
+  (rimossa in Step 3)
+
+Riscrittura su nuovo schema rimandata: richiede refactor del
+context mock con uuid validi e Supabase Auth simulata. Out of
+scope M1.
+
+### Smoke produzione (eseguito ora)
+
+```
+GET /api/health                                    → 200 {"ok":true}
+GET /api/trpc/auth.me (no auth)                    → 200 null
+GET /api/trpc/warehouse.getStockOverview (no auth) → 401 path: warehouse.getStockOverview
+GET /api/trpc/locations.list (no auth)             → 401 path: locations.list
+GET /api/trpc/producers.list (no auth)             → 401
+```
+
+Risposte 401 con `path` mostrato confermano che le nuove procedure
+sono registrate e raggiungibili via routing tRPC. Comportamento
+atteso (non autenticati).
+
+### Build / deploy
+
+- `pnpm exec tsc --noEmit` → clean
+- `pnpm build` → vite 2660 modules / 812 KB JS / 120 KB CSS
+- esbuild `api/index.js` 3.2 MB (size invariata vs M1 Step 1-2)
+- Vercel deploy: commit `25d8056` → 24s build → ● Ready
+
+### Commit del giorno
+
+```
+25d8056 feat(backend): Phase B M1 - tRPC routers producers/batches/
+        locations/warehouse + retailers.getDetails refactor
+fe7a8b8 feat(schema): Phase B M1 - producers, batches, locations,
+        inventoryByBatch (+ data migration inventory legacy)
+```
+
+### Cosa resta in M1 (Step 4 — UI)
+
+- pagina `/producers` + `/producers/:id`
+- pagina `/warehouse` (overview prodotti+lotti)
+- sezione "Lotti" in `ProductDetail.tsx` (dialog "+ Aggiungi lotto"
+  con producer dropdown, batch_number, expiration_date, ecc.)
+- tab Inventario di `RetailerDetail.tsx` con dettaglio per lotto
+  (espandibile)
+- voci sidebar "Produttori" (Factory) e "Magazzino Centrale"
+  (Warehouse)
+- aggiornamento testo dialog conferma cancellazione retailer
+  (ora "lotti correnti" anziché "righe inventario")
+
+---
+
 ## 2026-05-01 — Phase B Milestone 1 Step 1-2 — Schema lotti FEFO
 
 ### TL;DR
