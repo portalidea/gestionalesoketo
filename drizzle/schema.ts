@@ -5,6 +5,8 @@ import {
   date,
   index,
   integer,
+  jsonb,
+  numeric,
   pgEnum,
   pgTable,
   text,
@@ -40,6 +42,12 @@ export const alertTypeEnum = pgEnum("alert_type", ["LOW_STOCK", "EXPIRING", "EXP
 export const alertStatusEnum = pgEnum("alert_status", ["ACTIVE", "ACKNOWLEDGED", "RESOLVED"]);
 export const syncStatusEnum = pgEnum("sync_status", ["SUCCESS", "FAILED", "PARTIAL"]);
 export const locationTypeEnum = pgEnum("location_type", ["central_warehouse", "retailer"]);
+export const proformaQueueStatusEnum = pgEnum("proforma_queue_status", [
+  "pending",
+  "processing",
+  "success",
+  "failed",
+]);
 
 /**
  * Profilo applicativo dell'operatore SoKeto.
@@ -80,6 +88,12 @@ export const retailers = pgTable("retailers", {
   lastSyncAt: timestamp("lastSyncAt", { withTimezone: true }),
   syncEnabled: integer("syncEnabled").default(0).notNull(),
   notes: text("notes"),
+  // M3: pacchetto commerciale assegnato (NULL = blocca generazione proforma)
+  pricingPackageId: uuid("pricingPackageId").references(() => pricingPackages.id, {
+    onDelete: "set null",
+  }),
+  // M3: ID cliente in anagrafica FiC single-tenant (NULL = blocca generazione proforma)
+  ficClientId: integer("ficClientId"),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -107,6 +121,9 @@ export const products = pgTable("products", {
   minStockThreshold: integer("minStockThreshold").default(10),
   expiryWarningDays: integer("expiryWarningDays").default(30),
   imageUrl: text("imageUrl"),
+  // M3: aliquota IVA italiana applicata al prodotto. CHECK enforced lato DB
+  // su valori 4/5/10/22. Default 10% (alimentari), 22% per birre/bevande.
+  vatRate: numeric("vatRate", { precision: 5, scale: 2 }).default("10.00").notNull(),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -277,6 +294,9 @@ export const stockMovements = pgTable("stockMovements", {
   toLocationId: uuid("toLocationId").references(() => locations.id, {
     onDelete: "set null",
   }),
+  // M3: riferimento proforma generata su FiC. NULL se ancora in coda o nessuna.
+  ficProformaId: integer("ficProformaId"),
+  ficProformaNumber: varchar("ficProformaNumber", { length: 50 }),
 });
 
 export type StockMovement = typeof stockMovements.$inferSelect;
@@ -322,3 +342,92 @@ export const syncLogs = pgTable("syncLogs", {
 
 export type SyncLog = typeof syncLogs.$inferSelect;
 export type InsertSyncLog = typeof syncLogs.$inferInsert;
+
+/**
+ * Pricing packages — pacchetti commerciali (Phase B M3).
+ * Ogni retailer è assegnato a un pacchetto che determina lo sconto fisso
+ * applicato al prezzo base di tutti i prodotti per la generazione proforma.
+ * Modify admin-only via RLS (leva commerciale strategica).
+ */
+export const pricingPackages = pgTable(
+  "pricingPackages",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    name: varchar("name", { length: 100 }).notNull().unique(),
+    discountPercent: numeric("discountPercent", { precision: 5, scale: 2 }).notNull(),
+    description: text("description"),
+    sortOrder: integer("sortOrder").default(0).notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    check(
+      "pricingPackages_discount_range",
+      sql`${t.discountPercent} >= 0 AND ${t.discountPercent} <= 100`,
+    ),
+  ],
+);
+
+export type PricingPackage = typeof pricingPackages.$inferSelect;
+export type InsertPricingPackage = typeof pricingPackages.$inferInsert;
+
+/**
+ * System integrations — token OAuth e config delle integrazioni a livello
+ * sistema (singleton per type). Phase B M3 introduce single-tenant FiC:
+ * type='fattureincloud' con i token dell'account E-Keto Food Srls.
+ * RLS admin-only (contiene access/refresh token).
+ */
+export const systemIntegrations = pgTable("systemIntegrations", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  type: varchar("type", { length: 50 }).notNull().unique(),
+  accessToken: text("accessToken"),
+  refreshToken: text("refreshToken"),
+  expiresAt: timestamp("expiresAt", { withTimezone: true }),
+  accountId: varchar("accountId", { length: 100 }),
+  scopes: text("scopes"),
+  metadata: jsonb("metadata").default(sql`'{}'::jsonb`).notNull(),
+  createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type SystemIntegration = typeof systemIntegrations.$inferSelect;
+export type InsertSystemIntegration = typeof systemIntegrations.$inferInsert;
+
+/**
+ * Proforma queue — coda retry per generazione proforma FiC fallite (M3).
+ * Quando una chiamata FiC API fallisce durante un TRANSFER, il movement
+ * procede comunque e la richiesta viene salvata qui. Retry MANUALE da UI
+ * /movements (no cron Vercel in M3).
+ *
+ * ON DELETE CASCADE: se il transfer movement viene cancellato, la riga
+ * di queue diventa orfana → si cancella insieme.
+ */
+export const proformaQueue = pgTable(
+  "proformaQueue",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    transferMovementId: uuid("transferMovementId")
+      .notNull()
+      .references(() => stockMovements.id, { onDelete: "cascade" }),
+    payload: jsonb("payload").notNull(),
+    status: proformaQueueStatusEnum("status").default("pending").notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    maxAttempts: integer("maxAttempts").default(5).notNull(),
+    lastError: text("lastError"),
+    lastAttemptAt: timestamp("lastAttemptAt", { withTimezone: true }),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    check(
+      "proformaQueue_attempts_nonneg",
+      sql`${t.attempts} >= 0 AND ${t.attempts} <= ${t.maxAttempts}`,
+    ),
+    index("proformaQueue_status_idx")
+      .on(t.status)
+      .where(sql`${t.status} IN ('pending', 'failed')`),
+  ],
+);
+
+export type ProformaQueue = typeof proformaQueue.$inferSelect;
+export type InsertProformaQueue = typeof proformaQueue.$inferInsert;
