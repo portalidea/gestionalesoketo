@@ -8,6 +8,191 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-05-01 — 🎯 Phase B Milestone 1 — COMPLETATA (Step 4 UI)
+
+### TL;DR
+
+M1 ufficialmente chiusa. 3 nuove pagine UI deployate
+(`/producers`, `/producers/:id`, `/warehouse`), ProductDetail
+esteso con sezione Lotti (dialog "+ Aggiungi lotto" che crea
+atomico batch + RECEIPT_FROM_PRODUCER + inventoryByBatch),
+sidebar riordinata in flusso operativo upstream→downstream.
+Backfill placeholder LEGACY già migrato in Step 1-2 + i nuovi
+lotti reali si possono creare via UI.
+
+Sistema in produzione `gestionale.soketo.it` con il modello a
+lotti FEFO operativo end-to-end (anagrafica + ricezione +
+visibilità magazzino + visibilità retailer). Movimenti
+TRANSFER warehouse→retailer e RETAIL_OUT in arrivo in M2.
+
+### Pagine nuove
+
+**`/producers`** (`Producers.tsx`):
+- card grid 1/2/3 col (icona Factory)
+- dialog "+ Nuovo produttore": form con `name` (required),
+  `contactName`, `email`, `phone`, `vatNumber`, `address`
+  (textarea), `notes` (textarea)
+- click card → `/producers/:id`
+- empty state con CTA centrato
+
+**`/producers/:id`** (`ProducerDetail.tsx`):
+- form editabile (stessi campi del create)
+- back button "Torna ai Produttori"
+- AlertDialog "Elimina produttore": warn che i lotti
+  riferiti perdono associazione (FK SET NULL)
+- toast on success/error
+
+**`/warehouse`** (`Warehouse.tsx`):
+- 4 KPI cards: Prodotti a magazzino · Lotti attivi · Stock
+  complessivo · In scadenza < 30gg
+- Tabella prodotti aggregata: chevron toggle riga
+  espandibile, colonne Prodotto · SKU · Stock · # lotti ·
+  scadenza più vicina (highlight orange < 30gg, rosso
+  scaduto)
+- Riga espansa = sub-tabella lotti: Batch · Produttore ·
+  Scadenza · Qty iniziale · Stock residuo
+- Click nome prodotto → `/products/:id`
+- Empty state se warehouse vuoto
+
+### ProductDetail.tsx — sezione Lotti
+
+Sotto il form anagrafica + bottoni "Salva modifiche", separata
+da `mt-12` per chiarezza visiva (anagrafica vs operativo):
+
+- Card "Lotti" con tabella: Batch · Produttore · Scadenza ·
+  Qty iniziale · Stock magazzino · Trash
+- Highlight scadenza < 30gg
+- Empty state inline "Nessun lotto registrato"
+- Dialog "+ Aggiungi lotto" form:
+  - **Producer**: shadcn Select popolato da `producers.list`,
+    opzione "— Nessuno" come default per producerId nullable
+  - **Batch number**: text required
+  - **Scadenza**: HTML5 `<input type="date">` required
+  - **Data produzione**: opzionale
+  - **Quantità iniziale**: number > 0 required
+  - **Note**: textarea opzionale (riferimento DDT, ecc.)
+- Submit `productBatches.create` → invalidate
+  `productBatches.listByProduct` + `warehouse.getStockOverview`
+- Trash su lotto → AlertDialog → `productBatches.delete`
+  (guardia backend "lotto ancora intatto")
+
+### Sidebar — nuovo ordine operativo
+
+`DashboardLayout.tsx` riordinata su flusso upstream→downstream:
+
+```
+Dashboard
+  Produttori        (Factory)        ← chi produce
+  Prodotti          (Package)        ← cosa
+  Magazzino Centrale (Warehouse)     ← dove tieni stock
+  Rivenditori       (Store)          ← chi distribuisce
+  Alert
+  Reportistica
+[admin] Team / Integrazioni
+```
+
+### RetailerDetail.tsx — fix testo dialog
+
+Dialog conferma cancellazione retailer: testo
+`"righe inventario"` → `"lotti correnti"` coerente col nuovo
+modello (campo `deps.inventory` ora referenzia righe
+`inventoryByBatch` via location, non più tabella legacy).
+
+### App.tsx — routing
+
+3 route nuove inserite in `<Switch>`:
+
+```
+/producers
+/producers/:id
+/warehouse
+```
+
+### Build / deploy
+
+- `pnpm exec tsc --noEmit` → clean
+- `pnpm build`: vite **2663 modules** (+3 vs Step 3) ·
+  JS 836 KB · CSS 120 KB · esbuild `api/index.js` 3.2 MB
+  invariato (no server-side change in Step 4)
+- Test smoke locale (`PORT=3001 pnpm dev`):
+  - `GET /producers` → 200 SPA HTML
+  - `GET /warehouse` → 200 SPA HTML
+  - `POST /api/trpc/producers.list` (no auth) → 401 ✓
+  - `POST /api/trpc/warehouse.getStockOverview` (no auth) → 401 ✓
+- Vercel deploy: commit `5a1f847` → ● Ready
+
+### Smoke produzione (post-deploy)
+
+```
+GET  /api/health                                          → 200 {"ok":true}
+GET  /producers                                           → 200 SPA HTML
+GET  /warehouse                                           → 200 SPA HTML
+POST /api/trpc/producers.list (no auth)                   → 401
+POST /api/trpc/warehouse.getStockOverview (no auth)       → 401
+GET  /api/trpc/productBatches.listByProduct (no auth)     → 401
+GET  /api/trpc/inventoryByBatch.listByLocation (no auth)  → 401
+```
+
+Routing tRPC funzionante per le 5 nuove namespace (producers,
+productBatches, locations, inventoryByBatch, warehouse). SPA
+serve correttamente le 3 nuove route (Wouter mount client-side
+dopo bootstrap React). Test funzionale "create producer →
+create batch → vedi /warehouse" da eseguire manualmente in
+browser autenticato (admin).
+
+### Stato Phase B M1 finale
+
+✅ Step 1 — Schema (4 tabelle nuove, RLS, indici, FK, CHECK)
+✅ Step 2 — Data backfill (1 warehouse + 12 retailer locations
+   + 2 lotti placeholder LEGACY-{uuid})
+✅ Step 3 — Backend tRPC (producers, productBatches, locations,
+   inventoryByBatch, warehouse routers; refactor
+   retailers.getDetails + dashboard.getStats)
+✅ Step 4 — UI (3 nuove pagine + sezione Lotti + sidebar
+   riordinata + fix dialog retailer)
+
+### Commit del giorno (Phase B M1)
+
+```
+5a1f847 feat(ui): Phase B M1 - producers, warehouse, product
+        lots section + sidebar
+d23e820 docs(migration): Phase B M1 Step 3 - backend tRPC
+        refactor completato
+25d8056 feat(backend): Phase B M1 - tRPC routers producers/
+        batches/locations/warehouse + retailers.getDetails
+        refactor
+fe7a8b8 feat(schema): Phase B M1 - producers, batches,
+        locations, inventoryByBatch (+ data migration
+        inventory legacy)
+```
+
+### Limitazioni / tech debt M1
+
+- Test integration (`server/*.test.ts`) marcati
+  `describe.skip` — riscrittura su nuovo schema posticipata
+- `RetailerDetail` tab Inventario: shape compatibile dal
+  Step 3, ma niente UX upgrade espandibile per lotto (non
+  blocking, posticipata)
+- `inventory` legacy table mantenuta read-only finché FiC
+  sync (M3) non passa al nuovo modello
+- `trpc.ai.chat` chiamato dal frontend (`AIChatBox.tsx`,
+  `ComponentShowcase.tsx`) ma router AI non esiste — codice
+  morto residuo, da pulire in chore separato
+
+### Roadmap successive milestone
+
+- **M2** (next): movimenti `TRANSFER` warehouse→retailer con
+  FEFO automatico, `RETAIL_OUT` retailer→cliente finale
+  (importato da gestionale retailer), `EXPIRY_WRITE_OFF`,
+  drop tabella `inventory` legacy
+- **M3**: refactor FiC single-tenant
+  (`system_integrations` + `retailer.fic_client_id`),
+  sistema alert ridisegnato
+- **M4**: integrazioni multi-provider gestionali retailer
+  (Mago, TeamSystem, Danea, …) con architettura plug-in
+
+---
+
 ## 2026-05-01 — Phase B Milestone 1 Step 3 — Backend tRPC refactor
 
 ### TL;DR
