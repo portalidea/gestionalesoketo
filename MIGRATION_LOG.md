@@ -8,6 +8,147 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-05-01 — Phase B Milestone 1 Step 1-2 — Schema lotti FEFO
+
+### TL;DR
+
+Apply in produzione della migration `0003_phase_b_m1_lots.sql`:
+fondamenta dati per il sistema lotti FEFO (Phase B). 4 nuove tabelle
+applicative + estensione `stockMovements`, RLS coerente con pattern
+esistente, data backfill idempotente da `inventory` legacy.
+
+DB di produzione invariato lato dati esistenti, esteso lato schema.
+Nessuna feature utente ancora visibile (UI e backend tRPC arrivano
+in M1 Step 3-4).
+
+### Cosa è stato applicato
+
+**Schema (4 tabelle nuove + 1 enum + estensioni)**:
+
+- `producers` — anagrafica produttori (E-Keto Food + terzi)
+- `productBatches` — lotti per prodotto, scadenza obbligatoria,
+  UNIQUE (productId, batchNumber), CHECK initialQuantity > 0,
+  FK product RESTRICT, FK producer SET NULL, indice composito
+  (productId, expirationDate) per query FEFO
+- `locations` — magazzino centrale singleton + 1 per retailer.
+  CHECK biimplicato (`central ↔ retailerId NULL` / `retailer ↔
+  retailerId NOT NULL`), UNIQUE partial index su `type =
+  'central_warehouse'` (singleton), FK retailer CASCADE
+- `inventoryByBatch` — sostituisce `inventory` per il nuovo modello
+  `(location, batch, quantity)`. UNIQUE (locationId, batchId), CHECK
+  quantity ≥ 0, FK location CASCADE, FK batch RESTRICT
+- enum `location_type` (`'central_warehouse' | 'retailer'`)
+- enum `stock_movement_type` esteso con `RECEIPT_FROM_PRODUCER`
+  (manteniamo IN/OUT/ADJUSTMENT come deprecated; M2 aggiungerà
+  TRANSFER, RETAIL_OUT, EXPIRY_WRITE_OFF)
+- `stockMovements`: `inventoryId` e `retailerId` resi nullable;
+  3 nuovi FK opzionali: `batchId`, `fromLocationId`, `toLocationId`
+  (tutti `ON DELETE SET NULL`)
+
+**RLS** su tutte e 4 le nuove tabelle: pattern identico a 0002
+(SELECT ad authenticated, INSERT/UPDATE/DELETE ad admin|operator
+via `public.current_user_role()`).
+
+**Data backfill** (DO block PL/pgSQL idempotente):
+- 1 location `central_warehouse` "Magazzino SoKeto E-Keto Food"
+- 12 location retailer (1 per ogni retailer attuale in prod)
+- 2 lotti placeholder `LEGACY-{uuid}` con `expirationDate
+  2099-12-31` per le 2 righe `inventory` legacy con quantity > 0
+- 2 righe `inventoryByBatch` corrispondenti
+
+### Verifica post-apply (eseguita ora)
+
+```
+Tabelle public          : 11 (era 7)
+Migrations tracked      : 4 (0000-0003)
+producers count         : 0
+productBatches count    : 2
+locations count         : 13 (1 centrale + 12 retailer)
+inventoryByBatch count  : 2
+enum stock_movement_type: IN, OUT, ADJUSTMENT, RECEIPT_FROM_PRODUCER
+```
+
+Smoke endpoint produzione:
+- `GET /api/health` → 200 `{"ok":true}`
+- `GET /api/trpc/auth.me` (no auth) → 200 `{"result":{"data":{"json":null}}}`
+
+### Backup pre-apply
+
+Bundle salvato in `backups/`:
+- `dump-pre-m1-2026-04-30.sql` (13.7 KB, 25 righe data: 3 users,
+  12 retailers, 8 products, 2 inventory)
+- `dump-pre-m1-2026-04-30-schema.sql` (11.9 KB, concat di
+  0000+0001+0002, self-contained per ricostruzione schema da zero)
+- Snapshot Supabase Dashboard (azione manuale del proprietario)
+
+### Approccio adottato
+
+- Test su DB locale skippato (ambiente locale assente; `DATABASE_URL`
+  punta direttamente al pooler Supabase prod). Apply diretto in
+  produzione con triple safety net (data dump + concat migrations +
+  Supabase snapshot).
+- Migration scritta a mano come per `0002`: drizzle-kit non gestisce
+  RLS, partial unique index con `WHERE`, né DO block per backfill.
+- Journal `_journal.json` aggiornato manualmente (entry idx=3).
+
+### Tool diagnostico aggiunto
+
+`scripts/check-migration-state.ts` — read-only: stampa host
+DATABASE_URL, lista tabelle public, entries `__drizzle_migrations`,
+verifica esistenza tabelle 0003, valori enum stock_movement_type.
+Pattern coerente con `check-trigger.ts`.
+
+### Cosa resta in M1 (Step 3-4)
+
+- **Step 3** — Backend tRPC refactor:
+  - rimuovere procedure legacy non usate dal frontend
+    (`inventory.upsert`, `inventory.getByRetailer`,
+    `stockMovements.create/getByRetailer/getByProduct`; verificate
+    via grep su `client/src/**`, nessuna chiamata)
+  - aggiungere router `producers` (CRUD), `productBatches`
+    (`listByProduct`, `create` con transaction
+    `RECEIPT_FROM_PRODUCER` + `inventoryByBatch` update, `delete`
+    con guardia su quantità centrale = initial)
+  - aggiungere `locations` (`list`, `getCentralWarehouse`,
+    `getByRetailer`)
+  - aggiungere `inventoryByBatch` (`listByLocation`, `listByBatch`,
+    `getStockSummary`)
+  - aggiungere `warehouse.getStockOverview` (vista magazzino)
+  - aggiornare `retailers.getDetails` per leggere
+    `inventoryByBatch` + `productBatches` (scadenze) invece di
+    `inventory` legacy
+  - aggiornare `deleteRetailer` cascade per le nuove tabelle
+  - aggiornare `retailer-details.test.ts`
+
+- **Step 4** — UI:
+  - pagina `/producers` + `/producers/:id`
+  - pagina `/warehouse` (overview prodotti+lotti)
+  - sezione "Lotti" in `ProductDetail.tsx` (dialog "+ Aggiungi
+    lotto" con form completo, transaction atomica)
+  - tab Inventario di `RetailerDetail.tsx` legge
+    `inventoryByBatch` filtrato per retailer location
+  - voci sidebar "Produttori" (Factory) e "Magazzino Centrale"
+    (Warehouse) in `DashboardLayout.tsx`
+
+### Cosa resta fuori da M1 (M2/M3/M4)
+
+- **M2**: movimenti `TRANSFER` (warehouse → retailer) con
+  suggerimento FEFO automatico, `RETAIL_OUT` (retailer → cliente
+  finale), `EXPIRY_WRITE_OFF`; drop tabella `inventory` legacy
+- **M3**: refactor FiC single-tenant (`system_integrations` +
+  `retailer.fic_client_id`), sistema alert ridisegnato
+- **M4**: integrazioni multi-provider gestionali retailer (Mago,
+  TeamSystem, Danea, …) con architettura plug-in
+
+### Tabella `inventory` legacy: stato
+
+Mantenuta in place con commento `@deprecated` in `drizzle/schema.ts`.
+Conserva le 2 righe storiche pre-M1 per audit. Drop pianificato in
+M2 dopo che nessuna procedure tRPC la legge più (verificato lato
+client già oggi: nessun uso da `client/src/**`).
+
+---
+
 ## 🎉 MIGRATION COMPLETED — 2026-04-30
 
 Sistema migrato da **Manus.im** a **Vercel + Supabase** con successo.

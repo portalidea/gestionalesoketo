@@ -1,14 +1,43 @@
 import { sql } from "drizzle-orm";
-import { integer, pgEnum, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  check,
+  date,
+  index,
+  integer,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+  uuid,
+  varchar,
+} from "drizzle-orm/pg-core";
 
 /**
  * Postgres enums (definiti separatamente, riutilizzabili).
+ *
+ * `stock_movement_type` esteso in 0003 con `RECEIPT_FROM_PRODUCER`
+ * (Phase B M1: ingressi da produttore al magazzino centrale).
+ * I valori `IN/OUT/ADJUSTMENT` sono **deprecated** e restano solo per
+ * retrocompatibilità con le righe legacy. M2 aggiungerà
+ * `TRANSFER`, `RETAIL_OUT`, `EXPIRY_WRITE_OFF`.
+ *
+ * `location_type` aggiunto in 0003: distingue tra il magazzino centrale
+ * SoKeto (singleton) e le location per-retailer.
  */
 export const userRoleEnum = pgEnum("user_role", ["admin", "operator", "viewer"]);
-export const stockMovementTypeEnum = pgEnum("stock_movement_type", ["IN", "OUT", "ADJUSTMENT"]);
+export const stockMovementTypeEnum = pgEnum("stock_movement_type", [
+  "IN",
+  "OUT",
+  "ADJUSTMENT",
+  "RECEIPT_FROM_PRODUCER",
+]);
 export const alertTypeEnum = pgEnum("alert_type", ["LOW_STOCK", "EXPIRING", "EXPIRED"]);
 export const alertStatusEnum = pgEnum("alert_status", ["ACTIVE", "ACKNOWLEDGED", "RESOLVED"]);
 export const syncStatusEnum = pgEnum("sync_status", ["SUCCESS", "FAILED", "PARTIAL"]);
+export const locationTypeEnum = pgEnum("location_type", ["central_warehouse", "retailer"]);
 
 /**
  * Profilo applicativo dell'operatore SoKeto.
@@ -84,7 +113,134 @@ export type Product = typeof products.$inferSelect;
 export type InsertProduct = typeof products.$inferInsert;
 
 /**
- * Inventory — stato magazzino per coppia (retailer, product).
+ * Producers — anagrafica produttori (Phase B M1).
+ * E-Keto Food è il produttore principale, ma il modello supporta
+ * lavorazioni per terzi e produttori multipli.
+ */
+export const producers = pgTable("producers", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  contactName: text("contactName"),
+  email: varchar("email", { length: 320 }),
+  phone: varchar("phone", { length: 50 }),
+  address: text("address"),
+  vatNumber: varchar("vatNumber", { length: 50 }),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type Producer = typeof producers.$inferSelect;
+export type InsertProducer = typeof producers.$inferInsert;
+
+/**
+ * Product batches — lotti per prodotto, con scadenza obbligatoria
+ * (Phase B M1). `initialQuantity` è la quantità iniziale del lotto al
+ * ricevimento dal produttore; lo stock corrente vive in
+ * `inventoryByBatch` per location.
+ *
+ * UNIQUE (productId, batchNumber): un produttore non può ripetere lo
+ * stesso codice lotto sullo stesso prodotto.
+ */
+export const productBatches = pgTable(
+  "productBatches",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    productId: uuid("productId")
+      .notNull()
+      .references(() => products.id, { onDelete: "restrict" }),
+    producerId: uuid("producerId").references(() => producers.id, {
+      onDelete: "set null",
+    }),
+    batchNumber: text("batchNumber").notNull(),
+    expirationDate: date("expirationDate").notNull(),
+    productionDate: date("productionDate"),
+    initialQuantity: integer("initialQuantity").notNull(),
+    notes: text("notes"),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    unique("productBatches_product_batch_unique").on(t.productId, t.batchNumber),
+    check("productBatches_initial_qty_positive", sql`${t.initialQuantity} > 0`),
+    index("productBatches_product_expiration_idx").on(t.productId, t.expirationDate),
+  ],
+);
+
+export type ProductBatch = typeof productBatches.$inferSelect;
+export type InsertProductBatch = typeof productBatches.$inferInsert;
+
+/**
+ * Locations — magazzino centrale SoKeto (singleton) + 1 per retailer
+ * (Phase B M1). Sostituisce semantica del campo `inventory.retailerId`
+ * legacy.
+ *
+ * Vincoli applicati a livello DB:
+ * - CHECK: central_warehouse ⇔ retailerId NULL; retailer ⇔ retailerId NOT NULL
+ * - UNIQUE partial index su type=central_warehouse (singleton)
+ */
+export const locations = pgTable(
+  "locations",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    type: locationTypeEnum("type").notNull(),
+    name: text("name").notNull(),
+    retailerId: uuid("retailerId").references(() => retailers.id, {
+      onDelete: "cascade",
+    }),
+    isActive: boolean("isActive").default(true).notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    check(
+      "locations_type_retailer_coherence",
+      sql`(${t.type} = 'central_warehouse' AND ${t.retailerId} IS NULL) OR (${t.type} = 'retailer' AND ${t.retailerId} IS NOT NULL)`,
+    ),
+    uniqueIndex("locations_central_singleton")
+      .on(t.type)
+      .where(sql`${t.type} = 'central_warehouse'`),
+    index("locations_retailerId_idx")
+      .on(t.retailerId)
+      .where(sql`${t.retailerId} IS NOT NULL`),
+  ],
+);
+
+export type Location = typeof locations.$inferSelect;
+export type InsertLocation = typeof locations.$inferInsert;
+
+/**
+ * Inventory by batch — stato magazzino per coppia (location, batch).
+ * Sostituisce `inventory` legacy. Una riga per ogni lotto presente
+ * in ogni location.
+ */
+export const inventoryByBatch = pgTable(
+  "inventoryByBatch",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    locationId: uuid("locationId")
+      .notNull()
+      .references(() => locations.id, { onDelete: "cascade" }),
+    batchId: uuid("batchId")
+      .notNull()
+      .references(() => productBatches.id, { onDelete: "restrict" }),
+    quantity: integer("quantity").default(0).notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    unique("inventoryByBatch_location_batch_unique").on(t.locationId, t.batchId),
+    check("inventoryByBatch_quantity_nonneg", sql`${t.quantity} >= 0`),
+  ],
+);
+
+export type InventoryByBatch = typeof inventoryByBatch.$inferSelect;
+export type InsertInventoryByBatch = typeof inventoryByBatch.$inferInsert;
+
+/**
+ * Inventory legacy — sostituita da `inventoryByBatch` in M1, droppata in M2.
+ * Lasciata in place perché contiene ancora le 2 righe seed pre-migrate
+ * (consultabili come storico). Nessuna procedure tRPC legge più questa
+ * tabella in M1.
+ *
+ * @deprecated Use `inventoryByBatch`.
  */
 export const inventory = pgTable("inventory", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -102,11 +258,17 @@ export type InsertInventory = typeof inventory.$inferInsert;
 
 /**
  * Stock movements — log immutabile movimenti magazzino.
+ *
+ * Phase B M1:
+ * - `inventoryId` e `retailerId` resi nullable: il nuovo movimento
+ *   `RECEIPT_FROM_PRODUCER` (produttore → magazzino centrale) non ha
+ *   né inventoryId legacy né retailerId.
+ * - Nuovi FK opzionali: `batchId`, `fromLocationId`, `toLocationId`.
  */
 export const stockMovements = pgTable("stockMovements", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  inventoryId: uuid("inventoryId").notNull(),
-  retailerId: uuid("retailerId").notNull(),
+  inventoryId: uuid("inventoryId"),
+  retailerId: uuid("retailerId"),
   productId: uuid("productId").notNull(),
   type: stockMovementTypeEnum("type").notNull(),
   quantity: integer("quantity").notNull(),
@@ -117,6 +279,15 @@ export const stockMovements = pgTable("stockMovements", {
   notes: text("notes"),
   timestamp: timestamp("timestamp", { withTimezone: true }).defaultNow().notNull(),
   createdBy: uuid("createdBy"),
+  batchId: uuid("batchId").references(() => productBatches.id, {
+    onDelete: "set null",
+  }),
+  fromLocationId: uuid("fromLocationId").references(() => locations.id, {
+    onDelete: "set null",
+  }),
+  toLocationId: uuid("toLocationId").references(() => locations.id, {
+    onDelete: "set null",
+  }),
 });
 
 export type StockMovement = typeof stockMovements.$inferSelect;
