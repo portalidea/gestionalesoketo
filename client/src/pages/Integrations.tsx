@@ -42,10 +42,7 @@ export default function Integrations() {
   });
 
   const [disconnectOpen, setDisconnectOpen] = useState(false);
-
-  const startOAuth = trpc.ficIntegration.startOAuth.useQuery(undefined, {
-    enabled: false,
-  });
+  const [oauthLoading, setOauthLoading] = useState<"normal" | "force" | null>(null);
 
   const disconnectMut = trpc.ficIntegration.disconnect.useMutation({
     onSuccess: () => {
@@ -88,16 +85,17 @@ export default function Integrations() {
     );
   }
 
-  async function handleConnect() {
+  async function handleConnect(forceLogin = false) {
+    setOauthLoading(forceLogin ? "force" : "normal");
     try {
-      const r = await startOAuth.refetch();
-      if (r.data?.url) {
-        window.open(r.data.url, "fic-oauth", "width=600,height=700");
-      } else if (r.error) {
-        toast.error(r.error.message);
+      const r = await utils.ficIntegration.startOAuth.fetch({ forceLogin });
+      if (r?.url) {
+        window.open(r.url, "fic-oauth", "width=600,height=700");
       }
     } catch (e: any) {
       toast.error(e?.message ?? "Errore avvio OAuth");
+    } finally {
+      setOauthLoading(null);
     }
   }
 
@@ -145,11 +143,45 @@ export default function Integrations() {
                   <AlertCircle className="h-5 w-5 shrink-0" />
                   <span>Non connesso. Avvia il flusso OAuth con FiC per autorizzare l'app.</span>
                 </div>
-                <Button onClick={handleConnect} disabled={startOAuth.isFetching}>
-                  {startOAuth.isFetching && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                  <Plug className="h-4 w-4 mr-2" />
-                  Connetti Fatture in Cloud
-                </Button>
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button
+                    onClick={() => handleConnect(false)}
+                    disabled={oauthLoading !== null}
+                  >
+                    {oauthLoading === "normal" ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Plug className="h-4 w-4 mr-2" />
+                    )}
+                    Connetti Fatture in Cloud
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleConnect(true)}
+                    disabled={oauthLoading !== null}
+                    title="Forza la schermata di login FiC: utile se hai più aziende e vuoi sceglierne una diversa da quella memorizzata nella sessione browser FiC."
+                  >
+                    {oauthLoading === "force" ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : null}
+                    Hai più aziende? Connetti con scelta azienda
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground max-w-2xl">
+                  Nota: FiC ricorda l'azienda selezionata nella sessione browser. Se hai
+                  più aziende collegate al tuo account FiC e vuoi cambiare,
+                  usa "Connetti con scelta azienda" oppure prima esegui logout su{" "}
+                  <a
+                    href="https://secure.fattureincloud.it/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline hover:text-foreground"
+                  >
+                    secure.fattureincloud.it
+                  </a>
+                  .
+                </p>
               </div>
             ) : (
               <div className="space-y-4">

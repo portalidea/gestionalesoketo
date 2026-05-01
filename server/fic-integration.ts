@@ -98,8 +98,15 @@ export async function getFicStatus(): Promise<FicIntegrationStatus> {
  * Costruisce URL OAuth single-tenant. Il `state` è solo un marker statico
  * dato che non c'è un retailer-id da preservare nello stato (single-tenant
  * = 1 sola integrazione di sistema).
+ *
+ * `forceLogin=true` aggiunge `prompt=login` (param OIDC standard, non
+ * documentato esplicitamente da FiC ma RFC 6749 §3.1 dice che il provider
+ * DEVE ignorare param sconosciuti → safe da inviare). Se FiC lo onora
+ * forza re-autenticazione interrompendo la sessione cookie e rimostrando
+ * il selettore azienda quando l'utente ha più company. Se lo ignora,
+ * comportamento identico al default. Bug M3.0.2.
  */
-export function getFicAuthorizationUrl(): string {
+export function getFicAuthorizationUrl(opts?: { forceLogin?: boolean }): string {
   const config = getOAuthConfig();
   if (!config)
     throw new Error(
@@ -117,7 +124,7 @@ export function getFicAuthorizationUrl(): string {
   //   `:a` (full write) include implicitamente `:r`.
   // - settings:r → endpoint /user/companies durante discovery + future
   //   letture di config account.
-  const params = new URLSearchParams({
+  const params: Record<string, string> = {
     response_type: "code",
     client_id: config.clientId,
     redirect_uri: config.redirectUri,
@@ -128,8 +135,11 @@ export function getFicAuthorizationUrl(): string {
       "settings:r",
     ].join(" "),
     state: "soketo-single-tenant",
-  });
-  return `${FIC_API_BASE}/oauth/authorize?${params.toString()}`;
+  };
+  if (opts?.forceLogin) {
+    params.prompt = "login";
+  }
+  return `${FIC_API_BASE}/oauth/authorize?${new URLSearchParams(params).toString()}`;
 }
 
 /**

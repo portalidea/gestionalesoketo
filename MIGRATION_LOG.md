@@ -8,6 +8,99 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-05-02 — 🐞 Bugfix M3.0.2 — FiC OAuth auto-seleziona stessa azienda al riconnect
+
+### Sintomo
+
+Utente con 2 aziende sul proprio account FiC:
+1. Connette FiC sull'app SoKeto → seleziona azienda A → tutto OK.
+2. Disconnette dall'app SoKeto.
+3. Riconnette → FiC bypassa il selettore azienda e auto-sceglie A
+   (memorizzata in sessione browser FiC).
+
+Risultato: impossibile cambiare azienda senza intervento manuale
+(logout dal sito FiC).
+
+### Causa reale
+
+L'endpoint `https://api-v2.fattureincloud.it/oauth/authorize`, su un
+utente con sessione cookie attiva, salta sia consent screen sia
+selettore azienda per UX più fluida. Il `disconnect` lato app SoKeto
+(`db.deleteSystemIntegration`) rimuove solo i token nel **nostro** DB,
+non tocca la sessione cookie sul dominio `secure.fattureincloud.it`
+(cross-origin = impossibile programmaticamente).
+
+I doc canonici FiC ([code-flow](https://developers.fattureincloud.it/docs/authentication/code-flow/vanilla-code/))
+elencano solo i 5 param OAuth standard (`response_type`, `client_id`,
+`redirect_uri`, `scope`, `state`) — **nessun parametro documentato**
+per forzare la riselezione azienda (analogo del `prompt=select_account`
+Google/OIDC).
+
+### Fix
+
+**Tentativo a basso rischio**: aggiunto supporto opzionale al param
+`prompt=login` (OIDC standard, RFC 6749 §3.1 dice che il provider DEVE
+ignorare param sconosciuti → safe da inviare). Se FiC lo onora, forza
+re-autenticazione invalidando la sessione cookie e rimostrando
+selettore. Se lo ignora, comportamento identico al default.
+
+- `server/fic-integration.ts`: `getFicAuthorizationUrl(opts?: {forceLogin})`
+  con append condizionale `&prompt=login`.
+- `server/routers.ts`: `ficIntegration.startOAuth` accetta input opzionale
+  `{forceLogin: boolean}`.
+- `client/src/pages/Integrations.tsx`: due bottoni quando non connesso:
+  - "Connetti Fatture in Cloud" → flow normale (no forceLogin)
+  - "Hai più aziende? Connetti con scelta azienda" → con forceLogin
+  - Helper text con link a secure.fattureincloud.it per logout manuale
+    come ulteriore fallback.
+
+Refactor minore: `startOAuth` chiamato via `utils.ficIntegration.startOAuth.fetch({forceLogin})`
+invece di `useQuery+refetch` per supportare input dinamico.
+
+### Limitazione documentata
+
+Se FiC non supporta `prompt=login` (test E2E necessario per confermare),
+il workaround utente è il logout manuale su secure.fattureincloud.it
+prima di cliccare Connetti — UI mostra link diretto.
+
+**Nota cross-origin**: impossibile chiamare programmaticamente un
+"FiC logout" dal nostro JavaScript per via della same-origin policy
+(stesso motivo per cui Google/Microsoft offrono `prompt=select_account`
+endpoint-side invece di logout cross-origin).
+
+### Lezione
+
+Multi-tenant OAuth providers tipicamente supportano `prompt=select_account`
+(Google, Microsoft) o `prompt=login` (OIDC standard). FiC non documenta
+nulla, ma RFC OAuth 2.0 garantisce che param sconosciuti siano ignorati,
+quindi inviarli è sicuro come tentativo. Sempre offrire fallback UI
+(link logout manuale) per il caso peggiore.
+
+### File modificati
+
+- `server/fic-integration.ts` (+5 -2 righe + commento)
+- `server/routers.ts` (+5 -3 righe — input opzionale)
+- `client/src/pages/Integrations.tsx` (+~30 righe — 2 bottoni + helper)
+
+### Verifica funzionale
+
+- Build: ✅ vite + esbuild
+- Typecheck: ✅
+- E2E test richiesto utente:
+  1. Disconnetti FiC (se connesso)
+  2. Click "Hai più aziende? Connetti con scelta azienda"
+  3. Verifica: FiC mostra schermata di login OPPURE selettore azienda
+  4. Se ancora bypass → logout manuale su secure.fattureincloud.it,
+     poi riprova
+  5. Se selettore appare → pick azienda B, conferma callback OK,
+     `getFicStatus().companyName` = azienda B
+
+### Commit
+
+- (questo bugfix) — fix(m3): force company selector on FiC OAuth reconnect
+
+---
+
 ## 2026-05-02 — 🐞 Bugfix M3.0.1 — FiC OAuth "scope is not valid"
 
 ### Sintomo

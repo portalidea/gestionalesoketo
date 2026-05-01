@@ -851,16 +851,18 @@ export const appRouter = router({
       return await getFicStatus();
     }),
 
-    startOAuth: adminProcedure.query(async () => {
-      try {
-        return { url: getFicAuthorizationUrl() };
-      } catch (e) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: (e as Error).message,
-        });
-      }
-    }),
+    startOAuth: adminProcedure
+      .input(z.object({ forceLogin: z.boolean().optional() }).optional())
+      .query(async ({ input }) => {
+        try {
+          return { url: getFicAuthorizationUrl({ forceLogin: input?.forceLogin }) };
+        } catch (e) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: (e as Error).message,
+          });
+        }
+      }),
 
     disconnect: adminProcedure.mutation(async () => {
       await disconnectFic();

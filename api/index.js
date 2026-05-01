@@ -44711,13 +44711,13 @@ async function getFicStatus() {
     configured: !!config2
   };
 }
-function getFicAuthorizationUrl() {
+function getFicAuthorizationUrl(opts) {
   const config2 = getOAuthConfig();
   if (!config2)
     throw new Error(
       "OAuth FiC non configurato \u2014 mancano FATTUREINCLOUD_CLIENT_ID/SECRET/REDIRECT_URI"
     );
-  const params = new URLSearchParams({
+  const params = {
     response_type: "code",
     client_id: config2.clientId,
     redirect_uri: config2.redirectUri,
@@ -44728,8 +44728,11 @@ function getFicAuthorizationUrl() {
       "settings:r"
     ].join(" "),
     state: "soketo-single-tenant"
-  });
-  return `${FIC_API_BASE}/oauth/authorize?${params.toString()}`;
+  };
+  if (opts?.forceLogin) {
+    params.prompt = "login";
+  }
+  return `${FIC_API_BASE}/oauth/authorize?${new URLSearchParams(params).toString()}`;
 }
 async function completeFicOAuth(code) {
   const config2 = getOAuthConfig();
@@ -81847,9 +81850,9 @@ var init_routers = __esm({
         getStatus: protectedProcedure.query(async () => {
           return await getFicStatus();
         }),
-        startOAuth: adminProcedure.query(async () => {
+        startOAuth: adminProcedure.input(external_exports.object({ forceLogin: external_exports.boolean().optional() }).optional()).query(async ({ input }) => {
           try {
-            return { url: getFicAuthorizationUrl() };
+            return { url: getFicAuthorizationUrl({ forceLogin: input?.forceLogin }) };
           } catch (e) {
             throw new TRPCError({
               code: "PRECONDITION_FAILED",
