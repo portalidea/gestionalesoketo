@@ -8,6 +8,95 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-05-01 — 🐞 Bugfix M2.5.1 — products/retailers/producers list HTTP 500
+
+### Sintomo
+
+Dopo deploy M2.5 (commit `e89a380`), navigare su `/products`,
+`/retailers` o `/producers` mostrava UI vuota con HTTP 500
+sulla chiamata tRPC `.list`.
+
+### Causa reale
+
+Postgres: `column reference "id" is ambiguous` (code 42702).
+
+In M2.5 ho esteso le 3 procedure `getAllProducts`/Retailers/
+Producers con subquery aggregate inline per stats. Le subquery
+referenziano la colonna `id` della tabella outer via:
+
+```ts
+sql`... WHERE pb."productId" = ${products.id} ...`
+```
+
+Drizzle, quando la query outer è single-FROM (`SELECT ... FROM
+products`), interpola `${products.id}` come **`"id"`** non
+qualificato. Nelle subquery ci sono altre tabelle con colonna
+`id` (`inventoryByBatch.id`, `productBatches.id`,
+`locations.id`) → Postgres non sa a quale `id` riferirsi e
+solleva 42702.
+
+Repro:
+
+```sql
+-- Frammento generato da drizzle (irragionevole nelle subquery)
+WHERE pb."productId" = "id"
+   AND l."type" = 'central_warehouse'
+```
+
+dove `"id"` non è qualificato.
+
+### Fix
+
+Sostituito nelle 3 procedure `${products.id}` / `${retailers.id}`
+/ `${producers.id}` con il literal qualificato direttamente nel
+template `sql\`...\``:
+
+```ts
+WHERE pb."productId" = "products"."id"
+WHERE l."retailerId" = "retailers"."id"
+WHERE pb."producerId" = "producers"."id"
+```
+
+Drizzle accetta literal SQL nel template senza interpolazione,
+e Postgres risolve correttamente al riferimento outer
+correlated.
+
+### Verifica funzionale
+
+Repro locale via nuovo script `scripts/repro-products-list.ts`
+(read-only, chiama le 3 procedure). Conferma:
+- `getAllProducts`: OK, prodotto senza batches → centralStock=0,
+  totalStock=0, activeBatchCount=0, nearestExpiration=null
+- `getAllRetailers`: OK
+- `getAllProducers`: OK, producer senza batches → batchCount=0
+
+Edge case "entità senza relazioni" gestito grazie al `COALESCE
+(..., 0)` già presente nel fix originale.
+
+### File modificati
+
+```
+server/db.ts                             3 procedure sql template
+scripts/repro-products-list.ts           tool diagnostico (NEW)
+```
+
+### Lezione
+
+Drizzle column interpolation `${table.column}` qualifica solo
+quando ambiguo nella query principale. Nelle subquery
+correlated è necessario un riferimento esplicito al outer:
+- `sql.identifier(...)` con il path completo, oppure
+- literal `"table"."column"` nel template (più leggibile)
+
+### Commit
+
+```
+941a0e2 fix(m2.5): products/retailers/producers list -
+        ambiguous "id" in subquery
+```
+
+---
+
 ## 2026-05-01 — 🎯 Phase B Milestone 2.5 — UX power user (tabellari + /movements)
 
 ### TL;DR
