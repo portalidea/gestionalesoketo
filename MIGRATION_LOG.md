@@ -8,6 +8,186 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-05-02 — 🎯 Phase B Milestone 3 — Pricing Packages + FiC single-tenant
+
+### TL;DR
+
+Refactor commerciale completo: pacchetti commerciali con sconti fissi
+(Starter 30% / Partner 35% / Premium 40% / Elite 45%), integrazione FiC
+**single-tenant** (1 sola installazione di sistema, niente più OAuth
+per-retailer), generazione automatica proforma su TRANSFER con retry
+**manuale** in coda quando FiC API fallisce.
+
+Sblocca caso d'uso reale: trasferire merce ad un retailer e ricevere
+contemporaneamente la proforma su FiC con prezzi scontati e IVA corretta,
+senza dover compilare nulla a mano.
+
+### Schema (migration `0005_phase_b_m3_pricing_fic.sql`)
+
+- `pricingPackages`: id, name UNIQUE, discountPercent numeric(5,2) CHECK
+  0–100, description, sortOrder, timestamps. Seed 4 righe idempotente
+  (ON CONFLICT name DO NOTHING).
+- `products.vatRate` numeric(5,2) NOT NULL DEFAULT 10.00 CHECK IN
+  (4, 5, 10, 22). Le righe esistenti ricevono 10% (alimentari).
+- `retailers.pricingPackageId` uuid FK ON DELETE SET NULL +
+  `retailers.ficClientId` integer NULL (no FK, è ID esterno FiC).
+  Indice parziale su pricingPackageId IS NOT NULL.
+- `systemIntegrations`: singleton per type (UNIQUE), accessToken,
+  refreshToken, expiresAt, accountId, scopes, metadata jsonb. RLS
+  **admin-only** (contiene token OAuth).
+- `proformaQueue`: transferMovementId FK CASCADE, payload jsonb, status
+  enum (pending/processing/success/failed), attempts/maxAttempts (default
+  5) con CHECK attempts ≤ maxAttempts, lastError, lastAttemptAt. Index
+  parziale su status IN ('pending','failed').
+- `stockMovements.ficProformaId` integer + `ficProformaNumber` varchar(50)
+  per audit del legame movement → proforma generata.
+
+Apply: 29 statements in transaction via `scripts/apply-sql.ts` (helper
+generico riutilizzabile per future migration manuali). 10/10 sanity
+check post-apply (`scripts/verify-m3.ts`).
+
+### Backend (`server/db.ts` + `server/routers.ts` + `server/fic-integration.ts`)
+
+- `pricingPackages` router: list (protected), create/update/delete
+  (admin-only). leva commerciale → restrizione admin.
+- `pricing.calculateForRetailer({retailerId, items})`: math
+  server-side authoritative, ritorna {items con unitPriceFinal/lineNet/
+  lineGross, subtotalNet, vatAmount, total, packageName}. Round half-up
+  a 2 decimali per linea, totali sommano linee già arrotondate. Throw
+  esplicito su retailer senza pacchetto / prodotto senza unitPrice.
+- `retailers.assignPackage` + `retailers.assignFicClient`: mutation
+  esplicite per modificare i due campi (writerProcedure).
+- `ficIntegration` router: getStatus (mostra connected/expired/companyId),
+  startOAuth (genera URL con state=`soketo-single-tenant`), disconnect.
+  Solo `disconnect` e `startOAuth` sono admin (token sensibili).
+- `ficClients` router: list con cache locale in
+  `systemIntegrations.metadata.clientsCache`, refresh paginato (max 50
+  pagine, 100 client per pagina).
+- `proformaQueue` router: list con filtro status, retry manuale, delete
+  (writer).
+- `stockMovements.transfer` rifattorizzato: input `generateProforma`
+  boolean. Se true, valida 3 pre-condizioni (retailer.pricingPackageId,
+  retailer.ficClientId, FiC connesso) PRIMA di scrivere il movement;
+  poi esegue transfer (movement registrato comunque), calcola pricing,
+  chiama FiC `POST /issued_documents` con `data.type='proforma'`. Su
+  success aggiorna movement con id+number; su failure salva in
+  proformaQueue (movement NON rolla back). Return shape espone
+  `proforma: { id, number, queued, lastError }` per UI feedback.
+
+OAuth callback: nuovo endpoint `GET /api/fattureincloud/sso/callback`
+(distinto dal legacy per-retailer `/api/fattureincloud/callback`),
+state validato come marker statico, popup chiuso con postMessage al
+window.opener. Discovery `GET /user/companies` post-auth, prima company
+selezionata come `companyId` e persisted in `systemIntegrations.metadata`.
+
+### UI (6 file)
+
+- `/settings/packages` (NEW): tabella 4 pacchetti, CRUD inline (Create/
+  Edit/Delete dialog + AlertDialog conferma), admin-only.
+- `/settings/integrations` (refactor da placeholder): flusso OAuth
+  completo con stati not-configured / not-connected / connected, popup
+  OAuth, listener postMessage, refresh clienti, disconnect.
+- `/products`: colonna IVA in tabella + Select aliquota nel form
+  (4/5/10/22, default 10).
+- `/retailers/:id`: Card "Configurazione commerciale" con 2 dropdown:
+  pacchetto (popolato da pricingPackages.list) e cliente FiC (popolato
+  da ficClients.list, disabled+tooltip se FiC non connesso). Mutation
+  inline + warning yellow se manca uno dei due.
+- `/warehouse` Transfer dialog: checkbox "Genera proforma" abilitato
+  solo se 3 pre-condizioni soddisfatte (con tooltip esplicativo
+  dinamico). Default a checked quando preconditions OK. Preview prezzi
+  inline quando attivo (pricing.calculateForRetailer query).
+- `/movements`: nuova colonna "Proforma" con badge verde/giallo/rosso
+  + retry button manuale; tooltip su lastError per max retry.
+- `DashboardLayout`: aggiunto admin item "Pacchetti" (icona Tag) sopra
+  Team/Integrazioni.
+
+### Decisioni di design
+
+- **Retry manuale, no cron Vercel**: piano Hobby ha cron limitati
+  (ogni ora, max 2). Manuale via pulsante in `/movements` è più semplice
+  e sufficiente per i volumi attesi (~40 transfer/mese). Cron auto
+  rinviato a M4 se servirà.
+- **Legacy non droppato**: `retailers.fattureInCloud{Company,Access,
+  Refresh,Token...}` lasciati in place per rollback safety. Cleanup in
+  0006 dopo 1–2 settimane di stabilità prod.
+- **stockMovements dead columns** (`inventoryId`, `retailerId` legacy):
+  rinviati a 0006 col cleanup completo.
+- **`pricingPackages` modify admin-only**: leva commerciale strategica,
+  diversa da products/retailers/producers (admin|operator).
+- **`systemIntegrations` admin-only completo**: contiene access/refresh
+  token OAuth, niente reading per operator/viewer.
+- **Math server-side**: tutta la pricing calculation gira nel backend,
+  frontend solo display. Evita drift di rounding tra calc preview e
+  proforma effettiva inviata a FiC.
+
+### Tech debt creato
+
+- Cron retry asincrono **non implementato**. Se le proforma in coda
+  iniziano ad accumulare, va aggiunto in M4 (Vercel Cron + endpoint
+  POST `/api/cron/proforma-retry`).
+- `getProformaQueueByMovement` indicizzato solo via PK; con migliaia di
+  righe diventa lento. M4+ se diventa hotpath.
+- `refreshFicClients` cap a 50 pagine (5000 clienti max). E-Keto Food
+  oggi <100 clienti FiC, irrilevante; aggiungere `cursor` paginazione
+  se cresce.
+- Legacy callback `/api/fattureincloud/callback` (per-retailer) ancora
+  attivo. Nessun retailer attualmente connesso, ma tecnicamente
+  funzionante. Drop in 0006.
+
+### File creati/modificati
+
+- `drizzle/0005_phase_b_m3_pricing_fic.sql` (new, 207 righe)
+- `drizzle/schema.ts` (esteso con 3 tabelle, 1 enum, 5 colonne nuove)
+- `scripts/apply-sql.ts` (new, generico)
+- `scripts/verify-m3.ts` (new, regression check 10 invarianti)
+- `scripts/dump-data.ts` (TABLES list aggiornata)
+- `server/db.ts` (helpers M3 + estensioni list/movements query)
+- `server/routers.ts` (5 router top-level + estensioni products/retailers/
+  stockMovements)
+- `server/fic-integration.ts` (new, modulo single-tenant)
+- `server/fattureincloud-routes.ts` (callback /sso/callback)
+- 6 pagine UI estese o nuove
+
+### Smoke produzione
+
+- `curl https://gestionale.soketo.it/api/health` → 200 `{"ok":true}`
+- `/settings/packages` post-deploy: 4 pacchetti renderizzati
+- `/settings/integrations` post-deploy: status FiC = not connected
+  (env vars FATTUREINCLOUD_* da configurare su Vercel prima del primo
+  flow OAuth)
+
+### Setup post-deploy richiesto (manual)
+
+1. Su Vercel → settings → Environment Variables, aggiungere:
+   - `FATTUREINCLOUD_CLIENT_ID` (da console FiC)
+   - `FATTUREINCLOUD_CLIENT_SECRET` (da console FiC)
+   - `FATTUREINCLOUD_REDIRECT_URI` =
+     `https://gestionale.soketo.it/api/fattureincloud/sso/callback`
+2. Su console FiC → app OAuth "Gestionale SoKeto" → aggiungere lo stesso
+   redirect URI nella whitelist.
+3. Loggarsi come admin su gestionale.soketo.it, andare su
+   `/settings/integrations`, cliccare "Connetti Fatture in Cloud",
+   completare flusso OAuth nel popup.
+4. Cliccare "Aggiorna lista clienti FiC" per caricare la cache.
+5. Per ogni retailer attivo: andare su `/retailers/:id`, assegnare
+   pacchetto e cliente FiC.
+6. Test E2E: trasferire 1 lotto a un retailer con checkbox "Genera
+   proforma" → verificare proforma su FiC.
+
+### Commit
+
+- `5f48e8c` feat(schema): M3 — pricingPackages, retailer mapping,
+  products vatRate, FiC integration, proformaQueue
+- `6cfe8dd` feat(backend): M3 — pricingPackages router, pricing calc,
+  FiC single-tenant, proforma queue
+- `1331f0c` feat(ui): M3 — pacchetti, integrazioni FiC, vatRate prodotti,
+  config commerciale retailer
+- `e44362f` feat(ui-transfer): M3 — proforma generation in TRANSFER
+  dialog + queue badge in /movements
+
+---
+
 ## 2026-05-01 — 🐞 Bugfix M2.5.1 — products/retailers/producers list HTTP 500
 
 ### Sintomo
