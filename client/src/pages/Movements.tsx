@@ -34,10 +34,13 @@ import { trpc } from "@/lib/trpc";
 import { format } from "date-fns";
 import { it } from "date-fns/locale";
 import {
+  AlertCircle,
   ArrowDown,
   ArrowLeftRight,
   ArrowRight,
   ArrowUp,
+  CheckCircle2,
+  Clock,
   Loader2,
   RefreshCw,
   Truck,
@@ -66,6 +69,117 @@ const TYPE_LABELS: Record<MovementType, string> = {
   TRANSFER: "Trasferimento",
   EXPIRY_WRITE_OFF: "Scarto scadenza",
 };
+
+type ProformaQueueRow = {
+  id: string;
+  status: "pending" | "processing" | "success" | "failed";
+  attempts: number;
+  maxAttempts: number;
+  lastError: string | null;
+};
+
+type MovementRow = {
+  id: string;
+  type: string;
+  ficProformaId: number | null;
+  ficProformaNumber: string | null;
+};
+
+function ProformaCell({
+  movement,
+  queueRow,
+  onRetry,
+  retrying,
+}: {
+  movement: MovementRow;
+  queueRow: ProformaQueueRow | null;
+  onRetry: (id: string) => void;
+  retrying: boolean;
+}) {
+  // Solo TRANSFER possono avere proforma
+  if (movement.type !== "TRANSFER") {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  // Proforma generata con successo (in stockMovements)
+  if (movement.ficProformaNumber) {
+    return (
+      <Badge className="text-xs bg-green-600 hover:bg-green-700">
+        <CheckCircle2 className="h-3 w-3 mr-1" />
+        OK #{movement.ficProformaNumber}
+      </Badge>
+    );
+  }
+  // In coda: pending o failed
+  if (queueRow) {
+    const maxed = queueRow.attempts >= queueRow.maxAttempts;
+    if (queueRow.status === "success") {
+      // Edge case: queue success ma stockMovement non ha number
+      return (
+        <Badge className="text-xs bg-green-600 hover:bg-green-700">
+          <CheckCircle2 className="h-3 w-3 mr-1" />
+          OK
+        </Badge>
+      );
+    }
+    if (queueRow.status === "pending" && queueRow.attempts === 0) {
+      return (
+        <div className="flex items-center gap-1">
+          <Badge className="text-xs bg-yellow-500 hover:bg-yellow-600">
+            <Clock className="h-3 w-3 mr-1" />
+            In coda
+          </Badge>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-6 w-6"
+            onClick={() => onRetry(queueRow.id)}
+            disabled={retrying}
+            title="Riprova ora"
+          >
+            {retrying ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3 w-3" />
+            )}
+          </Button>
+        </div>
+      );
+    }
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="flex items-center gap-1">
+            <Badge variant="destructive" className="text-xs">
+              <AlertCircle className="h-3 w-3 mr-1" />
+              {maxed ? "Max retry" : "Errore"} ({queueRow.attempts}/{queueRow.maxAttempts})
+            </Badge>
+            {!maxed && (
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-6 w-6"
+                onClick={() => onRetry(queueRow.id)}
+                disabled={retrying}
+                title="Riprova ora"
+              >
+                {retrying ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3 w-3" />
+                )}
+              </Button>
+            )}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-md">
+          {queueRow.lastError ?? "errore sconosciuto"}
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+  // TRANSFER senza proforma (utente non ha generato)
+  return <span className="text-muted-foreground">—</span>;
+}
 
 function MovementBadge({ type }: { type: string }) {
   switch (type) {
@@ -168,6 +282,32 @@ export default function Movements() {
   const { data, isLoading, isFetching } = trpc.stockMovements.listAll.useQuery(
     queryInput,
   );
+
+  // M3: queue proforma per badge "in coda" / "errore" sui movimenti TRANSFER
+  const utils = trpc.useUtils();
+  const { data: queueRows } = trpc.proformaQueue.list.useQuery();
+  const queueByMovement = useMemo(() => {
+    const m = new Map<string, NonNullable<typeof queueRows>[number]>();
+    for (const q of queueRows ?? []) {
+      // Tieni solo l'ultima per movement (in caso di duplicati legacy)
+      if (!m.has(q.transferMovementId)) m.set(q.transferMovementId, q);
+    }
+    return m;
+  }, [queueRows]);
+
+  const retryMut = trpc.proformaQueue.retry.useMutation({
+    onSuccess: async (res) => {
+      await utils.stockMovements.listAll.invalidate();
+      await utils.proformaQueue.list.invalidate();
+      const { toast } = await import("sonner");
+      toast.success(`Proforma #${res.proformaNumber} generata`);
+    },
+    onError: async (err) => {
+      await utils.proformaQueue.list.invalidate();
+      const { toast } = await import("sonner");
+      toast.error(err.message);
+    },
+  });
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
@@ -329,6 +469,7 @@ export default function Movements() {
                       <TableHead className="text-right">Qty</TableHead>
                       <TableHead>Da → A</TableHead>
                       <TableHead>Note</TableHead>
+                      <TableHead>Proforma</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -408,6 +549,14 @@ export default function Movements() {
                             ) : (
                               "-"
                             )}
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            <ProformaCell
+                              movement={m}
+                              queueRow={queueByMovement.get(m.id) ?? null}
+                              onRetry={(id) => retryMut.mutate({ id })}
+                              retrying={retryMut.isPending}
+                            />
                           </TableCell>
                         </TableRow>
                       );

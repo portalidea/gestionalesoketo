@@ -153,6 +153,8 @@ export async function getAllRetailers() {
       lastSyncAt: retailers.lastSyncAt,
       syncEnabled: retailers.syncEnabled,
       notes: retailers.notes,
+      pricingPackageId: retailers.pricingPackageId,
+      ficClientId: retailers.ficClientId,
       createdAt: retailers.createdAt,
       updatedAt: retailers.updatedAt,
       activeBatchCount: activeBatchCountExpr,
@@ -1073,6 +1075,8 @@ export async function getStockMovementsByLocationId(
       toLocationId: stockMovements.toLocationId,
       fromLocationName: sql<string | null>`from_loc.name`,
       toLocationName: sql<string | null>`to_loc.name`,
+      ficProformaId: stockMovements.ficProformaId,
+      ficProformaNumber: stockMovements.ficProformaNumber,
     })
     .from(stockMovements)
     .leftJoin(products, eq(stockMovements.productId, products.id))
@@ -1175,6 +1179,8 @@ export async function getStockMovementsAll(filters: {
       toLocationId: stockMovements.toLocationId,
       fromLocationName: sql<string | null>`from_loc.name`,
       toLocationName: sql<string | null>`to_loc.name`,
+      ficProformaId: stockMovements.ficProformaId,
+      ficProformaNumber: stockMovements.ficProformaNumber,
     })
     .from(stockMovements)
     .leftJoin(products, eq(stockMovements.productId, products.id))
@@ -1242,6 +1248,8 @@ export async function getStockMovementsByRetailer(retailerId: string, limit = 10
       toLocationId: stockMovements.toLocationId,
       fromLocationName: sql<string | null>`from_loc.name`,
       toLocationName: sql<string | null>`to_loc.name`,
+      ficProformaId: stockMovements.ficProformaId,
+      ficProformaNumber: stockMovements.ficProformaNumber,
     })
     .from(stockMovements)
     .leftJoin(products, eq(stockMovements.productId, products.id))

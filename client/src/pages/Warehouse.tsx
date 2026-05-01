@@ -78,6 +78,7 @@ export default function Warehouse() {
     trpc.warehouse.getStockOverview.useQuery();
   const { data: warehouseLoc } = trpc.locations.getCentralWarehouse.useQuery();
   const { data: retailers } = trpc.retailers.list.useQuery();
+  const { data: ficStatus } = trpc.ficIntegration.getStatus.useQuery();
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
 
   // ============== Transfer state ==============
@@ -89,6 +90,51 @@ export default function Warehouse() {
   const [transferQty, setTransferQty] = useState("");
   const [transferNotes, setTransferNotes] = useState("");
   const [transferProforma, setTransferProforma] = useState(false);
+
+  // M3: lookup retailer selezionato per pre-condizioni proforma
+  const selectedRetailer = retailers?.find((r) => r.id === transferRetailerId);
+  const proformaPreconditions = {
+    ficConnected: !!ficStatus?.connected,
+    hasPackage: !!selectedRetailer?.pricingPackageId,
+    hasFicClient: !!selectedRetailer?.ficClientId,
+  };
+  const proformaAllowed =
+    proformaPreconditions.ficConnected &&
+    proformaPreconditions.hasPackage &&
+    proformaPreconditions.hasFicClient;
+  const proformaTooltip = !proformaPreconditions.ficConnected
+    ? "Connetti Fatture in Cloud da /settings/integrations"
+    : !proformaPreconditions.hasPackage
+      ? "Assegna un pacchetto commerciale al rivenditore"
+      : !proformaPreconditions.hasFicClient
+        ? "Mappa il cliente FiC sul rivenditore"
+        : "";
+
+  // Preview pricing quando checkbox attivo + qty valida
+  const transferQtyNum = parseInt(transferQty, 10);
+  const previewEnabled =
+    transferProforma &&
+    proformaAllowed &&
+    transferTarget != null &&
+    Number.isFinite(transferQtyNum) &&
+    transferQtyNum > 0;
+  const { data: pricingPreview } = trpc.pricing.calculateForRetailer.useQuery(
+    {
+      retailerId: transferRetailerId,
+      items:
+        transferTarget && Number.isFinite(transferQtyNum) && transferQtyNum > 0
+          ? [{ productId: transferTarget.productId, qty: transferQtyNum }]
+          : [],
+    },
+    { enabled: previewEnabled, retry: false },
+  );
+
+  // Default checkbox to true se preconditions soddisfatte (utente può
+  // disattivare). Se preconditions non soddisfatte, force false.
+  useEffect(() => {
+    if (proformaAllowed) setTransferProforma(true);
+    else setTransferProforma(false);
+  }, [proformaAllowed]);
 
   const { data: suggestedBatches } =
     trpc.productBatches.suggestForTransfer.useQuery(
@@ -112,17 +158,25 @@ export default function Warehouse() {
   }, [suggestedBatches, transferBatchId]);
 
   const transferMutation = trpc.stockMovements.transfer.useMutation({
-    onSuccess: async () => {
+    onSuccess: async (res) => {
       await utils.warehouse.getStockOverview.invalidate();
       await utils.productBatches.listByProduct.invalidate();
       await utils.productBatches.suggestForTransfer.invalidate();
       await utils.retailers.getDetails.invalidate();
       await utils.stockMovements.listByRetailer.invalidate();
+      await utils.stockMovements.listAll.invalidate();
+      await utils.proformaQueue.list.invalidate();
       resetTransfer();
-      // Toast tramite import di sonner
-      import("sonner").then(({ toast }) =>
-        toast.success("Trasferimento completato"),
-      );
+      const { toast } = await import("sonner");
+      if (res.proforma?.queued) {
+        toast.warning(
+          `Trasferimento OK, proforma in coda — riprova manualmente da /movements (${res.proforma.lastError ?? "errore FiC"})`,
+        );
+      } else if (res.proforma?.number) {
+        toast.success(`Trasferimento + proforma #${res.proforma.number} generata`);
+      } else {
+        toast.success("Trasferimento completato");
+      }
     },
     onError: (err) =>
       import("sonner").then(({ toast }) => toast.error(err.message)),
@@ -161,7 +215,7 @@ export default function Warehouse() {
       retailerId: transferRetailerId,
       quantity: qty,
       notes: transferNotes || undefined,
-      generateProforma: false,
+      generateProforma: transferProforma && proformaAllowed,
     });
   };
 
@@ -670,21 +724,66 @@ export default function Warehouse() {
                 />
               </div>
 
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <label className="flex items-center gap-2 opacity-50 cursor-not-allowed">
-                    <Checkbox
-                      checked={transferProforma}
-                      disabled
-                      onCheckedChange={(v) => setTransferProforma(v === true)}
-                    />
-                    <span className="text-sm">Genera proforma su Fatture in Cloud</span>
-                  </label>
-                </TooltipTrigger>
-                <TooltipContent>
-                  Disponibile in Milestone 3 (refactor FiC single-tenant)
-                </TooltipContent>
-              </Tooltip>
+              {/* M3: Genera proforma su FiC */}
+              {proformaAllowed ? (
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={transferProforma}
+                    onCheckedChange={(v) => setTransferProforma(v === true)}
+                  />
+                  <span className="text-sm">Genera proforma su Fatture in Cloud</span>
+                </label>
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <label className="flex items-center gap-2 opacity-50 cursor-not-allowed">
+                      <Checkbox checked={false} disabled />
+                      <span className="text-sm">
+                        Genera proforma su Fatture in Cloud
+                      </span>
+                    </label>
+                  </TooltipTrigger>
+                  <TooltipContent>{proformaTooltip}</TooltipContent>
+                </Tooltip>
+              )}
+
+              {/* Preview prezzi quando checkbox attivo */}
+              {previewEnabled && pricingPreview && (
+                <div className="rounded-md border border-border bg-muted/40 p-3 text-sm space-y-2">
+                  <div className="font-medium text-foreground">
+                    Anteprima proforma — pacchetto {pricingPreview.packageName} (-{
+                      pricingPreview.packageDiscount
+                    }%)
+                  </div>
+                  {pricingPreview.items.map((it) => (
+                    <div
+                      key={it.productId}
+                      className="flex items-center justify-between text-xs"
+                    >
+                      <span>
+                        {it.productName} ×{it.qty}
+                      </span>
+                      <span className="font-mono">
+                        €{it.unitPriceFinal} → €{it.lineTotalNet} (IVA {parseFloat(
+                          it.vatRate,
+                        ).toFixed(0)}%)
+                      </span>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between pt-2 border-t border-border text-xs">
+                    <span className="text-muted-foreground">Totale netto</span>
+                    <span className="font-mono">€{pricingPreview.subtotalNet}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">IVA</span>
+                    <span className="font-mono">€{pricingPreview.vatAmount}</span>
+                  </div>
+                  <div className="flex items-center justify-between font-medium">
+                    <span>Totale lordo</span>
+                    <span className="font-mono">€{pricingPreview.total}</span>
+                  </div>
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={resetTransfer}>

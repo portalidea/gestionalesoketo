@@ -51,7 +51,8 @@ async function main() {
   let executed = 0;
   try {
     await sql.begin(async (tx) => {
-      for (const [i, block] of blocks.entries()) {
+      for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i];
         const preview = block.split("\n").slice(0, 1)[0]?.slice(0, 80);
         process.stdout.write(`  [${i + 1}/${blocks.length}] ${preview}…  `);
         await tx.unsafe(block);
