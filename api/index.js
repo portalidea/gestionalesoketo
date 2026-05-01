@@ -44724,8 +44724,7 @@ function getFicAuthorizationUrl() {
     scope: [
       "entity.clients:r",
       "entity.clients:a",
-      "issued_documents:r",
-      "issued_documents:a",
+      "issued_documents.proformas:a",
       "settings:r"
     ].join(" "),
     state: "soketo-single-tenant"

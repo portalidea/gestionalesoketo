@@ -105,6 +105,18 @@ export function getFicAuthorizationUrl(): string {
     throw new Error(
       "OAuth FiC non configurato — mancano FATTUREINCLOUD_CLIENT_ID/SECRET/REDIRECT_URI",
     );
+  // FiC scope format: RESOURCE:LEVEL dove `issued_documents` deve essere
+  // specificato per tipo documento (proformas, invoices, ...). Lo scope
+  // generico `issued_documents:a` NON esiste e provoca "scope is not valid".
+  // Ref: https://developers.fattureincloud.it/docs/basics/scopes/
+  // M3 ha bisogno di:
+  // - entity.clients:r → leggere lista clienti FiC (cache + dropdown UI)
+  // - entity.clients:a → riservato per future auto-creazione clienti FiC
+  //   da retailer (M4+); inclusa ora per evitare re-consent OAuth dopo.
+  // - issued_documents.proformas:a → POST /issued_documents type=proforma.
+  //   `:a` (full write) include implicitamente `:r`.
+  // - settings:r → endpoint /user/companies durante discovery + future
+  //   letture di config account.
   const params = new URLSearchParams({
     response_type: "code",
     client_id: config.clientId,
@@ -112,8 +124,7 @@ export function getFicAuthorizationUrl(): string {
     scope: [
       "entity.clients:r",
       "entity.clients:a",
-      "issued_documents:r",
-      "issued_documents:a",
+      "issued_documents.proformas:a",
       "settings:r",
     ].join(" "),
     state: "soketo-single-tenant",

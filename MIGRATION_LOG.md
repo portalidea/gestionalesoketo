@@ -8,6 +8,86 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-05-02 — 🐞 Bugfix M3.0.1 — FiC OAuth "scope is not valid"
+
+### Sintomo
+
+Cliccando "Connetti Fatture in Cloud" su `/settings/integrations`, FiC
+ritorna nella pagina di consent (o nella pagina di errore) il messaggio
+**"scope is not valid"** invece di permettere l'autorizzazione. Risultato:
+nessuno scambio code → tokens, integrazione non si attiva.
+
+### Causa reale
+
+In M3 (commit `6cfe8dd`) ho usato lo scope generico `issued_documents:a`
+(e `:r`) sotto l'assunzione che FiC accettasse il prefisso aggregato.
+**Non è così**: il [doc canonico FiC](https://developers.fattureincloud.it/docs/basics/scopes/)
+definisce gli scope nel formato `RESOURCE:LEVEL` dove `issued_documents`
+**deve essere ulteriormente specificato per tipo documento**:
+
+- `issued_documents.invoices:r` / `:a`
+- `issued_documents.credit_notes:r` / `:a`
+- `issued_documents.proformas:r` / `:a` ← quello che serve a M3
+- `issued_documents.receipts:r` / `:a`
+- (+ quotes, orders, delivery_notes, work_reports, supplier_orders,
+  self_invoices)
+
+Lo scope `issued_documents:a` _aggregato_ non esiste e FiC respinge
+l'intero parametro `scope` come invalido (anche gli altri scope validi
+nello stesso request vengono rifiutati).
+
+### Fix
+
+`server/fic-integration.ts` riga 113: rimosso `issued_documents:r/a`
+generico, sostituito con `issued_documents.proformas:a` (il `:a` full
+write include implicitamente `:r`).
+
+Scope finali single-tenant M3:
+- `entity.clients:r` — leggere lista clienti FiC (cache locale + dropdown UI retailer)
+- `entity.clients:a` — riservato per future auto-creazione clienti FiC
+  da retailer (M4+); incluso ora per evitare re-consent dopo
+- `issued_documents.proformas:a` — POST `/c/{companyId}/issued_documents`
+  type=proforma
+- `settings:r` — `/user/companies` discovery + future letture config
+
+Aggiunto comment block in fic-integration.ts che lega ogni scope al
+suo use-case e linka al doc FiC, così il prossimo che tocca questa
+zona non rifà lo stesso errore.
+
+### Note tech debt collaterale
+
+`server/fattureincloud-oauth.ts:15-23` (legacy per-retailer) ha lo stesso
+bug (`issued_documents:r` aggregato) ma non viene più chiamato dalla UI
+M3. Verrà droppato col cleanup legacy 0006. Non fixato qui per non
+toccare il flusso legacy che è già marcato deprecated.
+
+### Lezione
+
+Per futuri scope OAuth di provider terzi: **sempre verificare il
+documento ufficiale di scopes prima di scrivere il primo flow OAuth**.
+La maggior parte dei provider documenta scope in liste enumerate
+(non parser di pattern), e il match server-side è esatto. L'errore
+"scope is not valid" tipicamente non specifica _quale_ scope è
+invalido — devi confrontare l'intera lista con la doc.
+
+### File modificati
+
+- `server/fic-integration.ts` (4 righe scope + commento doc-link)
+
+### Verifica funzionale
+
+- Build: ✅ vite + esbuild
+- Smoke prod post-deploy: ✅ /api/health 200
+- E2E OAuth flow: da verificare in browser (admin login →
+  /settings/integrations → Connetti FiC → consent FiC → callback
+  → integration connected). Lasciato all'utente per via creds OAuth.
+
+### Commit
+
+- (questo bugfix) — fix(m3): correct FiC OAuth scope syntax
+
+---
+
 ## 2026-05-02 — 🎯 Phase B Milestone 3 — Pricing Packages + FiC single-tenant
 
 ### TL;DR
