@@ -97,18 +97,21 @@ export async function getAllRetailers() {
   // Phase B M2.5: arricchito con stats per la vista tabellare /retailers.
   // Lookup retailer location implicito via locations.retailerId =
   // retailers.id.
+  // NOTA: literal "retailers"."id" qualificato — vedi nota in
+  // getAllProducts. Bug M2.5.1: drizzle non qualifica `${retailers.id}`
+  // → ambiguous con altre colonne id nelle subquery.
   const activeBatchCountExpr = sql<number>`COALESCE((
     SELECT COUNT(*)::int
     FROM "inventoryByBatch" ibb
     INNER JOIN "locations" l ON l."id" = ibb."locationId"
-    WHERE l."retailerId" = ${retailers.id}
+    WHERE l."retailerId" = "retailers"."id"
       AND ibb."quantity" > 0
   ), 0)`;
   const totalStockExpr = sql<number>`COALESCE((
     SELECT SUM(ibb."quantity")::int
     FROM "inventoryByBatch" ibb
     INNER JOIN "locations" l ON l."id" = ibb."locationId"
-    WHERE l."retailerId" = ${retailers.id}
+    WHERE l."retailerId" = "retailers"."id"
   ), 0)`;
   // unitPrice è varchar, cast a numeric per calcolo valore (NaN safe via
   // NULLIF sull'empty string).
@@ -118,7 +121,7 @@ export async function getAllRetailers() {
     INNER JOIN "locations" l ON l."id" = ibb."locationId"
     INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
     INNER JOIN "products" p ON p."id" = pb."productId"
-    WHERE l."retailerId" = ${retailers.id}
+    WHERE l."retailerId" = "retailers"."id"
   ), 0)::text`;
 
   return db
@@ -240,32 +243,37 @@ export async function getAllProducts() {
   // /products. Subquery aggregate per ogni prodotto. Pattern accettabile
   // per cataloghi dell'ordine di decine di righe; se cresce molto, da
   // refactorare in CTE singola query.
+  // NOTA: usiamo "products"."id" (literal qualificato) invece di
+  // `${products.id}` perché drizzle, su query outer single-FROM, emette
+  // solo "id" non qualificato → ambiguous nelle subquery che hanno
+  // altre colonne id (inventoryByBatch.id, productBatches.id,
+  // locations.id). Bug M2.5.1.
   const centralStockExpr = sql<number>`COALESCE((
     SELECT SUM(ibb."quantity")::int
     FROM "inventoryByBatch" ibb
     INNER JOIN "locations" l ON l."id" = ibb."locationId"
     INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
-    WHERE pb."productId" = ${products.id}
+    WHERE pb."productId" = "products"."id"
       AND l."type" = 'central_warehouse'
   ), 0)`;
   const totalStockExpr = sql<number>`COALESCE((
     SELECT SUM(ibb."quantity")::int
     FROM "inventoryByBatch" ibb
     INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
-    WHERE pb."productId" = ${products.id}
+    WHERE pb."productId" = "products"."id"
   ), 0)`;
   const batchCountExpr = sql<number>`COALESCE((
     SELECT COUNT(*)::int
     FROM "inventoryByBatch" ibb
     INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
-    WHERE pb."productId" = ${products.id}
+    WHERE pb."productId" = "products"."id"
       AND ibb."quantity" > 0
   ), 0)`;
   const nearestExpirationExpr = sql<string | null>`(
     SELECT MIN(pb."expirationDate")::text
     FROM "productBatches" pb
     INNER JOIN "inventoryByBatch" ibb ON ibb."batchId" = pb."id"
-    WHERE pb."productId" = ${products.id}
+    WHERE pb."productId" = "products"."id"
       AND ibb."quantity" > 0
   )`;
 
@@ -341,10 +349,12 @@ export async function getAllProducers() {
   if (!db) return [];
   // Phase B M2.5: count lotti totali (anche scaricati a 0) per la
   // vista tabellare /producers.
+  // NOTA: literal "producers"."id" qualificato — vedi nota in
+  // getAllProducts (bug M2.5.1).
   const batchCountExpr = sql<number>`COALESCE((
     SELECT COUNT(*)::int
     FROM "productBatches" pb
-    WHERE pb."producerId" = ${producers.id}
+    WHERE pb."producerId" = "producers"."id"
   ), 0)`;
   return db
     .select({

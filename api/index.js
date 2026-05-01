@@ -37597,14 +37597,14 @@ async function getAllRetailers() {
     SELECT COUNT(*)::int
     FROM "inventoryByBatch" ibb
     INNER JOIN "locations" l ON l."id" = ibb."locationId"
-    WHERE l."retailerId" = ${retailers.id}
+    WHERE l."retailerId" = "retailers"."id"
       AND ibb."quantity" > 0
   ), 0)`;
   const totalStockExpr = sql`COALESCE((
     SELECT SUM(ibb."quantity")::int
     FROM "inventoryByBatch" ibb
     INNER JOIN "locations" l ON l."id" = ibb."locationId"
-    WHERE l."retailerId" = ${retailers.id}
+    WHERE l."retailerId" = "retailers"."id"
   ), 0)`;
   const inventoryValueExpr = sql`COALESCE((
     SELECT SUM(ibb."quantity" * NULLIF(p."unitPrice", '')::numeric)::numeric(18,2)
@@ -37612,7 +37612,7 @@ async function getAllRetailers() {
     INNER JOIN "locations" l ON l."id" = ibb."locationId"
     INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
     INNER JOIN "products" p ON p."id" = pb."productId"
-    WHERE l."retailerId" = ${retailers.id}
+    WHERE l."retailerId" = "retailers"."id"
   ), 0)::text`;
   return db.select({
     id: retailers.id,
@@ -37695,27 +37695,27 @@ async function getAllProducts() {
     FROM "inventoryByBatch" ibb
     INNER JOIN "locations" l ON l."id" = ibb."locationId"
     INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
-    WHERE pb."productId" = ${products.id}
+    WHERE pb."productId" = "products"."id"
       AND l."type" = 'central_warehouse'
   ), 0)`;
   const totalStockExpr = sql`COALESCE((
     SELECT SUM(ibb."quantity")::int
     FROM "inventoryByBatch" ibb
     INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
-    WHERE pb."productId" = ${products.id}
+    WHERE pb."productId" = "products"."id"
   ), 0)`;
   const batchCountExpr = sql`COALESCE((
     SELECT COUNT(*)::int
     FROM "inventoryByBatch" ibb
     INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
-    WHERE pb."productId" = ${products.id}
+    WHERE pb."productId" = "products"."id"
       AND ibb."quantity" > 0
   ), 0)`;
   const nearestExpirationExpr = sql`(
     SELECT MIN(pb."expirationDate")::text
     FROM "productBatches" pb
     INNER JOIN "inventoryByBatch" ibb ON ibb."batchId" = pb."id"
-    WHERE pb."productId" = ${products.id}
+    WHERE pb."productId" = "products"."id"
       AND ibb."quantity" > 0
   )`;
   return db.select({
@@ -37777,7 +37777,7 @@ async function getAllProducers() {
   const batchCountExpr = sql`COALESCE((
     SELECT COUNT(*)::int
     FROM "productBatches" pb
-    WHERE pb."producerId" = ${producers.id}
+    WHERE pb."producerId" = "producers"."id"
   ), 0)`;
   return db.select({
     id: producers.id,
