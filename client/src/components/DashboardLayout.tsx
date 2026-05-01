@@ -23,6 +23,7 @@ import { useIsMobile } from "@/hooks/useMobile";
 import {
   AlertTriangle,
   BarChart3,
+  Factory,
   LayoutDashboard,
   LogOut,
   Package,
@@ -30,6 +31,7 @@ import {
   Plug,
   Store,
   Users,
+  Warehouse,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -37,8 +39,10 @@ import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 
 const baseMenuItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/" },
-  { icon: Store, label: "Rivenditori", path: "/retailers" },
+  { icon: Factory, label: "Produttori", path: "/producers" },
   { icon: Package, label: "Prodotti", path: "/products" },
+  { icon: Warehouse, label: "Magazzino Centrale", path: "/warehouse" },
+  { icon: Store, label: "Rivenditori", path: "/retailers" },
   { icon: AlertTriangle, label: "Alert", path: "/alerts" },
   { icon: BarChart3, label: "Reportistica", path: "/reports" },
 ];

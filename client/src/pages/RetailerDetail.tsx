@@ -182,7 +182,7 @@ export default function RetailerDetail() {
                   <AlertDialogTitle>Eliminare {retailer.name}?</AlertDialogTitle>
                   <AlertDialogDescription>
                     Saranno eliminate anche{" "}
-                    <strong>{deps?.inventory ?? "?"} righe inventario</strong>,{" "}
+                    <strong>{deps?.inventory ?? "?"} lotti correnti</strong>,{" "}
                     <strong>{deps?.stockMovements ?? "?"} movimenti</strong>,{" "}
                     <strong>{deps?.alerts ?? "?"} alert</strong> e{" "}
                     <strong>{deps?.syncLogs ?? "?"} log di sync</strong>{" "}

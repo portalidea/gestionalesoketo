@@ -9,12 +9,15 @@ import AuthCallback from "./pages/AuthCallback";
 import Home from "./pages/Home";
 import Integrations from "./pages/Integrations";
 import Login from "./pages/Login";
+import ProducerDetail from "./pages/ProducerDetail";
+import Producers from "./pages/Producers";
 import ProductDetail from "./pages/ProductDetail";
 import Products from "./pages/Products";
 import Reports from "./pages/Reports";
 import RetailerDetail from "./pages/RetailerDetail";
 import Retailers from "./pages/Retailers";
 import Team from "./pages/Team";
+import Warehouse from "./pages/Warehouse";
 
 function Router() {
   return (
@@ -22,10 +25,13 @@ function Router() {
       <Route path="/login" component={Login} />
       <Route path="/auth/callback" component={AuthCallback} />
       <Route path="/" component={Home} />
-      <Route path="/retailers" component={Retailers} />
-      <Route path="/retailers/:id" component={RetailerDetail} />
+      <Route path="/producers" component={Producers} />
+      <Route path="/producers/:id" component={ProducerDetail} />
       <Route path="/products" component={Products} />
       <Route path="/products/:id" component={ProductDetail} />
+      <Route path="/warehouse" component={Warehouse} />
+      <Route path="/retailers" component={Retailers} />
+      <Route path="/retailers/:id" component={RetailerDetail} />
       <Route path="/alerts" component={Alerts} />
       <Route path="/reports" component={Reports} />
       <Route path="/settings/team" component={Team} />

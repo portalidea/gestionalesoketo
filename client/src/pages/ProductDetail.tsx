@@ -10,6 +10,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -19,12 +20,43 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
 import { format } from "date-fns";
-import { ArrowLeft, Loader2, Package, Save, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  Loader2,
+  Package,
+  Plus,
+  Save,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { useLocation, useRoute } from "wouter";
@@ -61,6 +93,26 @@ const EMPTY_FORM: FormState = {
   imageUrl: "",
 };
 
+const NO_PRODUCER_VALUE = "__none__";
+
+type BatchFormState = {
+  producerId: string;
+  batchNumber: string;
+  expirationDate: string;
+  productionDate: string;
+  initialQuantity: string;
+  notes: string;
+};
+
+const EMPTY_BATCH_FORM: BatchFormState = {
+  producerId: NO_PRODUCER_VALUE,
+  batchNumber: "",
+  expirationDate: "",
+  productionDate: "",
+  initialQuantity: "",
+  notes: "",
+};
+
 export default function ProductDetail() {
   const [, params] = useRoute("/products/:id");
   const [, setLocation] = useLocation();
@@ -71,6 +123,14 @@ export default function ProductDetail() {
     { id: productId },
     { enabled: productId.length > 0 },
   );
+
+  const { data: batches, isLoading: batchesLoading } =
+    trpc.productBatches.listByProduct.useQuery(
+      { productId },
+      { enabled: productId.length > 0 },
+    );
+
+  const { data: producers } = trpc.producers.list.useQuery();
 
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
 
@@ -130,6 +190,76 @@ export default function ProductDetail() {
       isKeto: form.isKeto ? 1 : 0,
       imageUrl: form.imageUrl || undefined,
     });
+  };
+
+  // ====================== Sezione Lotti ======================
+
+  const [batchDialogOpen, setBatchDialogOpen] = useState(false);
+  const [batchForm, setBatchForm] = useState<BatchFormState>(EMPTY_BATCH_FORM);
+
+  const createBatchMutation = trpc.productBatches.create.useMutation({
+    onSuccess: async () => {
+      await utils.productBatches.listByProduct.invalidate({ productId });
+      await utils.warehouse.getStockOverview.invalidate();
+      setBatchDialogOpen(false);
+      setBatchForm(EMPTY_BATCH_FORM);
+      toast.success("Lotto registrato in magazzino centrale");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const deleteBatchMutation = trpc.productBatches.delete.useMutation({
+    onSuccess: async () => {
+      await utils.productBatches.listByProduct.invalidate({ productId });
+      await utils.warehouse.getStockOverview.invalidate();
+      toast.success("Lotto eliminato");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const handleBatchSubmit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const qty = parseInt(batchForm.initialQuantity, 10);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      toast.error("Quantità iniziale deve essere un numero positivo");
+      return;
+    }
+    createBatchMutation.mutate({
+      productId,
+      producerId:
+        batchForm.producerId !== NO_PRODUCER_VALUE
+          ? batchForm.producerId
+          : undefined,
+      batchNumber: batchForm.batchNumber,
+      expirationDate: batchForm.expirationDate,
+      productionDate: batchForm.productionDate || undefined,
+      initialQuantity: qty,
+      notes: batchForm.notes || undefined,
+    });
+  };
+
+  const formatDate = (d: string | null) =>
+    d ? format(new Date(d), "dd/MM/yyyy") : "-";
+
+  const expirationBadge = (expirationDate: string) => {
+    const days = Math.floor(
+      (new Date(expirationDate).getTime() - Date.now()) / 86_400_000,
+    );
+    if (days <= 0) {
+      return (
+        <Badge variant="destructive" className="text-xs">
+          Scaduto
+        </Badge>
+      );
+    }
+    if (days <= 30) {
+      return (
+        <Badge className="text-xs bg-orange-500 hover:bg-orange-600">
+          {days}gg
+        </Badge>
+      );
+    }
+    return null;
   };
 
   if (isLoading) {
@@ -410,6 +540,253 @@ export default function ProductDetail() {
             </Button>
           </div>
         </form>
+
+        {/* Sezione Lotti — separata visivamente dal form anagrafica */}
+        <div className="mt-12">
+          <Card className="border-border bg-card">
+            <CardHeader>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <CardTitle>Lotti</CardTitle>
+                  <CardDescription>
+                    Lotti registrati per questo prodotto, con stock corrente al
+                    magazzino centrale.
+                  </CardDescription>
+                </div>
+                <Dialog open={batchDialogOpen} onOpenChange={setBatchDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Aggiungi lotto
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+                    <form onSubmit={handleBatchSubmit}>
+                      <DialogHeader>
+                        <DialogTitle>Nuovo lotto</DialogTitle>
+                        <DialogDescription>
+                          Registra un ingresso al magazzino centrale.
+                          Verrà creato un movimento RECEIPT_FROM_PRODUCER.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="grid gap-4 py-4">
+                        <div className="grid gap-2">
+                          <Label htmlFor="batchProducer">Produttore</Label>
+                          <Select
+                            value={batchForm.producerId}
+                            onValueChange={(v) =>
+                              setBatchForm({ ...batchForm, producerId: v })
+                            }
+                          >
+                            <SelectTrigger id="batchProducer">
+                              <SelectValue placeholder="Seleziona produttore" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={NO_PRODUCER_VALUE}>
+                                — Nessuno
+                              </SelectItem>
+                              {producers?.map((p) => (
+                                <SelectItem key={p.id} value={p.id}>
+                                  {p.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="batchNumber">Numero lotto *</Label>
+                          <Input
+                            id="batchNumber"
+                            value={batchForm.batchNumber}
+                            onChange={(e) =>
+                              setBatchForm({
+                                ...batchForm,
+                                batchNumber: e.target.value,
+                              })
+                            }
+                            required
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="grid gap-2">
+                            <Label htmlFor="expirationDate">Scadenza *</Label>
+                            <Input
+                              id="expirationDate"
+                              type="date"
+                              value={batchForm.expirationDate}
+                              onChange={(e) =>
+                                setBatchForm({
+                                  ...batchForm,
+                                  expirationDate: e.target.value,
+                                })
+                              }
+                              required
+                            />
+                          </div>
+                          <div className="grid gap-2">
+                            <Label htmlFor="productionDate">
+                              Data produzione
+                            </Label>
+                            <Input
+                              id="productionDate"
+                              type="date"
+                              value={batchForm.productionDate}
+                              onChange={(e) =>
+                                setBatchForm({
+                                  ...batchForm,
+                                  productionDate: e.target.value,
+                                })
+                              }
+                            />
+                          </div>
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="initialQuantity">
+                            Quantità iniziale *
+                          </Label>
+                          <Input
+                            id="initialQuantity"
+                            type="number"
+                            min={1}
+                            value={batchForm.initialQuantity}
+                            onChange={(e) =>
+                              setBatchForm({
+                                ...batchForm,
+                                initialQuantity: e.target.value,
+                              })
+                            }
+                            required
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="batchNotes">Note</Label>
+                          <Textarea
+                            id="batchNotes"
+                            rows={2}
+                            placeholder="Riferimento DDT, lotto produttore, ecc."
+                            value={batchForm.notes}
+                            onChange={(e) =>
+                              setBatchForm({
+                                ...batchForm,
+                                notes: e.target.value,
+                              })
+                            }
+                          />
+                        </div>
+                      </div>
+                      <DialogFooter>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => setBatchDialogOpen(false)}
+                        >
+                          Annulla
+                        </Button>
+                        <Button
+                          type="submit"
+                          disabled={createBatchMutation.isPending}
+                        >
+                          {createBatchMutation.isPending && (
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          )}
+                          Registra lotto
+                        </Button>
+                      </DialogFooter>
+                    </form>
+                  </DialogContent>
+                </Dialog>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {batchesLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                </div>
+              ) : batches && batches.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Batch</TableHead>
+                      <TableHead>Produttore</TableHead>
+                      <TableHead>Scadenza</TableHead>
+                      <TableHead className="text-right">Qty iniziale</TableHead>
+                      <TableHead className="text-right">Stock magazzino</TableHead>
+                      <TableHead className="w-10"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {batches.map((b) => (
+                      <TableRow key={b.id}>
+                        <TableCell className="font-mono text-xs">
+                          {b.batchNumber}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {b.producerName ?? "-"}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <span>{formatDate(b.expirationDate)}</span>
+                            {expirationBadge(b.expirationDate)}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right text-muted-foreground">
+                          {b.initialQuantity}
+                        </TableCell>
+                        <TableCell className="text-right font-semibold">
+                          {b.centralStock ?? 0}
+                        </TableCell>
+                        <TableCell>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                aria-label="Elimina lotto"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>
+                                  Eliminare il lotto {b.batchNumber}?
+                                </AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  L'eliminazione è consentita solo se il lotto è
+                                  ancora intatto in magazzino centrale (nessuna
+                                  distribuzione né uscita parziale).
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Annulla</AlertDialogCancel>
+                                <AlertDialogAction
+                                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                  onClick={() =>
+                                    deleteBatchMutation.mutate({ id: b.id })
+                                  }
+                                >
+                                  Elimina lotto
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-8 text-center">
+                  <Package className="h-10 w-10 text-muted-foreground mb-3" />
+                  <p className="text-sm text-muted-foreground">
+                    Nessun lotto registrato per questo prodotto.
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </DashboardLayout>
   );
