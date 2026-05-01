@@ -19,6 +19,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Table,
   TableBody,
@@ -35,22 +38,36 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowLeft,
+  ArrowRight,
   ArrowUp,
   Calendar,
+  ChevronDown,
+  ChevronRight,
   Loader2,
   Mail,
   MapPin,
   Package,
   Phone,
-  Plus,
   RefreshCw,
   Store,
   Trash2,
   TrendingUp,
+  Truck,
   User,
+  XCircle,
 } from "lucide-react";
+import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { useLocation, useRoute } from "wouter";
+
+type WriteOffTarget = {
+  batchId: string;
+  locationId: string;
+  batchNumber: string;
+  productName: string;
+  maxQuantity: number;
+  expirationDate: Date | null;
+};
 
 export default function RetailerDetail() {
   const [, params] = useRoute("/retailers/:id");
@@ -75,6 +92,47 @@ export default function RetailerDetail() {
     },
     onError: (err) => toast.error(err.message),
   });
+
+  // ============== Write-off state ==============
+  const [writeOffTarget, setWriteOffTarget] = useState<WriteOffTarget | null>(
+    null,
+  );
+  const [writeOffQty, setWriteOffQty] = useState("");
+  const [writeOffNotes, setWriteOffNotes] = useState("");
+  const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
+
+  const writeOffMutation = trpc.stockMovements.expiryWriteOff.useMutation({
+    onSuccess: async () => {
+      await utils.retailers.getDetails.invalidate({ id: retailerId });
+      await utils.warehouse.getStockOverview.invalidate();
+      await utils.stockMovements.listByRetailer.invalidate({ retailerId });
+      setWriteOffTarget(null);
+      setWriteOffQty("");
+      setWriteOffNotes("");
+      toast.success("Lotto scartato");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const submitWriteOff = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!writeOffTarget) return;
+    const qty = parseInt(writeOffQty, 10);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      toast.error("Quantità deve essere positiva");
+      return;
+    }
+    if (qty > writeOffTarget.maxQuantity) {
+      toast.error(`Quantità massima: ${writeOffTarget.maxQuantity}`);
+      return;
+    }
+    writeOffMutation.mutate({
+      batchId: writeOffTarget.batchId,
+      locationId: writeOffTarget.locationId,
+      quantity: qty,
+      notes: writeOffNotes || undefined,
+    });
+  };
 
   if (isLoading) {
     return (
@@ -110,39 +168,126 @@ export default function RetailerDetail() {
     );
   }
 
-  const { retailer, inventory, recentMovements, alerts, stats } = data;
+  const { retailer, inventory, recentMovements, stats } = data;
+  const now = Date.now();
 
-  const getMovementIcon = (type: string) => {
-    switch (type) {
-      case "IN":
-        return <ArrowDown className="h-4 w-4 text-green-500" />;
-      case "OUT":
-        return <ArrowUp className="h-4 w-4 text-red-500" />;
-      case "ADJUSTMENT":
-        return <RefreshCw className="h-4 w-4 text-blue-500" />;
-      default:
-        return <Package className="h-4 w-4 text-muted-foreground" />;
+  // ====== Aggregazione per prodotto (riga espandibile lotti) ======
+  type ProductGroup = {
+    productId: string;
+    productName: string;
+    productSku: string;
+    productUnit: string | null;
+    minStockThreshold: number | null;
+    totalStock: number;
+    activeBatchCount: number;
+    nearestExpiration: Date | null;
+    items: typeof inventory;
+  };
+  const groupsMap = new Map<string, ProductGroup>();
+  for (const item of inventory) {
+    if (!item.product) continue;
+    let entry = groupsMap.get(item.product.id);
+    if (!entry) {
+      entry = {
+        productId: item.product.id,
+        productName: item.product.name,
+        productSku: item.product.sku,
+        productUnit: item.product.unit,
+        minStockThreshold: item.product.minStockThreshold ?? null,
+        totalStock: 0,
+        activeBatchCount: 0,
+        nearestExpiration: null,
+        items: [],
+      };
+      groupsMap.set(item.product.id, entry);
     }
+    entry.totalStock += item.quantity;
+    if (item.quantity > 0) entry.activeBatchCount += 1;
+    if (
+      item.quantity > 0 &&
+      item.expirationDate &&
+      (!entry.nearestExpiration || item.expirationDate < entry.nearestExpiration)
+    ) {
+      entry.nearestExpiration = item.expirationDate;
+    }
+    entry.items.push(item);
+  }
+  const productGroups = Array.from(groupsMap.values()).sort((a, b) =>
+    a.productName.localeCompare(b.productName),
+  );
+
+  const daysToExpiry = (d: Date | string | null) => {
+    if (!d) return null;
+    return Math.floor((new Date(d).getTime() - now) / 86_400_000);
   };
 
-  const getMovementLabel = (type: string) => {
-    switch (type) {
-      case "IN":
-        return "Entrata";
-      case "OUT":
-        return "Uscita";
-      case "ADJUSTMENT":
-        return "Rettifica";
-      default:
-        return type;
+  const expirationBadge = (d: Date | string | null) => {
+    const days = daysToExpiry(d);
+    if (days === null) return null;
+    if (days <= 0) {
+      return (
+        <Badge variant="destructive" className="text-xs">
+          Scaduto
+        </Badge>
+      );
     }
+    if (days <= 30) {
+      return (
+        <Badge className="text-xs bg-orange-500 hover:bg-orange-600">
+          {days}gg
+        </Badge>
+      );
+    }
+    return null;
   };
 
-  const getDaysUntilExpiry = (expirationDate: Date | null) => {
-    if (!expirationDate) return null;
-    return Math.floor(
-      (new Date(expirationDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
-    );
+  const movementBadge = (type: string) => {
+    switch (type) {
+      case "TRANSFER":
+        return (
+          <Badge className="text-xs bg-blue-500 hover:bg-blue-600">
+            <Truck className="h-3 w-3 mr-1" />
+            Trasferimento
+          </Badge>
+        );
+      case "EXPIRY_WRITE_OFF":
+        return (
+          <Badge variant="destructive" className="text-xs">
+            <XCircle className="h-3 w-3 mr-1" />
+            Scarto
+          </Badge>
+        );
+      case "RECEIPT_FROM_PRODUCER":
+        return (
+          <Badge className="text-xs bg-green-600 hover:bg-green-700">
+            <ArrowDown className="h-3 w-3 mr-1" />
+            Ingresso
+          </Badge>
+        );
+      case "IN":
+        return (
+          <Badge variant="secondary" className="text-xs">
+            <ArrowDown className="h-3 w-3 mr-1" />
+            Entrata
+          </Badge>
+        );
+      case "OUT":
+        return (
+          <Badge variant="secondary" className="text-xs">
+            <ArrowUp className="h-3 w-3 mr-1" />
+            Uscita
+          </Badge>
+        );
+      case "ADJUSTMENT":
+        return (
+          <Badge variant="secondary" className="text-xs">
+            <RefreshCw className="h-3 w-3 mr-1" />
+            Rettifica
+          </Badge>
+        );
+      default:
+        return <Badge variant="outline">{type}</Badge>;
+    }
   };
 
   return (
@@ -150,7 +295,11 @@ export default function RetailerDetail() {
       <div className="space-y-8">
         {/* Header */}
         <div>
-          <Button variant="ghost" onClick={() => setLocation("/retailers")} className="mb-4">
+          <Button
+            variant="ghost"
+            onClick={() => setLocation("/retailers")}
+            className="mb-4"
+          >
             <ArrowLeft className="h-4 w-4 mr-2" />
             Torna ai Rivenditori
           </Button>
@@ -160,9 +309,13 @@ export default function RetailerDetail() {
                 <Store className="h-8 w-8 text-primary" />
               </div>
               <div>
-                <h1 className="text-4xl font-bold text-foreground mb-2">{retailer.name}</h1>
+                <h1 className="text-4xl font-bold text-foreground mb-2">
+                  {retailer.name}
+                </h1>
                 {retailer.businessType && (
-                  <p className="text-lg text-muted-foreground">{retailer.businessType}</p>
+                  <p className="text-lg text-muted-foreground">
+                    {retailer.businessType}
+                  </p>
                 )}
               </div>
             </div>
@@ -214,18 +367,22 @@ export default function RetailerDetail() {
             <CardContent>
               <div className="flex items-center gap-3">
                 <TrendingUp className="h-5 w-5 text-primary" />
-                <span className="text-2xl font-bold text-foreground">€{stats.totalValue}</span>
+                <span className="text-2xl font-bold text-foreground">
+                  €{stats.totalValue}
+                </span>
               </div>
             </CardContent>
           </Card>
           <Card className="border-border bg-card">
             <CardHeader className="pb-3">
-              <CardDescription>Prodotti in Stock</CardDescription>
+              <CardDescription>Lotti in stock</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-3">
                 <Package className="h-5 w-5 text-primary" />
-                <span className="text-2xl font-bold text-foreground">{stats.totalItems}</span>
+                <span className="text-2xl font-bold text-foreground">
+                  {stats.totalItems}
+                </span>
               </div>
             </CardContent>
           </Card>
@@ -236,7 +393,9 @@ export default function RetailerDetail() {
             <CardContent>
               <div className="flex items-center gap-3">
                 <AlertTriangle className="h-5 w-5 text-yellow-500" />
-                <span className="text-2xl font-bold text-foreground">{stats.lowStockCount}</span>
+                <span className="text-2xl font-bold text-foreground">
+                  {stats.lowStockCount}
+                </span>
               </div>
             </CardContent>
           </Card>
@@ -298,8 +457,12 @@ export default function RetailerDetail() {
                 <div className="flex items-start gap-3">
                   <User className="h-5 w-5 text-muted-foreground mt-0.5" />
                   <div>
-                    <p className="text-sm font-medium text-foreground">Persona di Contatto</p>
-                    <p className="text-sm text-muted-foreground">{retailer.contactPerson}</p>
+                    <p className="text-sm font-medium text-foreground">
+                      Persona di Contatto
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {retailer.contactPerson}
+                    </p>
                   </div>
                 </div>
               )}
@@ -317,105 +480,182 @@ export default function RetailerDetail() {
         <Tabs defaultValue="inventory" className="space-y-6">
           <TabsList>
             <TabsTrigger value="inventory">Inventario</TabsTrigger>
-            <TabsTrigger value="movements">Movimenti Stock</TabsTrigger>
+            <TabsTrigger value="movements">
+              Movimenti ({recentMovements.length})
+            </TabsTrigger>
           </TabsList>
 
+          {/* ====================== TAB INVENTARIO ====================== */}
           <TabsContent value="inventory" className="space-y-4">
-            {inventory.length > 0 ? (
+            {productGroups.length > 0 ? (
               <Card className="border-border bg-card">
                 <CardHeader>
-                  <CardTitle>Inventario Prodotti</CardTitle>
+                  <CardTitle>Inventario per prodotto e lotto</CardTitle>
                   <CardDescription>
-                    Elenco completo dei prodotti disponibili presso questo rivenditore
+                    Click su una riga per vedere il dettaglio dei lotti.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-10"></TableHead>
                         <TableHead>Prodotto</TableHead>
                         <TableHead>SKU</TableHead>
-                        <TableHead className="text-right">Quantità</TableHead>
-                        <TableHead>Scadenza</TableHead>
-                        <TableHead>Lotto</TableHead>
+                        <TableHead className="text-right">Stock totale</TableHead>
+                        <TableHead className="text-right">Lotti</TableHead>
+                        <TableHead>Scadenza più vicina</TableHead>
                         <TableHead>Stato</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {inventory.map((item) => {
-                        const daysUntilExpiry = getDaysUntilExpiry(item.expirationDate);
+                      {productGroups.map((g) => {
+                        const isExpanded = expandedProductId === g.productId;
                         const isLowStock =
-                          item.product &&
-                          item.quantity < (item.product.minStockThreshold || 10);
-                        const isExpiringSoon =
-                          daysUntilExpiry !== null && daysUntilExpiry <= 30 && daysUntilExpiry > 0;
-                        const isExpired = daysUntilExpiry !== null && daysUntilExpiry <= 0;
-
+                          g.minStockThreshold !== null &&
+                          g.totalStock < g.minStockThreshold;
                         return (
-                          <TableRow key={item.id}>
-                            <TableCell className="font-medium">
-                              {item.product?.name || "Prodotto sconosciuto"}
-                            </TableCell>
-                            <TableCell className="text-muted-foreground">
-                              {item.product?.sku}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <span
-                                className={
-                                  isLowStock ? "text-yellow-500 font-semibold" : "text-foreground"
-                                }
-                              >
-                                {item.quantity}
-                              </span>
-                              {item.product?.unit && (
-                                <span className="text-muted-foreground ml-1">
-                                  {item.product.unit}
-                                </span>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              {item.expirationDate ? (
+                          <>
+                            <TableRow
+                              key={g.productId}
+                              className="cursor-pointer hover:bg-accent/50"
+                              onClick={() =>
+                                setExpandedProductId(
+                                  isExpanded ? null : g.productId,
+                                )
+                              }
+                            >
+                              <TableCell>
+                                {isExpanded ? (
+                                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                                ) : (
+                                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                                )}
+                              </TableCell>
+                              <TableCell className="font-medium">
+                                {g.productName}
+                              </TableCell>
+                              <TableCell className="text-muted-foreground">
+                                {g.productSku}
+                              </TableCell>
+                              <TableCell className="text-right font-semibold">
                                 <span
                                   className={
-                                    isExpired
-                                      ? "text-destructive font-semibold"
-                                      : isExpiringSoon
-                                      ? "text-orange-500 font-semibold"
+                                    isLowStock
+                                      ? "text-yellow-500"
                                       : "text-foreground"
                                   }
                                 >
-                                  {format(new Date(item.expirationDate), "dd/MM/yyyy")}
+                                  {g.totalStock}
                                 </span>
-                              ) : (
-                                <span className="text-muted-foreground">-</span>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-muted-foreground">
-                              {item.batchNumber || "-"}
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex gap-2">
-                                {isExpired && (
-                                  <Badge variant="destructive" className="text-xs">
-                                    Scaduto
-                                  </Badge>
+                                {g.productUnit && (
+                                  <span className="text-muted-foreground ml-1 font-normal">
+                                    {g.productUnit}
+                                  </span>
                                 )}
-                                {isExpiringSoon && !isExpired && (
-                                  <Badge
-                                    variant="default"
-                                    className="text-xs bg-orange-500 hover:bg-orange-600"
-                                  >
-                                    In scadenza
-                                  </Badge>
-                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {g.activeBatchCount}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  <span>
+                                    {g.nearestExpiration
+                                      ? format(
+                                          g.nearestExpiration,
+                                          "dd/MM/yyyy",
+                                        )
+                                      : "-"}
+                                  </span>
+                                  {expirationBadge(g.nearestExpiration)}
+                                </div>
+                              </TableCell>
+                              <TableCell>
                                 {isLowStock && (
                                   <Badge variant="secondary" className="text-xs">
                                     Scorta bassa
                                   </Badge>
                                 )}
-                              </div>
-                            </TableCell>
-                          </TableRow>
+                              </TableCell>
+                            </TableRow>
+                            {isExpanded && (
+                              <TableRow key={`${g.productId}-detail`}>
+                                <TableCell></TableCell>
+                                <TableCell colSpan={6} className="bg-accent/20 py-4">
+                                  <Table>
+                                    <TableHeader>
+                                      <TableRow>
+                                        <TableHead>Lotto</TableHead>
+                                        <TableHead>Produttore</TableHead>
+                                        <TableHead>Scadenza</TableHead>
+                                        <TableHead className="text-right">
+                                          Quantità
+                                        </TableHead>
+                                        <TableHead className="w-10"></TableHead>
+                                      </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                      {g.items.map((item) => (
+                                        <TableRow key={item.id}>
+                                          <TableCell className="font-mono text-xs">
+                                            {item.batchNumber}
+                                          </TableCell>
+                                          <TableCell className="text-muted-foreground">
+                                            {item.producerName ?? "-"}
+                                          </TableCell>
+                                          <TableCell>
+                                            <div className="flex items-center gap-2">
+                                              <span>
+                                                {item.expirationDate
+                                                  ? format(
+                                                      item.expirationDate,
+                                                      "dd/MM/yyyy",
+                                                    )
+                                                  : "-"}
+                                              </span>
+                                              {expirationBadge(
+                                                item.expirationDate,
+                                              )}
+                                            </div>
+                                          </TableCell>
+                                          <TableCell className="text-right font-semibold">
+                                            {item.quantity}
+                                          </TableCell>
+                                          <TableCell>
+                                            {item.quantity > 0 && (
+                                              <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                                aria-label="Scarta lotto"
+                                                onClick={() => {
+                                                  setWriteOffTarget({
+                                                    batchId: item.batchId,
+                                                    locationId: item.locationId,
+                                                    batchNumber: item.batchNumber,
+                                                    productName: g.productName,
+                                                    maxQuantity: item.quantity,
+                                                    expirationDate:
+                                                      item.expirationDate,
+                                                  });
+                                                  setWriteOffQty(
+                                                    String(item.quantity),
+                                                  );
+                                                  setWriteOffNotes("");
+                                                }}
+                                              >
+                                                <XCircle className="h-4 w-4" />
+                                              </Button>
+                                            )}
+                                          </TableCell>
+                                        </TableRow>
+                                      ))}
+                                    </TableBody>
+                                  </Table>
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </>
                         );
                       })}
                     </TableBody>
@@ -430,30 +670,23 @@ export default function RetailerDetail() {
                     Inventario Vuoto
                   </h3>
                   <p className="text-muted-foreground text-center max-w-md">
-                    Nessun prodotto presente nell'inventario di questo rivenditore
+                    Nessun lotto presso questo rivenditore. Trasferisci stock dal
+                    Magazzino Centrale per popolare l'inventario.
                   </p>
                 </CardContent>
               </Card>
             )}
           </TabsContent>
 
+          {/* ====================== TAB MOVIMENTI ====================== */}
           <TabsContent value="movements" className="space-y-4">
-            <div className="flex flex-col items-end gap-1">
-              <Button disabled aria-disabled="true">
-                <Plus className="h-4 w-4 mr-2" />
-                Aggiungi Movimento
-              </Button>
-              <p className="text-xs text-muted-foreground">
-                Sistema lotti FEFO completo in arrivo (Fase B post-cutover).
-              </p>
-            </div>
-
             {recentMovements.length > 0 ? (
               <Card className="border-border bg-card">
                 <CardHeader>
                   <CardTitle>Movimenti di Magazzino</CardTitle>
                   <CardDescription>
-                    Ultimi 50 movimenti registrati per questo rivenditore
+                    Ultimi {recentMovements.length} movimenti registrati per
+                    questo rivenditore (in entrata + uscite).
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -463,49 +696,43 @@ export default function RetailerDetail() {
                         <TableHead>Data</TableHead>
                         <TableHead>Tipo</TableHead>
                         <TableHead>Prodotto</TableHead>
-                        <TableHead className="text-right">Quantità</TableHead>
-                        <TableHead>Documento</TableHead>
+                        <TableHead>Lotto</TableHead>
+                        <TableHead className="text-right">Qty</TableHead>
+                        <TableHead>Da → A</TableHead>
                         <TableHead>Note</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {recentMovements.map((movement) => (
-                        <TableRow key={movement.id}>
-                          <TableCell className="text-muted-foreground">
-                            {movement.timestamp
-                              ? format(new Date(movement.timestamp), "dd/MM/yyyy HH:mm", {
-                                  locale: it,
-                                })
+                      {recentMovements.map((m) => (
+                        <TableRow key={m.id}>
+                          <TableCell className="text-muted-foreground text-sm">
+                            {m.timestamp
+                              ? format(
+                                  new Date(m.timestamp),
+                                  "dd/MM/yyyy HH:mm",
+                                  { locale: it },
+                                )
                               : "-"}
                           </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              {getMovementIcon(movement.type)}
-                              <span className="text-sm">{getMovementLabel(movement.type)}</span>
+                          <TableCell>{movementBadge(m.type)}</TableCell>
+                          <TableCell className="font-medium">
+                            {m.productName ?? "-"}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">
+                            {m.batchNumber ?? "-"}
+                          </TableCell>
+                          <TableCell className="text-right font-semibold">
+                            {m.quantity}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            <div className="flex items-center gap-1">
+                              <span>{m.fromLocationName ?? "—"}</span>
+                              <ArrowRight className="h-3 w-3" />
+                              <span>{m.toLocationName ?? "—"}</span>
                             </div>
                           </TableCell>
-                          <TableCell className="font-medium">
-                            {movement.product?.name || "Prodotto sconosciuto"}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <span
-                              className={
-                                movement.type === "IN"
-                                  ? "text-green-500 font-semibold"
-                                  : movement.type === "OUT"
-                                  ? "text-red-500 font-semibold"
-                                  : "text-foreground font-semibold"
-                              }
-                            >
-                              {movement.type === "IN" ? "+" : movement.type === "OUT" ? "-" : ""}
-                              {movement.quantity}
-                            </span>
-                          </TableCell>
-                          <TableCell className="text-muted-foreground">
-                            {movement.sourceDocument || "-"}
-                          </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">
-                            {movement.notes || "-"}
+                          <TableCell className="text-muted-foreground text-sm max-w-xs truncate">
+                            {m.notes || m.notesInternal || "-"}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -521,15 +748,82 @@ export default function RetailerDetail() {
                     Nessun Movimento
                   </h3>
                   <p className="text-muted-foreground text-center max-w-md">
-                    Non sono stati registrati movimenti di magazzino per questo rivenditore.
+                    Non sono stati registrati movimenti di magazzino per questo
+                    rivenditore.
                   </p>
                 </CardContent>
               </Card>
             )}
           </TabsContent>
-
         </Tabs>
       </div>
+
+      {/* ====================== Dialog WRITE-OFF ====================== */}
+      <AlertDialog
+        open={writeOffTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setWriteOffTarget(null);
+            setWriteOffQty("");
+            setWriteOffNotes("");
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <form onSubmit={submitWriteOff}>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Scarta lotto</AlertDialogTitle>
+              <AlertDialogDescription>
+                Stai scartando unità del lotto{" "}
+                <strong className="font-mono">
+                  {writeOffTarget?.batchNumber}
+                </strong>{" "}
+                ({writeOffTarget?.productName}). Verrà registrato un movimento{" "}
+                <strong>EXPIRY_WRITE_OFF</strong>. Operazione irreversibile.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="writeOffQty">
+                  Quantità da scartare (max {writeOffTarget?.maxQuantity ?? 0})
+                </Label>
+                <Input
+                  id="writeOffQty"
+                  type="number"
+                  min={1}
+                  max={writeOffTarget?.maxQuantity ?? 1}
+                  value={writeOffQty}
+                  onChange={(e) => setWriteOffQty(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="writeOffNotes">Note (opzionale)</Label>
+                <Textarea
+                  id="writeOffNotes"
+                  rows={2}
+                  placeholder="Es. Contaminazione, errore conservazione, scaduto"
+                  value={writeOffNotes}
+                  onChange={(e) => setWriteOffNotes(e.target.value)}
+                />
+              </div>
+            </div>
+            <AlertDialogFooter>
+              <AlertDialogCancel type="button">Annulla</AlertDialogCancel>
+              <AlertDialogAction
+                type="submit"
+                disabled={writeOffMutation.isPending}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {writeOffMutation.isPending && (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                )}
+                Scarta
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </form>
+        </AlertDialogContent>
+      </AlertDialog>
     </DashboardLayout>
   );
 }

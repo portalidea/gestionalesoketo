@@ -1,5 +1,16 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -7,6 +18,24 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -15,6 +44,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { trpc } from "@/lib/trpc";
 import { format } from "date-fns";
 import {
@@ -23,16 +58,168 @@ import {
   ChevronRight,
   Loader2,
   Package,
+  Truck,
   Warehouse as WarehouseIcon,
+  XCircle,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useLocation } from "wouter";
+
+type TransferTarget = {
+  productId: string;
+  productName: string;
+  productUnit: string | null;
+};
+
+type WriteOffTarget = {
+  batchId: string;
+  locationId: string;
+  batchNumber: string;
+  productName: string;
+  expirationDate: string | null;
+  maxQuantity: number;
+};
 
 export default function Warehouse() {
   const [, setLocation] = useLocation();
-  const { data: overview, isLoading } = trpc.warehouse.getStockOverview.useQuery();
+  const utils = trpc.useUtils();
+
+  const { data: overview, isLoading } =
+    trpc.warehouse.getStockOverview.useQuery();
+  const { data: warehouseLoc } = trpc.locations.getCentralWarehouse.useQuery();
+  const { data: retailers } = trpc.retailers.list.useQuery();
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
 
+  // ============== Transfer state ==============
+  const [transferTarget, setTransferTarget] = useState<TransferTarget | null>(
+    null,
+  );
+  const [transferRetailerId, setTransferRetailerId] = useState<string>("");
+  const [transferBatchId, setTransferBatchId] = useState<string>("");
+  const [transferQty, setTransferQty] = useState("");
+  const [transferNotes, setTransferNotes] = useState("");
+  const [transferProforma, setTransferProforma] = useState(false);
+
+  const { data: suggestedBatches } =
+    trpc.productBatches.suggestForTransfer.useQuery(
+      {
+        productId: transferTarget?.productId ?? "",
+        retailerId: transferRetailerId,
+      },
+      {
+        enabled:
+          transferTarget !== null &&
+          transferTarget.productId.length > 0 &&
+          transferRetailerId.length > 0,
+      },
+    );
+
+  // Quando i suggested batches cambiano, auto-seleziona il primo (FEFO)
+  useEffect(() => {
+    if (suggestedBatches && suggestedBatches.length > 0 && !transferBatchId) {
+      setTransferBatchId(suggestedBatches[0].batchId);
+    }
+  }, [suggestedBatches, transferBatchId]);
+
+  const transferMutation = trpc.stockMovements.transfer.useMutation({
+    onSuccess: async () => {
+      await utils.warehouse.getStockOverview.invalidate();
+      await utils.productBatches.listByProduct.invalidate();
+      await utils.productBatches.suggestForTransfer.invalidate();
+      await utils.retailers.getDetails.invalidate();
+      await utils.stockMovements.listByRetailer.invalidate();
+      resetTransfer();
+      // Toast tramite import di sonner
+      import("sonner").then(({ toast }) =>
+        toast.success("Trasferimento completato"),
+      );
+    },
+    onError: (err) =>
+      import("sonner").then(({ toast }) => toast.error(err.message)),
+  });
+
+  const resetTransfer = () => {
+    setTransferTarget(null);
+    setTransferRetailerId("");
+    setTransferBatchId("");
+    setTransferQty("");
+    setTransferNotes("");
+    setTransferProforma(false);
+  };
+
+  const submitTransfer = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!transferTarget) return;
+    const qty = parseInt(transferQty, 10);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      import("sonner").then(({ toast }) =>
+        toast.error("Quantità deve essere positiva"),
+      );
+      return;
+    }
+    if (!transferRetailerId) {
+      import("sonner").then(({ toast }) => toast.error("Seleziona un rivenditore"));
+      return;
+    }
+    if (!transferBatchId) {
+      import("sonner").then(({ toast }) => toast.error("Seleziona un lotto"));
+      return;
+    }
+    transferMutation.mutate({
+      productId: transferTarget.productId,
+      batchId: transferBatchId,
+      retailerId: transferRetailerId,
+      quantity: qty,
+      notes: transferNotes || undefined,
+      generateProforma: false,
+    });
+  };
+
+  // ============== Write-off state ==============
+  const [writeOffTarget, setWriteOffTarget] = useState<WriteOffTarget | null>(
+    null,
+  );
+  const [writeOffQty, setWriteOffQty] = useState("");
+  const [writeOffNotes, setWriteOffNotes] = useState("");
+
+  const writeOffMutation = trpc.stockMovements.expiryWriteOff.useMutation({
+    onSuccess: async () => {
+      await utils.warehouse.getStockOverview.invalidate();
+      await utils.productBatches.listByProduct.invalidate();
+      setWriteOffTarget(null);
+      setWriteOffQty("");
+      setWriteOffNotes("");
+      import("sonner").then(({ toast }) => toast.success("Lotto scartato"));
+    },
+    onError: (err) =>
+      import("sonner").then(({ toast }) => toast.error(err.message)),
+  });
+
+  const submitWriteOff = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!writeOffTarget) return;
+    const qty = parseInt(writeOffQty, 10);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      import("sonner").then(({ toast }) =>
+        toast.error("Quantità deve essere positiva"),
+      );
+      return;
+    }
+    if (qty > writeOffTarget.maxQuantity) {
+      import("sonner").then(({ toast }) =>
+        toast.error(`Quantità massima: ${writeOffTarget.maxQuantity}`),
+      );
+      return;
+    }
+    writeOffMutation.mutate({
+      batchId: writeOffTarget.batchId,
+      locationId: writeOffTarget.locationId,
+      quantity: qty,
+      notes: writeOffNotes || undefined,
+    });
+  };
+
+  // ============== Computed ==============
   const totalProducts = overview?.length ?? 0;
   let totalActiveBatches = 0;
   let totalStock = 0;
@@ -79,6 +266,15 @@ export default function Warehouse() {
     return null;
   };
 
+  // Lotto eligibile per Scarta: se scadenza imminente (< 7gg) o già scaduto
+  const isEligibleForWriteOff = (expirationDate: string, qty: number) => {
+    if (qty <= 0) return false;
+    const days = Math.floor(
+      (new Date(expirationDate).getTime() - now) / 86_400_000,
+    );
+    return days <= 7;
+  };
+
   return (
     <DashboardLayout>
       <div className="space-y-8">
@@ -88,7 +284,8 @@ export default function Warehouse() {
           </h1>
           <p className="text-muted-foreground">
             Stock SoKeto E-Keto Food per prodotto e lotto. Click su una riga per
-            vedere il dettaglio dei lotti.
+            vedere il dettaglio dei lotti, oppure usa il bottone Trasferisci per
+            inviare stock a un rivenditore.
           </p>
         </div>
 
@@ -172,6 +369,7 @@ export default function Warehouse() {
                     <TableHead className="text-right">Stock</TableHead>
                     <TableHead className="text-right">Lotti attivi</TableHead>
                     <TableHead>Scadenza più vicina</TableHead>
+                    <TableHead className="w-32 text-right">Azioni</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -195,12 +393,16 @@ export default function Warehouse() {
                       <>
                         <TableRow
                           key={p.productId}
-                          className="cursor-pointer hover:bg-accent/50"
-                          onClick={() =>
-                            setExpandedProductId(isExpanded ? null : p.productId)
-                          }
+                          className="hover:bg-accent/50"
                         >
-                          <TableCell>
+                          <TableCell
+                            className="cursor-pointer"
+                            onClick={() =>
+                              setExpandedProductId(
+                                isExpanded ? null : p.productId,
+                              )
+                            }
+                          >
                             {isExpanded ? (
                               <ChevronDown className="h-4 w-4 text-muted-foreground" />
                             ) : (
@@ -210,10 +412,9 @@ export default function Warehouse() {
                           <TableCell className="font-medium">
                             <button
                               type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setLocation(`/products/${p.productId}`);
-                              }}
+                              onClick={() =>
+                                setLocation(`/products/${p.productId}`)
+                              }
                               className="text-left hover:text-primary transition-colors"
                             >
                               {p.productName}
@@ -236,11 +437,28 @@ export default function Warehouse() {
                           <TableCell className={nearestColor}>
                             {formatDate(p.nearestExpiration)}
                           </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={p.totalStock <= 0}
+                              onClick={() =>
+                                setTransferTarget({
+                                  productId: p.productId,
+                                  productName: p.productName,
+                                  productUnit: p.productUnit,
+                                })
+                              }
+                            >
+                              <Truck className="h-3 w-3 mr-1" />
+                              Trasferisci
+                            </Button>
+                          </TableCell>
                         </TableRow>
                         {isExpanded && (
                           <TableRow key={`${p.productId}-detail`}>
                             <TableCell></TableCell>
-                            <TableCell colSpan={5} className="bg-accent/20 py-4">
+                            <TableCell colSpan={6} className="bg-accent/20 py-4">
                               <Table>
                                 <TableHeader>
                                   <TableRow>
@@ -249,6 +467,7 @@ export default function Warehouse() {
                                     <TableHead>Scadenza</TableHead>
                                     <TableHead className="text-right">Qty iniziale</TableHead>
                                     <TableHead className="text-right">Stock residuo</TableHead>
+                                    <TableHead className="w-10"></TableHead>
                                   </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -274,6 +493,39 @@ export default function Warehouse() {
                                       </TableCell>
                                       <TableCell className="text-right font-semibold">
                                         {b.quantity}
+                                      </TableCell>
+                                      <TableCell>
+                                        {warehouseLoc &&
+                                          isEligibleForWriteOff(
+                                            b.expirationDate,
+                                            b.quantity,
+                                          ) && (
+                                            <Tooltip>
+                                              <TooltipTrigger asChild>
+                                                <Button
+                                                  variant="ghost"
+                                                  size="icon"
+                                                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                                  aria-label="Scarta lotto"
+                                                  onClick={() =>
+                                                    setWriteOffTarget({
+                                                      batchId: b.batchId,
+                                                      locationId: warehouseLoc.id,
+                                                      batchNumber: b.batchNumber,
+                                                      productName: p.productName,
+                                                      expirationDate: b.expirationDate,
+                                                      maxQuantity: b.quantity,
+                                                    })
+                                                  }
+                                                >
+                                                  <XCircle className="h-4 w-4" />
+                                                </Button>
+                                              </TooltipTrigger>
+                                              <TooltipContent>
+                                                Scarta (scadenza imminente o passata)
+                                              </TooltipContent>
+                                            </Tooltip>
+                                          )}
                                       </TableCell>
                                     </TableRow>
                                   ))}
@@ -304,6 +556,237 @@ export default function Warehouse() {
           </Card>
         )}
       </div>
+
+      {/* ====================== Dialog TRANSFER ====================== */}
+      <Dialog
+        open={transferTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) resetTransfer();
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <form onSubmit={submitTransfer}>
+            <DialogHeader>
+              <DialogTitle>Trasferisci a rivenditore</DialogTitle>
+              <DialogDescription>
+                Sposta stock di <strong>{transferTarget?.productName}</strong> dal
+                magazzino centrale a un rivenditore. Lotti suggeriti per scadenza
+                (FEFO).
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="transferRetailer">Rivenditore *</Label>
+                <Select
+                  value={transferRetailerId}
+                  onValueChange={(v) => {
+                    setTransferRetailerId(v);
+                    setTransferBatchId("");
+                  }}
+                >
+                  <SelectTrigger id="transferRetailer">
+                    <SelectValue placeholder="Seleziona rivenditore" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {retailers?.map((r) => (
+                      <SelectItem key={r.id} value={r.id}>
+                        {r.name}
+                        {r.city ? ` — ${r.city}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="transferBatch">
+                  Lotto * (suggerito FEFO: scadenza più vicina)
+                </Label>
+                <Select
+                  value={transferBatchId}
+                  onValueChange={setTransferBatchId}
+                  disabled={!transferRetailerId || !suggestedBatches}
+                >
+                  <SelectTrigger id="transferBatch">
+                    <SelectValue
+                      placeholder={
+                        !transferRetailerId
+                          ? "Seleziona prima un rivenditore"
+                          : suggestedBatches && suggestedBatches.length === 0
+                            ? "Nessun lotto disponibile"
+                            : "Seleziona lotto"
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {suggestedBatches?.map((b) => {
+                      const days = Math.floor(
+                        (new Date(b.expirationDate).getTime() - now) /
+                          86_400_000,
+                      );
+                      const expLabel =
+                        days <= 0
+                          ? `SCADUTO ${format(new Date(b.expirationDate), "dd/MM/yyyy")}`
+                          : days <= 30
+                            ? `${format(new Date(b.expirationDate), "dd/MM/yyyy")} (${days}gg)`
+                            : format(new Date(b.expirationDate), "dd/MM/yyyy");
+                      return (
+                        <SelectItem key={b.batchId} value={b.batchId}>
+                          {b.batchNumber} · {expLabel} · stock {b.centralStock}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+                {suggestedBatches && suggestedBatches.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Nessun lotto del prodotto ha stock al magazzino centrale.
+                    Aggiungine uno da <strong>/products/...</strong> →{" "}
+                    <em>+ Aggiungi lotto</em>.
+                  </p>
+                )}
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="transferQty">
+                  Quantità *
+                  {transferBatchId && suggestedBatches && (
+                    <span className="text-xs text-muted-foreground ml-2">
+                      (max{" "}
+                      {suggestedBatches.find((b) => b.batchId === transferBatchId)
+                        ?.centralStock ?? 0}
+                      )
+                    </span>
+                  )}
+                </Label>
+                <Input
+                  id="transferQty"
+                  type="number"
+                  min={1}
+                  value={transferQty}
+                  onChange={(e) => setTransferQty(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="transferNotes">Note</Label>
+                <Textarea
+                  id="transferNotes"
+                  rows={2}
+                  placeholder="Riferimento DDT consegna, note interne…"
+                  value={transferNotes}
+                  onChange={(e) => setTransferNotes(e.target.value)}
+                />
+              </div>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <label className="flex items-center gap-2 opacity-50 cursor-not-allowed">
+                    <Checkbox
+                      checked={transferProforma}
+                      disabled
+                      onCheckedChange={(v) => setTransferProforma(v === true)}
+                    />
+                    <span className="text-sm">Genera proforma su Fatture in Cloud</span>
+                  </label>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Disponibile in Milestone 3 (refactor FiC single-tenant)
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={resetTransfer}>
+                Annulla
+              </Button>
+              <Button
+                type="submit"
+                disabled={transferMutation.isPending || !transferBatchId}
+              >
+                {transferMutation.isPending && (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                )}
+                Trasferisci
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ====================== Dialog WRITE-OFF ====================== */}
+      <AlertDialog
+        open={writeOffTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setWriteOffTarget(null);
+            setWriteOffQty("");
+            setWriteOffNotes("");
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <form onSubmit={submitWriteOff}>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Scarta lotto</AlertDialogTitle>
+              <AlertDialogDescription>
+                Scarto del lotto{" "}
+                <strong className="font-mono">
+                  {writeOffTarget?.batchNumber}
+                </strong>{" "}
+                ({writeOffTarget?.productName}, scad{" "}
+                {writeOffTarget?.expirationDate
+                  ? format(
+                      new Date(writeOffTarget.expirationDate),
+                      "dd/MM/yyyy",
+                    )
+                  : "?"}
+                ). Verrà registrato un movimento <strong>EXPIRY_WRITE_OFF</strong>{" "}
+                e lo stock decrementato di conseguenza.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="writeOffQty">
+                  Quantità da scartare (max {writeOffTarget?.maxQuantity ?? 0})
+                </Label>
+                <Input
+                  id="writeOffQty"
+                  type="number"
+                  min={1}
+                  max={writeOffTarget?.maxQuantity ?? 1}
+                  value={writeOffQty}
+                  onChange={(e) => setWriteOffQty(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="writeOffNotes">Note (opzionale)</Label>
+                <Textarea
+                  id="writeOffNotes"
+                  rows={2}
+                  placeholder="Es. Scaduto, contaminazione, errore conservazione"
+                  value={writeOffNotes}
+                  onChange={(e) => setWriteOffNotes(e.target.value)}
+                />
+              </div>
+            </div>
+            <AlertDialogFooter>
+              <AlertDialogCancel type="button">Annulla</AlertDialogCancel>
+              <AlertDialogAction
+                type="submit"
+                disabled={writeOffMutation.isPending}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {writeOffMutation.isPending && (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                )}
+                Scarta
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </form>
+        </AlertDialogContent>
+      </AlertDialog>
     </DashboardLayout>
   );
 }

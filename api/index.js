@@ -37725,6 +37725,13 @@ async function getBatchesByProduct(productId) {
   if (!db) return [];
   const warehouse = await getCentralWarehouseLocation();
   if (!warehouse) return [];
+  const retailerStockExpr = sql`COALESCE((
+    SELECT SUM(ibb."quantity")::int
+    FROM "inventoryByBatch" ibb
+    INNER JOIN "locations" l ON l."id" = ibb."locationId"
+    WHERE ibb."batchId" = ${productBatches.id}
+      AND l."type" = 'retailer'
+  ), 0)`;
   const rows = await db.select({
     id: productBatches.id,
     productId: productBatches.productId,
@@ -37736,7 +37743,8 @@ async function getBatchesByProduct(productId) {
     initialQuantity: productBatches.initialQuantity,
     notes: productBatches.notes,
     createdAt: productBatches.createdAt,
-    centralStock: inventoryByBatch.quantity
+    centralStock: inventoryByBatch.quantity,
+    retailerStock: retailerStockExpr
   }).from(productBatches).leftJoin(producers, eq(productBatches.producerId, producers.id)).leftJoin(
     inventoryByBatch,
     and(
@@ -37812,6 +37820,134 @@ async function deleteBatchIfFresh(batchId) {
     await tx.delete(productBatches).where(eq(productBatches.id, batchId));
   });
 }
+async function getBatchesAvailableForTransfer(productId) {
+  const db = await getDb();
+  if (!db) return [];
+  const warehouse = await getCentralWarehouseLocation();
+  if (!warehouse) return [];
+  const rows = await db.select({
+    batchId: productBatches.id,
+    batchNumber: productBatches.batchNumber,
+    expirationDate: productBatches.expirationDate,
+    productionDate: productBatches.productionDate,
+    initialQuantity: productBatches.initialQuantity,
+    centralStock: inventoryByBatch.quantity,
+    producerId: productBatches.producerId,
+    producerName: producers.name
+  }).from(productBatches).innerJoin(
+    inventoryByBatch,
+    and(
+      eq(inventoryByBatch.batchId, productBatches.id),
+      eq(inventoryByBatch.locationId, warehouse.id)
+    )
+  ).leftJoin(producers, eq(productBatches.producerId, producers.id)).where(
+    and(
+      eq(productBatches.productId, productId),
+      sql`${inventoryByBatch.quantity} > 0`
+    )
+  ).orderBy(productBatches.expirationDate);
+  return rows;
+}
+async function transferBatchToRetailer(input) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const warehouse = await getCentralWarehouseLocation();
+  if (!warehouse) throw new Error("Magazzino centrale non configurato");
+  const retailerLoc = await getRetailerLocation(input.retailerId);
+  if (!retailerLoc) throw new Error("Rivenditore senza location associata");
+  return await db.transaction(async (tx) => {
+    const centralRows = await tx.select().from(inventoryByBatch).where(
+      and(
+        eq(inventoryByBatch.locationId, warehouse.id),
+        eq(inventoryByBatch.batchId, input.batchId)
+      )
+    ).for("update");
+    const central = centralRows[0];
+    if (!central || central.quantity < input.quantity) {
+      throw new Error(
+        `Stock centrale insufficiente: disponibili ${central?.quantity ?? 0}, richiesti ${input.quantity}`
+      );
+    }
+    await tx.update(inventoryByBatch).set({ quantity: central.quantity - input.quantity, updatedAt: /* @__PURE__ */ new Date() }).where(eq(inventoryByBatch.id, central.id));
+    const retailerRows = await tx.select().from(inventoryByBatch).where(
+      and(
+        eq(inventoryByBatch.locationId, retailerLoc.id),
+        eq(inventoryByBatch.batchId, input.batchId)
+      )
+    ).for("update");
+    const existing = retailerRows[0];
+    if (existing) {
+      await tx.update(inventoryByBatch).set({
+        quantity: existing.quantity + input.quantity,
+        updatedAt: /* @__PURE__ */ new Date()
+      }).where(eq(inventoryByBatch.id, existing.id));
+    } else {
+      await tx.insert(inventoryByBatch).values({
+        locationId: retailerLoc.id,
+        batchId: input.batchId,
+        quantity: input.quantity
+      });
+    }
+    const [batch] = await tx.select({ batchNumber: productBatches.batchNumber }).from(productBatches).where(eq(productBatches.id, input.batchId));
+    const [retailer] = await tx.select({ name: retailers.name }).from(retailers).where(eq(retailers.id, input.retailerId));
+    const auditNote = `Trasferito lotto ${batch?.batchNumber ?? "?"} \xD7${input.quantity} \u2192 ${retailer?.name ?? "?"}`;
+    const [movement] = await tx.insert(stockMovements).values({
+      productId: input.productId,
+      type: "TRANSFER",
+      quantity: input.quantity,
+      previousQuantity: central.quantity,
+      newQuantity: central.quantity - input.quantity,
+      retailerId: input.retailerId,
+      batchId: input.batchId,
+      fromLocationId: warehouse.id,
+      toLocationId: retailerLoc.id,
+      notes: input.notes,
+      notesInternal: auditNote,
+      createdBy: input.createdBy
+    }).returning();
+    return movement;
+  });
+}
+async function expiryWriteOff(input) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return await db.transaction(async (tx) => {
+    const stockRows = await tx.select().from(inventoryByBatch).where(
+      and(
+        eq(inventoryByBatch.locationId, input.locationId),
+        eq(inventoryByBatch.batchId, input.batchId)
+      )
+    ).for("update");
+    const stock = stockRows[0];
+    if (!stock || stock.quantity < input.quantity) {
+      throw new Error(
+        `Stock insufficiente: disponibili ${stock?.quantity ?? 0}, richiesti ${input.quantity}`
+      );
+    }
+    await tx.update(inventoryByBatch).set({ quantity: stock.quantity - input.quantity, updatedAt: /* @__PURE__ */ new Date() }).where(eq(inventoryByBatch.id, stock.id));
+    const [batch] = await tx.select({
+      batchNumber: productBatches.batchNumber,
+      productId: productBatches.productId,
+      expirationDate: productBatches.expirationDate
+    }).from(productBatches).where(eq(productBatches.id, input.batchId));
+    const [loc] = await tx.select({ name: locations.name }).from(locations).where(eq(locations.id, input.locationId));
+    const auditNote = `Scarto lotto ${batch?.batchNumber ?? "?"} (scad ${batch?.expirationDate ?? "?"}) \xD7${input.quantity} da ${loc?.name ?? "?"}`;
+    const [movement] = await tx.insert(stockMovements).values({
+      productId: batch?.productId ?? input.batchId,
+      // fallback safety
+      type: "EXPIRY_WRITE_OFF",
+      quantity: input.quantity,
+      previousQuantity: stock.quantity,
+      newQuantity: stock.quantity - input.quantity,
+      batchId: input.batchId,
+      fromLocationId: input.locationId,
+      notes: input.notes,
+      notesInternal: auditNote,
+      createdBy: input.createdBy
+    }).returning();
+    return movement;
+  });
+}
 async function getInventoryByLocationId(locationId) {
   const db = await getDb();
   if (!db) return [];
@@ -37842,9 +37978,12 @@ async function getInventoryByBatchByRetailer(retailerId) {
   const rows = await getInventoryByLocationId(location2.id);
   return rows.map((r) => ({
     id: r.id,
+    locationId: r.locationId,
+    batchId: r.batchId,
     quantity: r.quantity,
     expirationDate: r.expirationDate ? new Date(r.expirationDate) : null,
     batchNumber: r.batchNumber,
+    producerName: r.producerName,
     product: {
       id: r.productId,
       sku: r.productSku,
@@ -37910,10 +38049,80 @@ async function getWarehouseStockOverview() {
     (a, b2) => a.productName.localeCompare(b2.productName)
   );
 }
+async function getStockMovementsByLocationId(locationId, limit = 100) {
+  const db = await getDb();
+  if (!db) return [];
+  const fromLoc = sql`from_loc.name`.as("fromLocationName");
+  const toLoc = sql`to_loc.name`.as("toLocationName");
+  return db.select({
+    id: stockMovements.id,
+    type: stockMovements.type,
+    quantity: stockMovements.quantity,
+    previousQuantity: stockMovements.previousQuantity,
+    newQuantity: stockMovements.newQuantity,
+    timestamp: stockMovements.timestamp,
+    notes: stockMovements.notes,
+    notesInternal: stockMovements.notesInternal,
+    productId: products.id,
+    productSku: products.sku,
+    productName: products.name,
+    batchId: productBatches.id,
+    batchNumber: productBatches.batchNumber,
+    expirationDate: productBatches.expirationDate,
+    fromLocationId: stockMovements.fromLocationId,
+    toLocationId: stockMovements.toLocationId,
+    fromLocationName: sql`from_loc.name`,
+    toLocationName: sql`to_loc.name`
+  }).from(stockMovements).leftJoin(products, eq(stockMovements.productId, products.id)).leftJoin(productBatches, eq(stockMovements.batchId, productBatches.id)).leftJoin(
+    sql`${locations} AS from_loc`,
+    sql`from_loc.id = ${stockMovements.fromLocationId}`
+  ).leftJoin(
+    sql`${locations} AS to_loc`,
+    sql`to_loc.id = ${stockMovements.toLocationId}`
+  ).where(
+    or(
+      eq(stockMovements.fromLocationId, locationId),
+      eq(stockMovements.toLocationId, locationId)
+    )
+  ).orderBy(desc(stockMovements.timestamp)).limit(limit);
+}
 async function getStockMovementsByRetailer(retailerId, limit = 100) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(stockMovements).where(eq(stockMovements.retailerId, retailerId)).orderBy(desc(stockMovements.timestamp)).limit(limit);
+  const retailerLoc = await getRetailerLocation(retailerId);
+  if (!retailerLoc) return [];
+  return db.select({
+    id: stockMovements.id,
+    type: stockMovements.type,
+    quantity: stockMovements.quantity,
+    previousQuantity: stockMovements.previousQuantity,
+    newQuantity: stockMovements.newQuantity,
+    timestamp: stockMovements.timestamp,
+    notes: stockMovements.notes,
+    notesInternal: stockMovements.notesInternal,
+    productId: products.id,
+    productSku: products.sku,
+    productName: products.name,
+    batchId: productBatches.id,
+    batchNumber: productBatches.batchNumber,
+    expirationDate: productBatches.expirationDate,
+    fromLocationId: stockMovements.fromLocationId,
+    toLocationId: stockMovements.toLocationId,
+    fromLocationName: sql`from_loc.name`,
+    toLocationName: sql`to_loc.name`
+  }).from(stockMovements).leftJoin(products, eq(stockMovements.productId, products.id)).leftJoin(productBatches, eq(stockMovements.batchId, productBatches.id)).leftJoin(
+    sql`${locations} AS from_loc`,
+    sql`from_loc.id = ${stockMovements.fromLocationId}`
+  ).leftJoin(
+    sql`${locations} AS to_loc`,
+    sql`to_loc.id = ${stockMovements.toLocationId}`
+  ).where(
+    or(
+      eq(stockMovements.fromLocationId, retailerLoc.id),
+      eq(stockMovements.toLocationId, retailerLoc.id),
+      eq(stockMovements.retailerId, retailerId)
+    )
+  ).orderBy(desc(stockMovements.timestamp)).limit(limit);
 }
 async function getActiveAlerts() {
   const db = await getDb();
@@ -80077,12 +80286,6 @@ var init_routers = __esm({
           const inventoryItems = await getInventoryByBatchByRetailer(input.id);
           const recentMovements = await getStockMovementsByRetailer(input.id, 50);
           const retailerAlerts = await getAlertsByRetailer(input.id);
-          const enrichedMovements = await Promise.all(
-            recentMovements.map(async (movement) => {
-              const product = await getProductById(movement.productId);
-              return { ...movement, product };
-            })
-          );
           const qtyByProduct = /* @__PURE__ */ new Map();
           let totalValue = 0;
           let expiringCount = 0;
@@ -80112,7 +80315,7 @@ var init_routers = __esm({
           return {
             retailer,
             inventory: inventoryItems,
-            recentMovements: enrichedMovements,
+            recentMovements,
             alerts: retailerAlerts,
             stats: {
               totalValue: totalValue.toFixed(2),
@@ -80317,6 +80520,84 @@ var init_routers = __esm({
         delete: writerProcedure.input(external_exports.object({ id: uuid5 })).mutation(async ({ input }) => {
           await deleteBatchIfFresh(input.id);
           return { success: true };
+        }),
+        /**
+         * Phase B M2: lotti del prodotto disponibili per trasferimento al
+         * retailer indicato (oggi: tutti i lotti con stock centrale > 0
+         * ordinati FEFO). Il `retailerId` non altera la lista in M2 ma è
+         * presente per estensioni future (es. preferenze per coppia
+         * prodotto-retailer).
+         */
+        suggestForTransfer: protectedProcedure.input(external_exports.object({ productId: uuid5, retailerId: uuid5 })).query(async ({ input }) => {
+          return await getBatchesAvailableForTransfer(input.productId);
+        })
+      }),
+      // ============= STOCK MOVEMENTS (Phase B M2) =============
+      stockMovements: router2({
+        /**
+         * Trasferimento atomico magazzino centrale → retailer.
+         *
+         * `generateProforma`: oggi sempre rifiutato con 412 (FiC integration
+         * arriva in M3). Il flag esiste già nello schema input perché l'UI
+         * espone una checkbox disabilitata e mandare true esplicito è un
+         * errore della UI (e va segnalato).
+         */
+        transfer: writerProcedure.input(
+          external_exports.object({
+            productId: uuid5,
+            batchId: uuid5,
+            retailerId: uuid5,
+            quantity: external_exports.number().int().positive(),
+            notes: external_exports.string().optional(),
+            generateProforma: external_exports.boolean().optional()
+          })
+        ).mutation(async ({ input, ctx }) => {
+          if (input.generateProforma) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: "Generazione proforma FiC non disponibile \u2014 feature attiva in Milestone 3"
+            });
+          }
+          return await transferBatchToRetailer({
+            productId: input.productId,
+            batchId: input.batchId,
+            retailerId: input.retailerId,
+            quantity: input.quantity,
+            notes: input.notes ?? null,
+            createdBy: ctx.user.id
+          });
+        }),
+        /**
+         * Write-off di stock per lotto scaduto / non più vendibile, sia su
+         * magazzino centrale sia presso retailer.
+         */
+        expiryWriteOff: writerProcedure.input(
+          external_exports.object({
+            batchId: uuid5,
+            locationId: uuid5,
+            quantity: external_exports.number().int().positive(),
+            notes: external_exports.string().optional()
+          })
+        ).mutation(async ({ input, ctx }) => {
+          return await expiryWriteOff({
+            batchId: input.batchId,
+            locationId: input.locationId,
+            quantity: input.quantity,
+            notes: input.notes ?? null,
+            createdBy: ctx.user.id
+          });
+        }),
+        listByRetailer: protectedProcedure.input(external_exports.object({ retailerId: uuid5, limit: external_exports.number().int().optional() })).query(async ({ input }) => {
+          return await getStockMovementsByRetailer(
+            input.retailerId,
+            input.limit ?? 100
+          );
+        }),
+        listByLocation: protectedProcedure.input(external_exports.object({ locationId: uuid5, limit: external_exports.number().int().optional() })).query(async ({ input }) => {
+          return await getStockMovementsByLocationId(
+            input.locationId,
+            input.limit ?? 100
+          );
         })
       }),
       // ============= LOCATIONS (Phase B M1) =============

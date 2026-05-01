@@ -118,15 +118,6 @@ export const appRouter = router({
         const recentMovements = await db.getStockMovementsByRetailer(input.id, 50);
         const retailerAlerts = await db.getAlertsByRetailer(input.id);
 
-        // Arricchisci movimenti col product (la shape attesa dal frontend
-        // RetailerDetail.tsx ha `movement.product?.name`)
-        const enrichedMovements = await Promise.all(
-          recentMovements.map(async (movement) => {
-            const product = await db.getProductById(movement.productId);
-            return { ...movement, product };
-          }),
-        );
-
         // Calcola stats: aggrega per (productId) per low stock check
         const qtyByProduct = new Map<string, { qty: number; threshold: number }>();
         let totalValue = 0;
@@ -162,7 +153,7 @@ export const appRouter = router({
         return {
           retailer,
           inventory: inventoryItems,
-          recentMovements: enrichedMovements,
+          recentMovements,
           alerts: retailerAlerts,
           stats: {
             totalValue: totalValue.toFixed(2),
@@ -418,6 +409,100 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         await db.deleteBatchIfFresh(input.id);
         return { success: true };
+      }),
+
+    /**
+     * Phase B M2: lotti del prodotto disponibili per trasferimento al
+     * retailer indicato (oggi: tutti i lotti con stock centrale > 0
+     * ordinati FEFO). Il `retailerId` non altera la lista in M2 ma è
+     * presente per estensioni future (es. preferenze per coppia
+     * prodotto-retailer).
+     */
+    suggestForTransfer: protectedProcedure
+      .input(z.object({ productId: uuid, retailerId: uuid }))
+      .query(async ({ input }) => {
+        return await db.getBatchesAvailableForTransfer(input.productId);
+      }),
+  }),
+
+  // ============= STOCK MOVEMENTS (Phase B M2) =============
+  stockMovements: router({
+    /**
+     * Trasferimento atomico magazzino centrale → retailer.
+     *
+     * `generateProforma`: oggi sempre rifiutato con 412 (FiC integration
+     * arriva in M3). Il flag esiste già nello schema input perché l'UI
+     * espone una checkbox disabilitata e mandare true esplicito è un
+     * errore della UI (e va segnalato).
+     */
+    transfer: writerProcedure
+      .input(
+        z.object({
+          productId: uuid,
+          batchId: uuid,
+          retailerId: uuid,
+          quantity: z.number().int().positive(),
+          notes: z.string().optional(),
+          generateProforma: z.boolean().optional(),
+        }),
+      )
+      .mutation(async ({ input, ctx }) => {
+        if (input.generateProforma) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Generazione proforma FiC non disponibile — feature attiva in Milestone 3",
+          });
+        }
+        return await db.transferBatchToRetailer({
+          productId: input.productId,
+          batchId: input.batchId,
+          retailerId: input.retailerId,
+          quantity: input.quantity,
+          notes: input.notes ?? null,
+          createdBy: ctx.user.id,
+        });
+      }),
+
+    /**
+     * Write-off di stock per lotto scaduto / non più vendibile, sia su
+     * magazzino centrale sia presso retailer.
+     */
+    expiryWriteOff: writerProcedure
+      .input(
+        z.object({
+          batchId: uuid,
+          locationId: uuid,
+          quantity: z.number().int().positive(),
+          notes: z.string().optional(),
+        }),
+      )
+      .mutation(async ({ input, ctx }) => {
+        return await db.expiryWriteOff({
+          batchId: input.batchId,
+          locationId: input.locationId,
+          quantity: input.quantity,
+          notes: input.notes ?? null,
+          createdBy: ctx.user.id,
+        });
+      }),
+
+    listByRetailer: protectedProcedure
+      .input(z.object({ retailerId: uuid, limit: z.number().int().optional() }))
+      .query(async ({ input }) => {
+        return await db.getStockMovementsByRetailer(
+          input.retailerId,
+          input.limit ?? 100,
+        );
+      }),
+
+    listByLocation: protectedProcedure
+      .input(z.object({ locationId: uuid, limit: z.number().int().optional() }))
+      .query(async ({ input }) => {
+        return await db.getStockMovementsByLocationId(
+          input.locationId,
+          input.limit ?? 100,
+        );
       }),
   }),
 

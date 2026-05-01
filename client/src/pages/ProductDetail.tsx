@@ -56,6 +56,7 @@ import {
   Plus,
   Save,
   Trash2,
+  XCircle,
 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { toast } from "sonner";
@@ -216,6 +217,58 @@ export default function ProductDetail() {
     },
     onError: (err) => toast.error(err.message),
   });
+
+  // ============== Write-off state (Phase B M2) ==============
+  const { data: warehouseLoc } = trpc.locations.getCentralWarehouse.useQuery();
+
+  const [writeOffTarget, setWriteOffTarget] = useState<{
+    batchId: string;
+    batchNumber: string;
+    expirationDate: string;
+    maxQuantity: number;
+  } | null>(null);
+  const [writeOffQty, setWriteOffQty] = useState("");
+  const [writeOffNotes, setWriteOffNotes] = useState("");
+
+  const writeOffMutation = trpc.stockMovements.expiryWriteOff.useMutation({
+    onSuccess: async () => {
+      await utils.productBatches.listByProduct.invalidate({ productId });
+      await utils.warehouse.getStockOverview.invalidate();
+      setWriteOffTarget(null);
+      setWriteOffQty("");
+      setWriteOffNotes("");
+      toast.success("Lotto scartato");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const submitWriteOff = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!writeOffTarget || !warehouseLoc) return;
+    const qty = parseInt(writeOffQty, 10);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      toast.error("Quantità deve essere positiva");
+      return;
+    }
+    if (qty > writeOffTarget.maxQuantity) {
+      toast.error(`Quantità massima: ${writeOffTarget.maxQuantity}`);
+      return;
+    }
+    writeOffMutation.mutate({
+      batchId: writeOffTarget.batchId,
+      locationId: warehouseLoc.id,
+      quantity: qty,
+      notes: writeOffNotes || undefined,
+    });
+  };
+
+  const isEligibleForWriteOff = (expirationDate: string, qty: number) => {
+    if (qty <= 0) return false;
+    const days = Math.floor(
+      (new Date(expirationDate).getTime() - Date.now()) / 86_400_000,
+    );
+    return days <= 7;
+  };
 
   const handleBatchSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -711,7 +764,8 @@ export default function ProductDetail() {
                       <TableHead>Scadenza</TableHead>
                       <TableHead className="text-right">Qty iniziale</TableHead>
                       <TableHead className="text-right">Stock magazzino</TableHead>
-                      <TableHead className="w-10"></TableHead>
+                      <TableHead className="text-right">Stock retailer</TableHead>
+                      <TableHead className="w-20"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -735,42 +789,70 @@ export default function ProductDetail() {
                         <TableCell className="text-right font-semibold">
                           {b.centralStock ?? 0}
                         </TableCell>
+                        <TableCell className="text-right text-muted-foreground">
+                          {b.retailerStock ?? 0}
+                        </TableCell>
                         <TableCell>
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                                aria-label="Elimina lotto"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>
-                                  Eliminare il lotto {b.batchNumber}?
-                                </AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  L'eliminazione è consentita solo se il lotto è
-                                  ancora intatto in magazzino centrale (nessuna
-                                  distribuzione né uscita parziale).
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Annulla</AlertDialogCancel>
-                                <AlertDialogAction
-                                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          <div className="flex items-center justify-end gap-1">
+                            {warehouseLoc &&
+                              isEligibleForWriteOff(
+                                b.expirationDate,
+                                b.centralStock ?? 0,
+                              ) && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                  aria-label="Scarta lotto"
+                                  title="Scarta (scadenza imminente o passata)"
                                   onClick={() =>
-                                    deleteBatchMutation.mutate({ id: b.id })
+                                    setWriteOffTarget({
+                                      batchId: b.id,
+                                      batchNumber: b.batchNumber,
+                                      expirationDate: b.expirationDate,
+                                      maxQuantity: b.centralStock ?? 0,
+                                    })
                                   }
                                 >
-                                  Elimina lotto
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
+                                  <XCircle className="h-4 w-4" />
+                                </Button>
+                              )}
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                  aria-label="Elimina lotto"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>
+                                    Eliminare il lotto {b.batchNumber}?
+                                  </AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    L'eliminazione è consentita solo se il lotto è
+                                    ancora intatto in magazzino centrale (nessuna
+                                    distribuzione né uscita parziale).
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Annulla</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                    onClick={() =>
+                                      deleteBatchMutation.mutate({ id: b.id })
+                                    }
+                                  >
+                                    Elimina lotto
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -788,6 +870,77 @@ export default function ProductDetail() {
           </Card>
         </div>
       </div>
+
+      {/* ====================== Dialog WRITE-OFF ====================== */}
+      <AlertDialog
+        open={writeOffTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setWriteOffTarget(null);
+            setWriteOffQty("");
+            setWriteOffNotes("");
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <form onSubmit={submitWriteOff}>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Scarta lotto</AlertDialogTitle>
+              <AlertDialogDescription>
+                Scarto del lotto{" "}
+                <strong className="font-mono">
+                  {writeOffTarget?.batchNumber}
+                </strong>
+                {" "}(scad{" "}
+                {writeOffTarget?.expirationDate
+                  ? format(new Date(writeOffTarget.expirationDate), "dd/MM/yyyy")
+                  : "?"}
+                ) al magazzino centrale. Verrà registrato un movimento{" "}
+                <strong>EXPIRY_WRITE_OFF</strong>.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="writeOffQty">
+                  Quantità da scartare (max {writeOffTarget?.maxQuantity ?? 0})
+                </Label>
+                <Input
+                  id="writeOffQty"
+                  type="number"
+                  min={1}
+                  max={writeOffTarget?.maxQuantity ?? 1}
+                  value={writeOffQty}
+                  onChange={(e) => setWriteOffQty(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="writeOffNotes">Note (opzionale)</Label>
+                <Textarea
+                  id="writeOffNotes"
+                  rows={2}
+                  placeholder="Es. Scaduto, contaminazione"
+                  value={writeOffNotes}
+                  onChange={(e) => setWriteOffNotes(e.target.value)}
+                />
+              </div>
+            </div>
+            <AlertDialogFooter>
+              <AlertDialogCancel type="button">Annulla</AlertDialogCancel>
+              <AlertDialogAction
+                type="submit"
+                disabled={writeOffMutation.isPending}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {writeOffMutation.isPending && (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                )}
+                Scarta
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </form>
+        </AlertDialogContent>
+      </AlertDialog>
     </DashboardLayout>
   );
 }

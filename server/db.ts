@@ -1,4 +1,4 @@
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, or, desc, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -304,6 +304,14 @@ export async function getBatchesByProduct(productId: string) {
   const warehouse = await getCentralWarehouseLocation();
   if (!warehouse) return [];
 
+  const retailerStockExpr = sql<number>`COALESCE((
+    SELECT SUM(ibb."quantity")::int
+    FROM "inventoryByBatch" ibb
+    INNER JOIN "locations" l ON l."id" = ibb."locationId"
+    WHERE ibb."batchId" = ${productBatches.id}
+      AND l."type" = 'retailer'
+  ), 0)`;
+
   const rows = await db
     .select({
       id: productBatches.id,
@@ -317,6 +325,7 @@ export async function getBatchesByProduct(productId: string) {
       notes: productBatches.notes,
       createdAt: productBatches.createdAt,
       centralStock: inventoryByBatch.quantity,
+      retailerStock: retailerStockExpr,
     })
     .from(productBatches)
     .leftJoin(producers, eq(productBatches.producerId, producers.id))
@@ -439,6 +448,244 @@ export async function deleteBatchIfFresh(batchId: string): Promise<void> {
   });
 }
 
+/**
+ * Phase B M2: lotti del prodotto disponibili al magazzino centrale per
+ * un trasferimento, ordinati FEFO (First Expired First Out).
+ *
+ * Returns: solo lotti con `centralStock > 0`, ordinati per
+ * `expirationDate ASC`. La UI usa il primo come default suggerimento.
+ */
+export async function getBatchesAvailableForTransfer(productId: string) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const warehouse = await getCentralWarehouseLocation();
+  if (!warehouse) return [];
+
+  const rows = await db
+    .select({
+      batchId: productBatches.id,
+      batchNumber: productBatches.batchNumber,
+      expirationDate: productBatches.expirationDate,
+      productionDate: productBatches.productionDate,
+      initialQuantity: productBatches.initialQuantity,
+      centralStock: inventoryByBatch.quantity,
+      producerId: productBatches.producerId,
+      producerName: producers.name,
+    })
+    .from(productBatches)
+    .innerJoin(
+      inventoryByBatch,
+      and(
+        eq(inventoryByBatch.batchId, productBatches.id),
+        eq(inventoryByBatch.locationId, warehouse.id),
+      ),
+    )
+    .leftJoin(producers, eq(productBatches.producerId, producers.id))
+    .where(
+      and(
+        eq(productBatches.productId, productId),
+        sql`${inventoryByBatch.quantity} > 0`,
+      ),
+    )
+    .orderBy(productBatches.expirationDate);
+
+  return rows;
+}
+
+/**
+ * Phase B M2: trasferimento atomico magazzino centrale → retailer.
+ *
+ * Transaction:
+ *   1. SELECT FOR UPDATE su inventoryByBatch(central, batch) → currQty
+ *   2. Verifica currQty >= quantity (else throw)
+ *   3. UPDATE inventoryByBatch(central, batch): qty -= quantity
+ *   4. UPSERT inventoryByBatch(retailer location, batch): qty += quantity
+ *   5. INSERT stockMovements TRANSFER con batchId / from / to / qty +
+ *      notesInternal "Trasferito {batchNumber} ×{qty} → {retailerName}"
+ */
+export async function transferBatchToRetailer(input: {
+  productId: string;
+  batchId: string;
+  retailerId: string;
+  quantity: number;
+  notes: string | null;
+  createdBy: string;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const warehouse = await getCentralWarehouseLocation();
+  if (!warehouse) throw new Error("Magazzino centrale non configurato");
+
+  const retailerLoc = await getRetailerLocation(input.retailerId);
+  if (!retailerLoc) throw new Error("Rivenditore senza location associata");
+
+  return await db.transaction(async (tx) => {
+    // Lock + read central stock
+    const centralRows = await tx
+      .select()
+      .from(inventoryByBatch)
+      .where(
+        and(
+          eq(inventoryByBatch.locationId, warehouse.id),
+          eq(inventoryByBatch.batchId, input.batchId),
+        ),
+      )
+      .for("update");
+
+    const central = centralRows[0];
+    if (!central || central.quantity < input.quantity) {
+      throw new Error(
+        `Stock centrale insufficiente: disponibili ${central?.quantity ?? 0}, richiesti ${input.quantity}`,
+      );
+    }
+
+    // Decrementa centrale
+    await tx
+      .update(inventoryByBatch)
+      .set({ quantity: central.quantity - input.quantity, updatedAt: new Date() })
+      .where(eq(inventoryByBatch.id, central.id));
+
+    // Upsert retailer
+    const retailerRows = await tx
+      .select()
+      .from(inventoryByBatch)
+      .where(
+        and(
+          eq(inventoryByBatch.locationId, retailerLoc.id),
+          eq(inventoryByBatch.batchId, input.batchId),
+        ),
+      )
+      .for("update");
+    const existing = retailerRows[0];
+    if (existing) {
+      await tx
+        .update(inventoryByBatch)
+        .set({
+          quantity: existing.quantity + input.quantity,
+          updatedAt: new Date(),
+        })
+        .where(eq(inventoryByBatch.id, existing.id));
+    } else {
+      await tx.insert(inventoryByBatch).values({
+        locationId: retailerLoc.id,
+        batchId: input.batchId,
+        quantity: input.quantity,
+      });
+    }
+
+    // Audit metadata
+    const [batch] = await tx
+      .select({ batchNumber: productBatches.batchNumber })
+      .from(productBatches)
+      .where(eq(productBatches.id, input.batchId));
+    const [retailer] = await tx
+      .select({ name: retailers.name })
+      .from(retailers)
+      .where(eq(retailers.id, input.retailerId));
+
+    const auditNote = `Trasferito lotto ${batch?.batchNumber ?? "?"} ×${input.quantity} → ${retailer?.name ?? "?"}`;
+
+    // Log movimento
+    const [movement] = await tx
+      .insert(stockMovements)
+      .values({
+        productId: input.productId,
+        type: "TRANSFER",
+        quantity: input.quantity,
+        previousQuantity: central.quantity,
+        newQuantity: central.quantity - input.quantity,
+        retailerId: input.retailerId,
+        batchId: input.batchId,
+        fromLocationId: warehouse.id,
+        toLocationId: retailerLoc.id,
+        notes: input.notes,
+        notesInternal: auditNote,
+        createdBy: input.createdBy,
+      })
+      .returning();
+
+    return movement;
+  });
+}
+
+/**
+ * Phase B M2: write-off lotto scaduto / non più vendibile.
+ *
+ * Atomico: decrementa stock e logga EXPIRY_WRITE_OFF. Funziona sia su
+ * location centrale (warehouse) sia su location retailer.
+ */
+export async function expiryWriteOff(input: {
+  batchId: string;
+  locationId: string;
+  quantity: number;
+  notes: string | null;
+  createdBy: string;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return await db.transaction(async (tx) => {
+    const stockRows = await tx
+      .select()
+      .from(inventoryByBatch)
+      .where(
+        and(
+          eq(inventoryByBatch.locationId, input.locationId),
+          eq(inventoryByBatch.batchId, input.batchId),
+        ),
+      )
+      .for("update");
+
+    const stock = stockRows[0];
+    if (!stock || stock.quantity < input.quantity) {
+      throw new Error(
+        `Stock insufficiente: disponibili ${stock?.quantity ?? 0}, richiesti ${input.quantity}`,
+      );
+    }
+
+    await tx
+      .update(inventoryByBatch)
+      .set({ quantity: stock.quantity - input.quantity, updatedAt: new Date() })
+      .where(eq(inventoryByBatch.id, stock.id));
+
+    // Audit metadata
+    const [batch] = await tx
+      .select({
+        batchNumber: productBatches.batchNumber,
+        productId: productBatches.productId,
+        expirationDate: productBatches.expirationDate,
+      })
+      .from(productBatches)
+      .where(eq(productBatches.id, input.batchId));
+    const [loc] = await tx
+      .select({ name: locations.name })
+      .from(locations)
+      .where(eq(locations.id, input.locationId));
+
+    const auditNote = `Scarto lotto ${batch?.batchNumber ?? "?"} (scad ${batch?.expirationDate ?? "?"}) ×${input.quantity} da ${loc?.name ?? "?"}`;
+
+    const [movement] = await tx
+      .insert(stockMovements)
+      .values({
+        productId: batch?.productId ?? input.batchId, // fallback safety
+        type: "EXPIRY_WRITE_OFF",
+        quantity: input.quantity,
+        previousQuantity: stock.quantity,
+        newQuantity: stock.quantity - input.quantity,
+        batchId: input.batchId,
+        fromLocationId: input.locationId,
+        notes: input.notes,
+        notesInternal: auditNote,
+        createdBy: input.createdBy,
+      })
+      .returning();
+
+    return movement;
+  });
+}
+
 // ============= INVENTORY BY BATCH (Phase B M1) =============
 
 /**
@@ -482,10 +729,12 @@ export async function getInventoryByLocationId(locationId: string) {
 
 /**
  * Inventario di un retailer (lookup interno della retailer location).
- * Restituisce shape compatibile con il vecchio `getInventoryByRetailer`
- * legacy (campi: id, quantity, expirationDate, batchNumber, product) per
- * consentire al frontend RetailerDetail.tsx di funzionare senza
- * modifiche fino a Step 4.
+ *
+ * Phase B M2: shape estesa con `batchId`, `locationId`, `producerName` per
+ * supportare in UI azione "Scarta" (EXPIRY_WRITE_OFF) e raggruppamento
+ * per prodotto con espansione per lotto. Mantiene i campi legacy
+ * (`expirationDate` come Date object, `batchNumber`, `product.*`)
+ * per la shape già usata da RetailerDetail.tsx.
  */
 export async function getInventoryByBatchByRetailer(retailerId: string) {
   const location = await getRetailerLocation(retailerId);
@@ -494,9 +743,12 @@ export async function getInventoryByBatchByRetailer(retailerId: string) {
 
   return rows.map((r) => ({
     id: r.id,
+    locationId: r.locationId,
+    batchId: r.batchId,
     quantity: r.quantity,
     expirationDate: r.expirationDate ? new Date(r.expirationDate) : null,
     batchNumber: r.batchNumber,
+    producerName: r.producerName,
     product: {
       id: r.productId,
       sku: r.productSku,
@@ -615,19 +867,123 @@ export async function getWarehouseStockOverview() {
 // ============= STOCK MOVEMENTS =============
 
 /**
- * Storico movimenti di un retailer. Phase B M1: usato in
- * `retailers.getDetails` per la tab Movimenti (read-only). I tipi
- * `IN/OUT/ADJUSTMENT` sono legacy; il nuovo modello userà
- * TRANSFER/RETAIL_OUT (M2). RECEIPT_FROM_PRODUCER non riguarda i
- * retailer (è warehouse-only) quindi non comparirà qui.
+ * Phase B M2: helper interno che restituisce i movimenti che
+ * intercettano una specifica location, joinati con product/batch/loc.
+ *
+ * Filtro: `fromLocationId = loc OR toLocationId = loc`. Inclusivo di
+ * TRANSFER (in entrata o uscita), EXPIRY_WRITE_OFF, e in futuro
+ * RETAIL_OUT (M4) e altri.
+ */
+export async function getStockMovementsByLocationId(
+  locationId: string,
+  limit = 100,
+) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const fromLoc = sql<string>`from_loc.name`.as("fromLocationName");
+  const toLoc = sql<string>`to_loc.name`.as("toLocationName");
+
+  return db
+    .select({
+      id: stockMovements.id,
+      type: stockMovements.type,
+      quantity: stockMovements.quantity,
+      previousQuantity: stockMovements.previousQuantity,
+      newQuantity: stockMovements.newQuantity,
+      timestamp: stockMovements.timestamp,
+      notes: stockMovements.notes,
+      notesInternal: stockMovements.notesInternal,
+      productId: products.id,
+      productSku: products.sku,
+      productName: products.name,
+      batchId: productBatches.id,
+      batchNumber: productBatches.batchNumber,
+      expirationDate: productBatches.expirationDate,
+      fromLocationId: stockMovements.fromLocationId,
+      toLocationId: stockMovements.toLocationId,
+      fromLocationName: sql<string | null>`from_loc.name`,
+      toLocationName: sql<string | null>`to_loc.name`,
+    })
+    .from(stockMovements)
+    .leftJoin(products, eq(stockMovements.productId, products.id))
+    .leftJoin(productBatches, eq(stockMovements.batchId, productBatches.id))
+    .leftJoin(
+      sql`${locations} AS from_loc`,
+      sql`from_loc.id = ${stockMovements.fromLocationId}`,
+    )
+    .leftJoin(
+      sql`${locations} AS to_loc`,
+      sql`to_loc.id = ${stockMovements.toLocationId}`,
+    )
+    .where(
+      or(
+        eq(stockMovements.fromLocationId, locationId),
+        eq(stockMovements.toLocationId, locationId),
+      ),
+    )
+    .orderBy(desc(stockMovements.timestamp))
+    .limit(limit);
+}
+
+/**
+ * Storico movimenti di un retailer (lookup interno della retailer
+ * location).
+ *
+ * Phase B M1 → M2: refactor da query su legacy `retailerId` field a
+ * query location-based. Mantiene la stessa shape di output ma ora
+ * include movements di tipo TRANSFER (in entrata) e in futuro
+ * RETAIL_OUT (M4) tramite from/toLocationId.
+ *
+ * Fallback per movements legacy con `retailerId` popolato e
+ * `from/toLocationId` NULL: include anche quelli.
  */
 export async function getStockMovementsByRetailer(retailerId: string, limit = 100) {
   const db = await getDb();
   if (!db) return [];
+
+  const retailerLoc = await getRetailerLocation(retailerId);
+  if (!retailerLoc) return [];
+
   return db
-    .select()
+    .select({
+      id: stockMovements.id,
+      type: stockMovements.type,
+      quantity: stockMovements.quantity,
+      previousQuantity: stockMovements.previousQuantity,
+      newQuantity: stockMovements.newQuantity,
+      timestamp: stockMovements.timestamp,
+      notes: stockMovements.notes,
+      notesInternal: stockMovements.notesInternal,
+      productId: products.id,
+      productSku: products.sku,
+      productName: products.name,
+      batchId: productBatches.id,
+      batchNumber: productBatches.batchNumber,
+      expirationDate: productBatches.expirationDate,
+      fromLocationId: stockMovements.fromLocationId,
+      toLocationId: stockMovements.toLocationId,
+      fromLocationName: sql<string | null>`from_loc.name`,
+      toLocationName: sql<string | null>`to_loc.name`,
+    })
     .from(stockMovements)
-    .where(eq(stockMovements.retailerId, retailerId))
+    .leftJoin(products, eq(stockMovements.productId, products.id))
+    .leftJoin(productBatches, eq(stockMovements.batchId, productBatches.id))
+    .leftJoin(
+      sql`${locations} AS from_loc`,
+      sql`from_loc.id = ${stockMovements.fromLocationId}`,
+    )
+    .leftJoin(
+      sql`${locations} AS to_loc`,
+      sql`to_loc.id = ${stockMovements.toLocationId}`,
+    )
+    .where(
+      or(
+        eq(stockMovements.fromLocationId, retailerLoc.id),
+        eq(stockMovements.toLocationId, retailerLoc.id),
+        eq(stockMovements.retailerId, retailerId),
+      ),
+    )
     .orderBy(desc(stockMovements.timestamp))
     .limit(limit);
 }
