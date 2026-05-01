@@ -37593,7 +37593,51 @@ async function updateUserRole(id, role) {
 async function getAllRetailers() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(retailers).orderBy(retailers.name);
+  const activeBatchCountExpr = sql`COALESCE((
+    SELECT COUNT(*)::int
+    FROM "inventoryByBatch" ibb
+    INNER JOIN "locations" l ON l."id" = ibb."locationId"
+    WHERE l."retailerId" = ${retailers.id}
+      AND ibb."quantity" > 0
+  ), 0)`;
+  const totalStockExpr = sql`COALESCE((
+    SELECT SUM(ibb."quantity")::int
+    FROM "inventoryByBatch" ibb
+    INNER JOIN "locations" l ON l."id" = ibb."locationId"
+    WHERE l."retailerId" = ${retailers.id}
+  ), 0)`;
+  const inventoryValueExpr = sql`COALESCE((
+    SELECT SUM(ibb."quantity" * NULLIF(p."unitPrice", '')::numeric)::numeric(18,2)
+    FROM "inventoryByBatch" ibb
+    INNER JOIN "locations" l ON l."id" = ibb."locationId"
+    INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
+    INNER JOIN "products" p ON p."id" = pb."productId"
+    WHERE l."retailerId" = ${retailers.id}
+  ), 0)::text`;
+  return db.select({
+    id: retailers.id,
+    name: retailers.name,
+    businessType: retailers.businessType,
+    address: retailers.address,
+    city: retailers.city,
+    province: retailers.province,
+    postalCode: retailers.postalCode,
+    phone: retailers.phone,
+    email: retailers.email,
+    contactPerson: retailers.contactPerson,
+    fattureInCloudCompanyId: retailers.fattureInCloudCompanyId,
+    fattureInCloudAccessToken: retailers.fattureInCloudAccessToken,
+    fattureInCloudRefreshToken: retailers.fattureInCloudRefreshToken,
+    fattureInCloudTokenExpiresAt: retailers.fattureInCloudTokenExpiresAt,
+    lastSyncAt: retailers.lastSyncAt,
+    syncEnabled: retailers.syncEnabled,
+    notes: retailers.notes,
+    createdAt: retailers.createdAt,
+    updatedAt: retailers.updatedAt,
+    activeBatchCount: activeBatchCountExpr,
+    totalStock: totalStockExpr,
+    inventoryValue: inventoryValueExpr
+  }).from(retailers).orderBy(retailers.name);
 }
 async function getRetailerById(id) {
   const db = await getDb();
@@ -37646,7 +37690,58 @@ async function deleteRetailer(id) {
 async function getAllProducts() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(products).orderBy(products.name);
+  const centralStockExpr = sql`COALESCE((
+    SELECT SUM(ibb."quantity")::int
+    FROM "inventoryByBatch" ibb
+    INNER JOIN "locations" l ON l."id" = ibb."locationId"
+    INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
+    WHERE pb."productId" = ${products.id}
+      AND l."type" = 'central_warehouse'
+  ), 0)`;
+  const totalStockExpr = sql`COALESCE((
+    SELECT SUM(ibb."quantity")::int
+    FROM "inventoryByBatch" ibb
+    INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
+    WHERE pb."productId" = ${products.id}
+  ), 0)`;
+  const batchCountExpr = sql`COALESCE((
+    SELECT COUNT(*)::int
+    FROM "inventoryByBatch" ibb
+    INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
+    WHERE pb."productId" = ${products.id}
+      AND ibb."quantity" > 0
+  ), 0)`;
+  const nearestExpirationExpr = sql`(
+    SELECT MIN(pb."expirationDate")::text
+    FROM "productBatches" pb
+    INNER JOIN "inventoryByBatch" ibb ON ibb."batchId" = pb."id"
+    WHERE pb."productId" = ${products.id}
+      AND ibb."quantity" > 0
+  )`;
+  return db.select({
+    id: products.id,
+    sku: products.sku,
+    name: products.name,
+    description: products.description,
+    category: products.category,
+    isLowCarb: products.isLowCarb,
+    isGlutenFree: products.isGlutenFree,
+    isKeto: products.isKeto,
+    sugarContent: products.sugarContent,
+    supplierId: products.supplierId,
+    supplierName: products.supplierName,
+    unitPrice: products.unitPrice,
+    unit: products.unit,
+    minStockThreshold: products.minStockThreshold,
+    expiryWarningDays: products.expiryWarningDays,
+    imageUrl: products.imageUrl,
+    createdAt: products.createdAt,
+    updatedAt: products.updatedAt,
+    centralStock: centralStockExpr,
+    totalStock: totalStockExpr,
+    activeBatchCount: batchCountExpr,
+    nearestExpiration: nearestExpirationExpr
+  }).from(products).orderBy(products.name);
 }
 async function getProductById(id) {
   const db = await getDb();
@@ -37679,7 +37774,24 @@ async function deleteProduct(id) {
 async function getAllProducers() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(producers).orderBy(producers.name);
+  const batchCountExpr = sql`COALESCE((
+    SELECT COUNT(*)::int
+    FROM "productBatches" pb
+    WHERE pb."producerId" = ${producers.id}
+  ), 0)`;
+  return db.select({
+    id: producers.id,
+    name: producers.name,
+    contactName: producers.contactName,
+    email: producers.email,
+    phone: producers.phone,
+    address: producers.address,
+    vatNumber: producers.vatNumber,
+    notes: producers.notes,
+    createdAt: producers.createdAt,
+    updatedAt: producers.updatedAt,
+    batchCount: batchCountExpr
+  }).from(producers).orderBy(producers.name);
 }
 async function getProducerById(id) {
   const db = await getDb();
@@ -38093,6 +38205,61 @@ async function getStockMovementsByLocationId(locationId, limit = 100) {
       eq(stockMovements.toLocationId, locationId)
     )
   ).orderBy(desc(stockMovements.timestamp)).limit(limit);
+}
+async function getStockMovementsAll(filters) {
+  const db = await getDb();
+  if (!db) return { items: [], total: 0 };
+  const conditions = [];
+  if (filters.type) conditions.push(eq(stockMovements.type, filters.type));
+  if (filters.locationId) {
+    const locOr = or(
+      eq(stockMovements.fromLocationId, filters.locationId),
+      eq(stockMovements.toLocationId, filters.locationId)
+    );
+    if (locOr) conditions.push(locOr);
+  }
+  if (filters.batchSearch && filters.batchSearch.trim().length > 0) {
+    conditions.push(
+      ilike(productBatches.batchNumber, `%${filters.batchSearch.trim()}%`)
+    );
+  }
+  if (filters.startDate) {
+    conditions.push(gte(stockMovements.timestamp, new Date(filters.startDate)));
+  }
+  if (filters.endDate) {
+    const end = new Date(filters.endDate);
+    end.setHours(23, 59, 59, 999);
+    conditions.push(lte(stockMovements.timestamp, end));
+  }
+  const whereExpr = conditions.length > 0 ? and(...conditions) : void 0;
+  const items = await db.select({
+    id: stockMovements.id,
+    type: stockMovements.type,
+    quantity: stockMovements.quantity,
+    previousQuantity: stockMovements.previousQuantity,
+    newQuantity: stockMovements.newQuantity,
+    timestamp: stockMovements.timestamp,
+    notes: stockMovements.notes,
+    notesInternal: stockMovements.notesInternal,
+    productId: products.id,
+    productSku: products.sku,
+    productName: products.name,
+    batchId: productBatches.id,
+    batchNumber: productBatches.batchNumber,
+    expirationDate: productBatches.expirationDate,
+    fromLocationId: stockMovements.fromLocationId,
+    toLocationId: stockMovements.toLocationId,
+    fromLocationName: sql`from_loc.name`,
+    toLocationName: sql`to_loc.name`
+  }).from(stockMovements).leftJoin(products, eq(stockMovements.productId, products.id)).leftJoin(productBatches, eq(stockMovements.batchId, productBatches.id)).leftJoin(
+    sql`${locations} AS from_loc`,
+    sql`from_loc.id = ${stockMovements.fromLocationId}`
+  ).leftJoin(
+    sql`${locations} AS to_loc`,
+    sql`to_loc.id = ${stockMovements.toLocationId}`
+  ).where(whereExpr).orderBy(desc(stockMovements.timestamp)).limit(filters.limit).offset(filters.offset);
+  const countRows = await db.select({ c: sql`count(*)::int` }).from(stockMovements).leftJoin(productBatches, eq(stockMovements.batchId, productBatches.id)).where(whereExpr);
+  return { items, total: countRows[0]?.c ?? 0 };
 }
 async function getStockMovementsByRetailer(retailerId, limit = 100) {
   const db = await getDb();
@@ -80606,6 +80773,38 @@ var init_routers = __esm({
             input.locationId,
             input.limit ?? 100
           );
+        }),
+        /**
+         * Phase B M2.5: lista globale movimenti con filtri + paginazione.
+         * Usata dalla pagina /movements.
+         */
+        listAll: protectedProcedure.input(
+          external_exports.object({
+            type: external_exports.enum([
+              "IN",
+              "OUT",
+              "ADJUSTMENT",
+              "RECEIPT_FROM_PRODUCER",
+              "TRANSFER",
+              "EXPIRY_WRITE_OFF"
+            ]).optional(),
+            locationId: uuid5.optional(),
+            batchSearch: external_exports.string().optional(),
+            startDate: external_exports.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+            endDate: external_exports.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+            limit: external_exports.number().int().min(1).max(200).optional(),
+            offset: external_exports.number().int().min(0).optional()
+          })
+        ).query(async ({ input }) => {
+          return await getStockMovementsAll({
+            type: input.type,
+            locationId: input.locationId,
+            batchSearch: input.batchSearch,
+            startDate: input.startDate,
+            endDate: input.endDate,
+            limit: input.limit ?? 50,
+            offset: input.offset ?? 0
+          });
         })
       }),
       // ============= LOCATIONS (Phase B M1) =============

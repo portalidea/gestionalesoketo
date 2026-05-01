@@ -504,6 +504,49 @@ export const appRouter = router({
           input.limit ?? 100,
         );
       }),
+
+    /**
+     * Phase B M2.5: lista globale movimenti con filtri + paginazione.
+     * Usata dalla pagina /movements.
+     */
+    listAll: protectedProcedure
+      .input(
+        z.object({
+          type: z
+            .enum([
+              "IN",
+              "OUT",
+              "ADJUSTMENT",
+              "RECEIPT_FROM_PRODUCER",
+              "TRANSFER",
+              "EXPIRY_WRITE_OFF",
+            ])
+            .optional(),
+          locationId: uuid.optional(),
+          batchSearch: z.string().optional(),
+          startDate: z
+            .string()
+            .regex(/^\d{4}-\d{2}-\d{2}$/)
+            .optional(),
+          endDate: z
+            .string()
+            .regex(/^\d{4}-\d{2}-\d{2}$/)
+            .optional(),
+          limit: z.number().int().min(1).max(200).optional(),
+          offset: z.number().int().min(0).optional(),
+        }),
+      )
+      .query(async ({ input }) => {
+        return await db.getStockMovementsAll({
+          type: input.type,
+          locationId: input.locationId,
+          batchSearch: input.batchSearch,
+          startDate: input.startDate,
+          endDate: input.endDate,
+          limit: input.limit ?? 50,
+          offset: input.offset ?? 0,
+        });
+      }),
   }),
 
   // ============= LOCATIONS (Phase B M1) =============
