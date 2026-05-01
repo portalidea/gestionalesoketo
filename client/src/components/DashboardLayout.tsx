@@ -22,6 +22,7 @@ import {
 import { useIsMobile } from "@/hooks/useMobile";
 import {
   AlertTriangle,
+  ArrowLeftRight,
   BarChart3,
   Factory,
   LayoutDashboard,
@@ -42,6 +43,7 @@ const baseMenuItems = [
   { icon: Factory, label: "Produttori", path: "/producers" },
   { icon: Package, label: "Prodotti", path: "/products" },
   { icon: Warehouse, label: "Magazzino Centrale", path: "/warehouse" },
+  { icon: ArrowLeftRight, label: "Movimenti", path: "/movements" },
   { icon: Store, label: "Rivenditori", path: "/retailers" },
   { icon: AlertTriangle, label: "Alert", path: "/alerts" },
   { icon: BarChart3, label: "Reportistica", path: "/reports" },

@@ -9,6 +9,7 @@ import AuthCallback from "./pages/AuthCallback";
 import Home from "./pages/Home";
 import Integrations from "./pages/Integrations";
 import Login from "./pages/Login";
+import Movements from "./pages/Movements";
 import ProducerDetail from "./pages/ProducerDetail";
 import Producers from "./pages/Producers";
 import ProductDetail from "./pages/ProductDetail";
@@ -30,6 +31,7 @@ function Router() {
       <Route path="/products" component={Products} />
       <Route path="/products/:id" component={ProductDetail} />
       <Route path="/warehouse" component={Warehouse} />
+      <Route path="/movements" component={Movements} />
       <Route path="/retailers" component={Retailers} />
       <Route path="/retailers/:id" component={RetailerDetail} />
       <Route path="/alerts" component={Alerts} />

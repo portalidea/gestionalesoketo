@@ -1,6 +1,10 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -12,18 +16,39 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
-import { Loader2, Plus, Package, Check } from "lucide-react";
+import { format } from "date-fns";
+import { Loader2, Package, Plus } from "lucide-react";
 import { useState } from "react";
-import { Link } from "wouter";
+import { useLocation } from "wouter";
 import { toast } from "sonner";
 
 export default function Products() {
   const { data: products, isLoading } = trpc.products.list.useQuery();
+  const [, setLocation] = useLocation();
   const [dialogOpen, setDialogOpen] = useState(false);
   const utils = trpc.useUtils();
+
+  const [formData, setFormData] = useState({
+    sku: "",
+    name: "",
+    description: "",
+    category: "",
+    supplierName: "",
+    unitPrice: "",
+    unit: "",
+    minStockThreshold: 10,
+    expiryWarningDays: 30,
+  });
 
   const createMutation = trpc.products.create.useMutation({
     onSuccess: () => {
@@ -42,21 +67,7 @@ export default function Products() {
         expiryWarningDays: 30,
       });
     },
-    onError: (error) => {
-      toast.error("Errore nella creazione del prodotto");
-    },
-  });
-
-  const [formData, setFormData] = useState({
-    sku: "",
-    name: "",
-    description: "",
-    category: "",
-    supplierName: "",
-    unitPrice: "",
-    unit: "",
-    minStockThreshold: 10,
-    expiryWarningDays: 30,
+    onError: (err) => toast.error(err.message),
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -70,15 +81,38 @@ export default function Products() {
     });
   };
 
+  const now = Date.now();
+  const formatDate = (d: string | null) =>
+    d ? format(new Date(d), "dd/MM/yyyy") : "-";
+
+  const expirationBadge = (d: string | null) => {
+    if (!d) return null;
+    const days = Math.floor((new Date(d).getTime() - now) / 86_400_000);
+    if (days <= 0) {
+      return (
+        <Badge variant="destructive" className="text-xs">
+          Scaduto
+        </Badge>
+      );
+    }
+    if (days <= 30) {
+      return (
+        <Badge className="text-xs bg-orange-500 hover:bg-orange-600">
+          {days}gg
+        </Badge>
+      );
+    }
+    return null;
+  };
+
   return (
     <DashboardLayout>
       <div className="space-y-8">
-        {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-4xl font-bold text-foreground mb-2">Prodotti</h1>
             <p className="text-muted-foreground">
-              Gestisci il catalogo prodotti SoKeto
+              Catalogo prodotti SoKeto con stock per location e scadenze.
             </p>
           </div>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -211,85 +245,94 @@ export default function Products() {
           </Dialog>
         </div>
 
-        {/* Products List */}
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
         ) : products && products.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {products.map((product) => (
-              <Link key={product.id} href={`/products/${product.id}`}>
-              <Card className="border-border bg-card hover:border-primary transition-colors cursor-pointer h-full">
-                <CardHeader>
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="h-12 w-12 rounded-lg bg-primary/20 flex items-center justify-center">
-                        <Package className="h-6 w-6 text-primary" />
-                      </div>
-                      <div>
-                        <CardTitle className="text-lg text-foreground">
-                          {product.name}
-                        </CardTitle>
-                        <CardDescription className="text-sm">
-                          SKU: {product.sku}
-                        </CardDescription>
-                      </div>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {product.description && (
-                    <p className="text-sm text-muted-foreground line-clamp-2">
-                      {product.description}
-                    </p>
-                  )}
-                  <div className="flex flex-wrap gap-2">
-                    {product.isLowCarb === 1 && (
-                      <Badge variant="secondary" className="text-xs">
-                        <Check className="h-3 w-3 mr-1" />
-                        Low Carb
-                      </Badge>
-                    )}
-                    {product.isGlutenFree === 1 && (
-                      <Badge variant="secondary" className="text-xs">
-                        <Check className="h-3 w-3 mr-1" />
-                        Gluten Free
-                      </Badge>
-                    )}
-                    {product.isKeto === 1 && (
-                      <Badge variant="secondary" className="text-xs">
-                        <Check className="h-3 w-3 mr-1" />
-                        Keto
-                      </Badge>
-                    )}
-                  </div>
-                  {product.category && (
-                    <div className="text-sm">
-                      <span className="text-muted-foreground">Categoria:</span>{" "}
-                      <span className="text-foreground">{product.category}</span>
-                    </div>
-                  )}
-                  {product.unitPrice && (
-                    <div className="text-sm">
-                      <span className="text-muted-foreground">Prezzo:</span>{" "}
-                      <span className="text-foreground font-semibold">
-                        €{product.unitPrice}
-                        {product.unit && ` / ${product.unit}`}
-                      </span>
-                    </div>
-                  )}
-                  {product.supplierName && (
-                    <div className="text-sm">
-                      <span className="text-muted-foreground">Fornitore:</span>{" "}
-                      <span className="text-foreground">{product.supplierName}</span>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-              </Link>
-            ))}
-          </div>
+          <Card className="border-border bg-card">
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Nome</TableHead>
+                      <TableHead>SKU</TableHead>
+                      <TableHead>Categoria</TableHead>
+                      <TableHead className="text-right">Prezzo</TableHead>
+                      <TableHead className="text-right">Min</TableHead>
+                      <TableHead className="text-right">Stock centrale</TableHead>
+                      <TableHead className="text-right">Stock totale</TableHead>
+                      <TableHead className="text-right">Lotti attivi</TableHead>
+                      <TableHead>Scadenza più vicina</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {products.map((p) => {
+                      const minStock = p.minStockThreshold ?? 0;
+                      const isLowCentral = p.centralStock < minStock;
+                      return (
+                        <TableRow
+                          key={p.id}
+                          className="cursor-pointer hover:bg-accent/50"
+                          onClick={() => setLocation(`/products/${p.id}`)}
+                        >
+                          <TableCell className="font-medium">
+                            <div className="flex items-center gap-2">
+                              <Package className="h-4 w-4 text-primary shrink-0" />
+                              {p.name}
+                            </div>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">
+                            {p.sku}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {p.category ?? "-"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {p.unitPrice ? (
+                              <>
+                                €{p.unitPrice}
+                                {p.unit && (
+                                  <span className="text-muted-foreground text-xs ml-1">
+                                    /{p.unit}
+                                  </span>
+                                )}
+                              </>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {minStock}
+                          </TableCell>
+                          <TableCell
+                            className={`text-right font-semibold ${
+                              isLowCentral ? "text-yellow-500" : "text-foreground"
+                            }`}
+                          >
+                            {p.centralStock}
+                          </TableCell>
+                          <TableCell className="text-right font-semibold">
+                            {p.totalStock}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {p.activeBatchCount}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <span>{formatDate(p.nearestExpiration)}</span>
+                              {expirationBadge(p.nearestExpiration)}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
         ) : (
           <Card className="border-border bg-card">
             <CardContent className="flex flex-col items-center justify-center py-12">

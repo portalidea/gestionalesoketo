@@ -1,12 +1,6 @@
 import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -18,11 +12,19 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
-import { Factory, Loader2, Mail, Phone, Plus } from "lucide-react";
+import { Factory, Loader2, Plus } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { Link } from "wouter";
+import { useLocation } from "wouter";
 import { toast } from "sonner";
 
 const EMPTY_FORM = {
@@ -37,6 +39,7 @@ const EMPTY_FORM = {
 
 export default function Producers() {
   const { data: producers, isLoading } = trpc.producers.list.useQuery();
+  const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -71,7 +74,7 @@ export default function Producers() {
           <div>
             <h1 className="text-4xl font-bold text-foreground mb-2">Produttori</h1>
             <p className="text-muted-foreground">
-              Anagrafica produttori che riforniscono il magazzino centrale SoKeto
+              Anagrafica produttori che riforniscono il magazzino centrale SoKeto.
             </p>
           </div>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -184,51 +187,75 @@ export default function Producers() {
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
         ) : producers && producers.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {producers.map((p) => (
-              <Link key={p.id} href={`/producers/${p.id}`}>
-                <Card className="border-border bg-card hover:border-primary transition-colors cursor-pointer h-full">
-                  <CardHeader>
-                    <div className="flex items-center gap-3">
-                      <div className="h-12 w-12 rounded-lg bg-primary/20 flex items-center justify-center shrink-0">
-                        <Factory className="h-6 w-6 text-primary" />
-                      </div>
-                      <div className="min-w-0">
-                        <CardTitle className="text-lg text-foreground truncate">
-                          {p.name}
-                        </CardTitle>
-                        {p.contactName && (
-                          <CardDescription className="text-sm truncate">
-                            {p.contactName}
-                          </CardDescription>
-                        )}
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-2">
-                    {p.email && (
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Mail className="h-4 w-4 shrink-0" />
-                        <span className="truncate">{p.email}</span>
-                      </div>
-                    )}
-                    {p.phone && (
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Phone className="h-4 w-4 shrink-0" />
-                        <span>{p.phone}</span>
-                      </div>
-                    )}
-                    {p.vatNumber && (
-                      <div className="text-sm">
-                        <span className="text-muted-foreground">P.IVA:</span>{" "}
-                        <span className="text-foreground">{p.vatNumber}</span>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </Link>
-            ))}
-          </div>
+          <Card className="border-border bg-card">
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Nome</TableHead>
+                      <TableHead>Contact</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Telefono</TableHead>
+                      <TableHead>P.IVA</TableHead>
+                      <TableHead className="text-right">Lotti forniti</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {producers.map((p) => (
+                      <TableRow
+                        key={p.id}
+                        className="cursor-pointer hover:bg-accent/50"
+                        onClick={() => setLocation(`/producers/${p.id}`)}
+                      >
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-2">
+                            <Factory className="h-4 w-4 text-primary shrink-0" />
+                            {p.name}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {p.contactName ?? "-"}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {p.email ? (
+                            <a
+                              href={`mailto:${p.email}`}
+                              className="hover:text-primary hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {p.email}
+                            </a>
+                          ) : (
+                            "-"
+                          )}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {p.phone ? (
+                            <a
+                              href={`tel:${p.phone}`}
+                              className="hover:text-primary hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {p.phone}
+                            </a>
+                          ) : (
+                            "-"
+                          )}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground font-mono text-xs">
+                          {p.vatNumber ?? "-"}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {p.batchCount}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
         ) : (
           <Card className="border-border bg-card">
             <CardContent className="flex flex-col items-center justify-center py-12">

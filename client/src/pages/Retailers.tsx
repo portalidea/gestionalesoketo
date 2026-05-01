@@ -1,6 +1,6 @@
 import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -12,52 +12,50 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
-import { Loader2, Plus, Store, MapPin, Phone, Mail, User } from "lucide-react";
+import { Loader2, Plus, Store } from "lucide-react";
 import { useState } from "react";
-import { Link } from "wouter";
+import { useLocation } from "wouter";
 import { toast } from "sonner";
+
+const EMPTY_FORM = {
+  name: "",
+  businessType: "",
+  address: "",
+  city: "",
+  province: "",
+  postalCode: "",
+  phone: "",
+  email: "",
+  contactPerson: "",
+  notes: "",
+};
 
 export default function Retailers() {
   const { data: retailers, isLoading } = trpc.retailers.list.useQuery();
+  const [, setLocation] = useLocation();
   const [dialogOpen, setDialogOpen] = useState(false);
   const utils = trpc.useUtils();
+
+  const [formData, setFormData] = useState(EMPTY_FORM);
 
   const createMutation = trpc.retailers.create.useMutation({
     onSuccess: () => {
       utils.retailers.list.invalidate();
       setDialogOpen(false);
       toast.success("Rivenditore creato con successo");
-      setFormData({
-        name: "",
-        businessType: "",
-        address: "",
-        city: "",
-        province: "",
-        postalCode: "",
-        phone: "",
-        email: "",
-        contactPerson: "",
-        notes: "",
-      });
+      setFormData(EMPTY_FORM);
     },
-    onError: (error) => {
-      toast.error("Errore nella creazione del rivenditore");
-    },
-  });
-
-  const [formData, setFormData] = useState({
-    name: "",
-    businessType: "",
-    address: "",
-    city: "",
-    province: "",
-    postalCode: "",
-    phone: "",
-    email: "",
-    contactPerson: "",
-    notes: "",
+    onError: (err) => toast.error(err.message),
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -68,12 +66,11 @@ export default function Retailers() {
   return (
     <DashboardLayout>
       <div className="space-y-8">
-        {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-4xl font-bold text-foreground mb-2">Rivenditori</h1>
             <p className="text-muted-foreground">
-              Gestisci l'anagrafica dei punti vendita SoKeto
+              Anagrafica punti vendita SoKeto con stock e valore inventario corrente.
             </p>
           </div>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -208,69 +205,77 @@ export default function Retailers() {
           </Dialog>
         </div>
 
-        {/* Retailers List */}
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
         ) : retailers && retailers.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {retailers.map((retailer) => (
-              <Link key={retailer.id} href={`/retailers/${retailer.id}`}>
-                <Card className="border-border bg-card hover:border-primary transition-colors cursor-pointer h-full">
-                  <CardHeader>
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="h-12 w-12 rounded-lg bg-primary/20 flex items-center justify-center">
-                          <Store className="h-6 w-6 text-primary" />
-                        </div>
-                        <div>
-                          <CardTitle className="text-lg text-foreground">
-                            {retailer.name}
-                          </CardTitle>
-                          {retailer.businessType && (
-                            <CardDescription className="text-sm">
-                              {retailer.businessType}
-                            </CardDescription>
+          <Card className="border-border bg-card">
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Nome</TableHead>
+                      <TableHead>Tipo attività</TableHead>
+                      <TableHead>Città</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead className="text-right">Lotti attivi</TableHead>
+                      <TableHead className="text-right">Stock totale</TableHead>
+                      <TableHead className="text-right">Valore inventario</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {retailers.map((r) => (
+                      <TableRow
+                        key={r.id}
+                        className="cursor-pointer hover:bg-accent/50"
+                        onClick={() => setLocation(`/retailers/${r.id}`)}
+                      >
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-2">
+                            <Store className="h-4 w-4 text-primary shrink-0" />
+                            {r.name}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {r.businessType ?? "-"}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {r.city ?? "-"}
+                          {r.province && (
+                            <span className="text-xs ml-1">({r.province})</span>
                           )}
-                        </div>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-2">
-                    {retailer.address && (
-                      <div className="flex items-start gap-2 text-sm text-muted-foreground">
-                        <MapPin className="h-4 w-4 mt-0.5 shrink-0" />
-                        <span>
-                          {retailer.address}
-                          {retailer.city && `, ${retailer.city}`}
-                          {retailer.province && ` (${retailer.province})`}
-                        </span>
-                      </div>
-                    )}
-                    {retailer.phone && (
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Phone className="h-4 w-4 shrink-0" />
-                        <span>{retailer.phone}</span>
-                      </div>
-                    )}
-                    {retailer.email && (
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Mail className="h-4 w-4 shrink-0" />
-                        <span className="truncate">{retailer.email}</span>
-                      </div>
-                    )}
-                    {retailer.contactPerson && (
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <User className="h-4 w-4 shrink-0" />
-                        <span>{retailer.contactPerson}</span>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </Link>
-            ))}
-          </div>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {r.email ? (
+                            <a
+                              href={`mailto:${r.email}`}
+                              className="hover:text-primary hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {r.email}
+                            </a>
+                          ) : (
+                            "-"
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {r.activeBatchCount}
+                        </TableCell>
+                        <TableCell className="text-right font-semibold">
+                          {r.totalStock}
+                        </TableCell>
+                        <TableCell className="text-right font-semibold">
+                          €{r.inventoryValue}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
         ) : (
           <Card className="border-border bg-card">
             <CardContent className="flex flex-col items-center justify-center py-12">
@@ -279,7 +284,7 @@ export default function Retailers() {
                 Nessun rivenditore registrato
               </h3>
               <p className="text-muted-foreground mb-6 text-center max-w-md">
-                Inizia aggiungendo il primo punto vendita per gestire l'inventario
+                Inizia aggiungendo il primo punto vendita per gestire l'inventario.
               </p>
               <Button onClick={() => setDialogOpen(true)}>
                 <Plus className="h-5 w-5 mr-2" />
