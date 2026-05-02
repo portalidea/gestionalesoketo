@@ -8,6 +8,148 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-05-02 — 🐞 Bugfix M3.0.7 — getFicClients no auto-pagination + perf indexes
+
+### Sintomo
+
+Utente: "caricamento /retailers e dashboard estremamente lento (minuti
+per la prima visita)". Sospetto iniziale: indici DB mancanti su FK.
+
+### Diagnosi (sorpresa)
+
+Eseguito `scripts/diag-perf-indexes.ts` su prod:
+- `getAllRetailers` aggregate: **0.278 ms** execution
+- `getAllProducts` aggregate: **2.161 ms**
+- `getDashboardStats` batch: **0.067 ms**
+
+Tutte sotto 3 ms. Gli indici "sospettati come mancanti" erano già
+presenti dalle migration precedenti:
+- `locations_retailerId_idx` (0003 M1, partial)
+- `inventoryByBatch_location_batch_unique` UNIQUE composite (0003)
+- `productBatches_product_expiration_idx` (0003 composite)
+- `retailers_pricingPackageId_idx` (0005 M3, partial)
+
+Cold-start probe Vercel function: **902 ms cold, 250-400 ms warm** —
+normale per serverless, niente di che.
+
+### Causa REALE
+
+Bug subdolo in `server/fic-integration.ts:getFicClients`:
+
+```ts
+// Comportamento PRE-fix:
+if (!forceRefresh && meta.clientsCache && meta.clientsCache.length > 0) {
+  return { clients: meta.clientsCache, ... };
+}
+return await refreshFicClients();  // ← FALLBACK PAGINAZIONE FIC API
+```
+
+Se `meta.clientsCache` era undefined/vuoto e `!forceRefresh`, il
+fallback chiamava `refreshFicClients()` che pagina la FiC API fino a
+50 pages × ~500ms-2s ciascuna. **Per N centinaia di clienti FiC,
+minuti di esecuzione sincrona** davanti a query frontend hot.
+
+Punti di chiamata della query lenta:
+- `RetailerDetail.tsx`: `ficClients.list` su ogni `/retailers/:id`
+- `Retailers.tsx` (M3.0.6): `ficClients.list` all'apertura dialog
+- `Integrations.tsx`: `ficClients.list` quando connesso
+
+Se l'admin **non ha mai cliccato "Aggiorna lista clienti FiC"** dopo
+il primo Connect, la cache è null e ogni di queste pagine paga il
+costo full-pagination al primo accesso.
+
+### Fix A — getFicClients no auto-pagination (priorità alta)
+
+`server/fic-integration.ts:getFicClients`:
+
+```ts
+// Comportamento POST-fix:
+if (forceRefresh) {
+  return await refreshFicClients();
+}
+return {
+  clients: meta.clientsCache ?? [],
+  refreshedAt: meta.clientsCacheRefreshedAt ?? null,
+};
+```
+
+Refresh diventa **strettamente esplicito** — solo dal pulsante UI.
+La query `ficClients.list` è ora O(1) DB read, ritorna sempre in
+millisecondi anche se cache vuota.
+
+UI guidance per zero-friction primo refresh:
+- `Retailers.tsx` Combobox FiC client (dialog Nuovo Rivenditore):
+  empty state con bottone inline "Aggiorna ora" + spiegazione.
+- `RetailerDetail.tsx` dropdown "Cliente FiC associato": Select
+  disabled se cache vuota + bottone inline "Aggiorna ora".
+- `Integrations.tsx` aveva già un pulsante "Aggiorna lista clienti
+  FiC" prominente, lascia invariato.
+
+### Fix B — Migration 0006 perf indexes future-proof
+
+Anche se oggi `stockMovements` ha 1 riga e `getStockMovementsAll`
+ritorna in <1 ms, le query di `/movements` filtrano per type/
+location/timestamp/batch senza indici dedicati. A regime (~1-10k
+righe/anno attese per una rete di 13 retailer attivi) questi filtri
+inizierebbero a fare Seq Scan.
+
+Migration `0006_phase_b_perf_indexes.sql`:
+
+```sql
+CREATE INDEX IF NOT EXISTS "stockMovements_type_idx" ...
+CREATE INDEX IF NOT EXISTS "stockMovements_timestamp_desc_idx" ...
+CREATE INDEX IF NOT EXISTS "stockMovements_batchId_idx" ... WHERE NOT NULL
+CREATE INDEX IF NOT EXISTS "stockMovements_fromLocationId_idx" ... WHERE NOT NULL
+CREATE INDEX IF NOT EXISTS "stockMovements_toLocationId_idx" ... WHERE NOT NULL
+CREATE INDEX IF NOT EXISTS "stockMovements_type_timestamp_idx"
+  ON "stockMovements" ("type", "timestamp" DESC)
+```
+
+Apply: 6/6 statements OK in transazione via `apply-sql.ts`. Tutti
+`IF NOT EXISTS` → idempotenti.
+
+I partial index su `*LocationId` e `batchId` escludono righe NULL
+(stockMovements legacy pre-M1 vs records post-M1 con shape diversa)
+→ index più piccolo + più utile.
+
+### File modificati
+
+- `server/fic-integration.ts` (getFicClients no fallback su cache vuota)
+- `client/src/pages/Retailers.tsx` (ficRefreshMut + bottone "Aggiorna ora")
+- `client/src/pages/RetailerDetail.tsx` (ficRefreshMut + bottone disabled+refresh)
+- `drizzle/0006_phase_b_perf_indexes.sql` (NEW)
+- `scripts/diag-perf-indexes.ts` (NEW, regression script)
+
+### Verifica funzionale
+
+- DB EXPLAIN post-apply: indici parziali `stockMovements_*` presenti,
+  conteggi index su pg_indexes ✅
+- Build: ✅
+- Typecheck: ✅
+- E2E (richiesto utente): /retailers/:id deve caricare in <500ms anche
+  con cache FiC vuota (prima del fix: minuti).
+
+### Lezione
+
+Quando il sintomo è "lento" e la prima ipotesi è "DB", **misurare prima
+di aggiungere indici**. EXPLAIN ANALYZE è cheap (~secondi) e separa
+"DB lento" da "fetch esterno sincrono" — qui era il secondo, e nessun
+indice avrebbe mai sistemato il problema. Aggiungere indici comunque è
+ok come future-proofing, ma non come "fix" del sintomo presente.
+
+Pattern da evitare: cache locale con auto-fallback a remote fetch
+sincrono quando vuota. Sembra UX-friendly ("trasparente"), in pratica
+trasforma operazioni read-only frontend in long-running side-effects
+serverless senza progress feedback. Meglio: cache esplicita, refresh
+esplicito, empty state UI.
+
+### Commit
+
+- (questo) — fix(m3): getFicClients no auto-pagination on empty cache
+- (questo) — feat(perf): stockMovements indexes for /movements scalability
+
+---
+
 ## 2026-05-02 — ✨ M3.0.6 — Crea retailer da cliente FiC (auto-import)
 
 ### TL;DR
