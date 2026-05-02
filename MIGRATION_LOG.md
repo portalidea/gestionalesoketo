@@ -5,6 +5,88 @@
 
 Branch di lavoro: `migration/manus-to-supabase` → mergiato in `main`.
 Riferimento piano: `MIGRATION_PLAN.md`.
+Roadmap M6 (portale retailer self-service): `MIGRATION_PLAN_M6.md`.
+
+---
+
+## Stato corrente — 2026-05-02 fine sessione
+
+- **M3 funzionalmente al 100%** in prod su `gestionale.soketo.it`.
+  Schema 0005 + 0006 applicati. 7 commit logici tra feat + fix.
+  Smoke test E2E TRANSFER+proforma da eseguire lato utente
+  (browser test) per chiusura formale.
+- **M3.0.8 perf parked**. Sintomo utente "30+ secondi caricamento
+  /retailers/:id" non riproducibile da diagnosi server-side
+  (DB <300ms, cold start ~900ms, profile completo <1s). Timing logs
+  deployati in commit `4d87c84`. **TODO prossima session**:
+  reproduce con DevTools Network timing fresh + analizzare
+  Vercel runtime logs (`pnpm dlx vercel inspect <url> --logs`)
+  durante una request lenta vera per identificare il bottleneck
+  reale.
+- **M6 plan-only**: vedi `MIGRATION_PLAN_M6.md`. Implementazione
+  rinviata a session dedicata post-review architetturale.
+
+---
+
+## 2026-05-02 — 📌 M3.0.8 — Perf debugging /retailers/:id [PARKED]
+
+### Sintomo utente
+
+"caricamento /retailers/:id 30+ secondi". Sospetto iniziale:
+indici DB mancanti su FK aggregate (poi smentito in M3.0.7), poi
+`ficIntegration.getStatus` lento (poi smentito da profile diretto).
+
+### Diagnosi server-side (eseguita)
+
+- `scripts/diag-perf-indexes.ts`: tutte le query aggregate su prod
+  ritornano in <3 ms. Indici critici tutti presenti.
+- `scripts/profile-retailer-detail.ts`: replica esatta della
+  sequenza `retailers.getDetails` + `dependentsCount` +
+  `pricingPackages.list` + `ficIntegration.getStatus` +
+  `ficClients.list`. Total cold ~700 ms, warm ~600 ms.
+- Cold start probe Vercel: 902 ms cold, 250-400 ms warm — normale.
+- `getFicStatus` codice review: solo SELECT + computation, no API
+  call sincrona.
+- `systemIntegrations.metadata` jsonb: 5.28 KB, 63 clienti FiC
+  cache — niente di pesante.
+
+**Conclusione misure**: il server NON spiega 30 s. Sintomo deve
+venire da client-side (bundle, render, service worker) o da
+combinazione cold-start + JWKS fetch + DB connection cold-start in
+worst case raro.
+
+### Strumentazione deployata
+
+Commit `4d87c84` aggiunge timing logs soglia 500 ms a:
+- `context.ts createContext`: jwtVerify + getUserById
+- `retailers.getDetails` (4 sub-query timing)
+- `retailers.dependentsCount`
+- `pricingPackages.list`
+- `ficIntegration.getStatus`
+- `ficClients.list`
+
+Output Vercel runtime logs format:
+`[retailers.getDetails] retailer=Xms inv=Yms mov=Zms alerts=Wms total=Tms`
+
+### TODO prossima session (M3.0.8 NEXT)
+
+1. Utente riproduce in browser con DevTools Network tab aperto su
+   `/retailers/:id` "lento" (cold cache, hard reload).
+2. Cattura: response time del batch tRPC + total page load (LCP).
+3. Se response time batch >5 s → server-side, leggi Vercel runtime
+   logs via `pnpm dlx vercel inspect <deployment-url> --logs` per
+   identificare la procedure colpevole.
+4. Se response time batch <2 s ma page load >10 s → client-side
+   bottleneck (bundle parse, render, service worker stale, Chrome
+   extension). Test in finestra Incognito + test su browser pulito.
+5. Una volta isolato: fix mirato + remove timing logs (commit
+   cleanup).
+
+### File aggiunti (kept come regression script)
+
+- `scripts/diag-perf-indexes.ts`
+- `scripts/profile-retailer-detail.ts`
+- `scripts/scale-retailers.ts`
 
 ---
 
