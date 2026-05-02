@@ -8,6 +8,111 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-05-02 — 🐞 Bugfix M3.0.5 — FiC non onora prompt=login, workaround UX
+
+### Sintomo
+
+Test E2E del fix M3.0.4 (auto-`prompt=login` post-disconnect) ha
+mostrato che FiC **non implementa il param OIDC `prompt=login`**:
+nel popup OAuth la schermata di login appare per ~1 secondo, poi
+auto-submit con la company precedente (cookie sessione). Lo stesso
+comportamento per il bottone manuale "Forza re-login" introdotto in
+M3.0.2.
+
+L'unico workaround verificato è cambiare azienda direttamente su
+`secure.fattureincloud.it` nella sessione browser **prima** di
+cliccare Connetti. OAuth FiC autorizza sempre l'azienda attualmente
+attiva nella sessione del provider — non c'è modo lato client
+(per via di same-origin policy) né lato OAuth params (per via di
+limitazione FiC) di forzare il selettore.
+
+### Causa reale
+
+Limitazione documentata del provider Fatture in Cloud:
+- Nessun parametro OAuth standard per company-switch documentato
+  ([FiC code-flow docs](https://developers.fattureincloud.it/docs/authentication/code-flow/vanilla-code/))
+- `prompt=login` (OIDC) inviato come tentativo low-risk: ignorato
+- `secure.fattureincloud.it/logout` cross-origin da `gestionale.soketo.it`
+  → impossibile chiamare programmaticamente
+
+### Fix
+
+Pivot strategy: niente più tentativi automatici di force-login,
+sostituiti con **guidance UX prominente** che spiega il workaround.
+
+**`client/src/pages/Integrations.tsx`**:
+
+1. **Info-box bordato blue/Info** sotto "Non connesso" con i 3 step
+   espliciti (apri FiC tab, cambia azienda, torna e connetti) +
+   link "Apri Fatture in Cloud" con icona ExternalLink che apre
+   `secure.fattureincloud.it` in nuova scheda.
+
+2. **Rimossa logica auto force-login** introdotta in M3.0.4:
+   - `localStorage.setItem("fic_just_disconnected_at", ...)` su
+     disconnect onSuccess → rimosso
+   - `localStorage.removeItem(...)` su `fic_sso_success` → rimosso
+   - funzione `shouldAutoForceLogin()` → rimossa
+   - auto-derivazione `forceLogin` in `handleConnect` → rimossa,
+     default a `false`
+
+3. **Bottone secondario rinominato** da "Hai più aziende? Connetti
+   con scelta azienda" a "Forza re-login (edge case)", tooltip
+   aggiornato a "FiC tipicamente lo ignora — usa il workaround
+   dell'info-box sopra". Mantenuto wired per compat futura (se mai
+   FiC implementerà `prompt=login`).
+
+4. **Toast disconnect aggiornato**: testo lungo (8s duration) con
+   istruzione esplicita "Per riconnettere ad altra azienda, prima
+   cambia azienda su Fatture in Cloud, poi clicca Connetti".
+
+5. **Helper text in fondo rimosso** (era ridondante con info-box).
+
+### Cosa NON ho cambiato
+
+- **Backend `forceLogin` param**: lasciato wired in
+  `getFicAuthorizationUrl({ forceLogin })` e in
+  `ficIntegration.startOAuth` input. Non fa danno (FiC ignora il
+  param) e si attiva solo dal bottone "Forza re-login (edge case)".
+  Se in futuro FiC supporterà `prompt=login`, basterà aggiornare
+  la copy UI senza toccare backend.
+
+- **`scripts/diag-fic-disconnect.ts`**: kept come regression script
+  per future indagini.
+
+### Lezione
+
+Quando un OAuth provider non documenta un comportamento standard
+(es. `prompt=select_account`/`prompt=login`), l'inviarlo "blind"
+funziona solo se il provider lo onora. Senza poterlo verificare
+empiricamente prima del deploy, **non vendere il fix come risolutivo
+all'utente** — meglio anticipare il caso di non-supporto con
+guidance UX di backup. Il pivot da "fix automatico" a "info-box
+workaround" è stato cheap (~30 minuti) ma evita confusione utente.
+
+Per provider terzi multi-tenant, sempre testare empiricamente la
+session-switch **prima** di promettere automazione.
+
+### File modificati
+
+- `client/src/pages/Integrations.tsx`: rimossa logica localStorage,
+  aggiunto info-box prominente con link ExternalLink, rinominato
+  bottone secondario
+- `MIGRATION_LOG.md`: questa sezione
+
+### Verifica funzionale
+
+- Build: ✅
+- Typecheck: ✅
+- E2E manuale (richiesto utente): info-box visibile, link apre tab
+  FiC, workaround documentato funziona
+
+### Commit
+
+- (questo bugfix) — fix(m3): document FiC company selector workaround
+  in UI (prompt=login not supported)
+
+---
+
 ## 2026-05-02 — 🐞 Bugfix M3.0.4 — disconnect FiC + auto-force selettore al riconnect
 
 ### Sintomo riportato

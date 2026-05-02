@@ -23,6 +23,8 @@ import { trpc } from "@/lib/trpc";
 import {
   AlertCircle,
   CheckCircle2,
+  ExternalLink,
+  Info,
   Loader2,
   Plug,
   RefreshCw,
@@ -49,15 +51,9 @@ export default function Integrations() {
       utils.ficIntegration.getStatus.invalidate();
       utils.ficClients.list.invalidate();
       setDisconnectOpen(false);
-      // M3.0.4: marca timestamp post-disconnect così il prossimo "Connetti"
-      // forza prompt=login automaticamente (evita che FiC riusi cookie
-      // sessione e auto-selezioni la stessa azienda). TTL 24h: dopo, il
-      // flag scade e il connect torna fluido. Cleared dopo connect success.
-      try {
-        localStorage.setItem("fic_just_disconnected_at", String(Date.now()));
-      } catch {}
       toast.success(
-        `Fatture in Cloud disconnesso (${res.deleted} riga rimossa dal DB)`,
+        `Fatture in Cloud disconnesso (${res.deleted} riga rimossa dal DB). Per connettere ad altra azienda, prima cambia azienda su Fatture in Cloud, poi clicca Connetti.`,
+        { duration: 8000 },
       );
     },
     onError: (e) => toast.error(e.message),
@@ -77,31 +73,12 @@ export default function Integrations() {
       if (e.data?.type === "fic_sso_success") {
         utils.ficIntegration.getStatus.invalidate();
         utils.ficClients.list.invalidate();
-        // M3.0.4: pulisci flag post-disconnect dopo connect riuscito
-        try {
-          localStorage.removeItem("fic_just_disconnected_at");
-        } catch {}
         toast.success("Fatture in Cloud connesso");
       }
     }
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
   }, [utils]);
-
-  // M3.0.4: se l'utente ha disconnesso negli ultimi 24h, il prossimo
-  // "Connetti" forza prompt=login per evitare auto-rilascio della stessa
-  // azienda da parte di FiC via cookie sessione browser.
-  function shouldAutoForceLogin(): boolean {
-    try {
-      const ts = localStorage.getItem("fic_just_disconnected_at");
-      if (!ts) return false;
-      const age = Date.now() - parseInt(ts, 10);
-      if (age < 0 || age > 24 * 60 * 60 * 1000) return false;
-      return true;
-    } catch {
-      return false;
-    }
-  }
 
   if (me && me.role !== "admin") {
     return (
@@ -113,11 +90,13 @@ export default function Integrations() {
     );
   }
 
-  async function handleConnect(explicitForceLogin?: boolean) {
-    // explicitForceLogin precedence: bottoni espliciti scelgono.
-    // Default (undefined): auto-derivato dal flag post-disconnect.
-    const forceLogin =
-      explicitForceLogin !== undefined ? explicitForceLogin : shouldAutoForceLogin();
+  async function handleConnect(forceLogin = false) {
+    // M3.0.5: prompt=login NON è onorato da FiC (testato empiricamente:
+    // selettore appare 1s e poi auto-submit con la company precedente).
+    // Il workaround vero è cambiare azienda su secure.fattureincloud.it
+    // prima del Connect — vedi info-box. Il flag forceLogin resta
+    // wired (bottone "Forza re-login" come edge case) ma non è
+    // più la soluzione primaria.
     setOauthLoading(forceLogin ? "force" : "normal");
     try {
       const r = await utils.ficIntegration.startOAuth.fetch({ forceLogin });
@@ -175,6 +154,46 @@ export default function Integrations() {
                   <AlertCircle className="h-5 w-5 shrink-0" />
                   <span>Non connesso. Avvia il flusso OAuth con FiC per autorizzare l'app.</span>
                 </div>
+
+                {/* M3.0.5: info-box workaround multi-azienda. FiC non onora
+                    prompt=login (verificato empiricamente), unica strada
+                    affidabile è cambiare azienda PRIMA del connect. */}
+                <div className="rounded-md border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm space-y-3">
+                  <div className="flex items-start gap-3">
+                    <Info className="h-5 w-5 shrink-0 text-blue-400 mt-0.5" />
+                    <div className="space-y-2 flex-1">
+                      <div className="font-medium text-foreground">
+                        Hai più aziende su Fatture in Cloud?
+                      </div>
+                      <p className="text-muted-foreground">
+                        OAuth FiC autorizza sempre l'<strong>azienda attualmente
+                        attiva</strong> nella tua sessione browser FiC. Per connettere
+                        un'azienda diversa:
+                      </p>
+                      <ol className="list-decimal list-inside text-muted-foreground space-y-1 pl-1">
+                        <li>
+                          Apri Fatture in Cloud in una nuova scheda (link sotto).
+                        </li>
+                        <li>
+                          Cambia all'azienda da connettere col selettore in alto a destra.
+                        </li>
+                        <li>
+                          Torna qui e clicca <strong>Connetti Fatture in Cloud</strong>.
+                        </li>
+                      </ol>
+                      <a
+                        href="https://secure.fattureincloud.it/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 underline mt-1"
+                      >
+                        Apri Fatture in Cloud
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="flex flex-wrap items-center gap-3">
                   <Button
                     onClick={() => handleConnect(false)}
@@ -192,28 +211,14 @@ export default function Integrations() {
                     size="sm"
                     onClick={() => handleConnect(true)}
                     disabled={oauthLoading !== null}
-                    title="Forza la schermata di login FiC: utile se hai più aziende e vuoi sceglierne una diversa da quella memorizzata nella sessione browser FiC."
+                    title="Edge case: prova a forzare prompt=login. FiC tipicamente lo ignora — usa il workaround dell'info-box sopra."
                   >
                     {oauthLoading === "force" ? (
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     ) : null}
-                    Hai più aziende? Connetti con scelta azienda
+                    Forza re-login (edge case)
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground max-w-2xl">
-                  Nota: FiC ricorda l'azienda selezionata nella sessione browser. Se hai
-                  più aziende collegate al tuo account FiC e vuoi cambiare,
-                  usa "Connetti con scelta azienda" oppure prima esegui logout su{" "}
-                  <a
-                    href="https://secure.fattureincloud.it/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline hover:text-foreground"
-                  >
-                    secure.fattureincloud.it
-                  </a>
-                  .
-                </p>
               </div>
             ) : (
               <div className="space-y-4">
