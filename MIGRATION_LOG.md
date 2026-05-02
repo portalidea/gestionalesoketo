@@ -8,6 +8,125 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-05-02 — ✨ M3.0.6 — Crea retailer da cliente FiC (auto-import)
+
+### TL;DR
+
+UX dialog "+ Nuovo Rivenditore" rifatto: ora in cima ha una Card
+"Crea da cliente Fatture in Cloud" con Combobox cmdk searchable.
+Selezionando un cliente FiC, i campi anagrafica (nome, indirizzo,
+città, provincia, CAP, telefono, email, contact_person) vengono
+**pre-popolati e restano editabili**, e `ficClientId` viene salvato
+automaticamente in fase di creazione — niente più "crea + entra in
+detail + mappa cliente FiC".
+
+### Razionale
+
+I retailer SoKeto sono **già** nell'anagrafica FiC del titolare
+(workflow B2B: si fattura prima, si gestisce il flusso fisico dopo).
+Forzare l'admin a copiare i dati a mano è doppio data entry +
+fonte di drift fra Gestionale e FiC. Il flow ideale è "scegli e
+completa solo i campi nostri (Tipo Attività, note interne)".
+
+### Schema (zero modifiche)
+
+`retailers.ficClientId` esiste già da migration 0005 (M3 base). Solo
+estensione del **tRPC input** di `retailers.create` con
+`ficClientId: z.number().int().positive().optional()`. Il valore
+finisce nel DB via `db.createRetailer(input)` che già fa pass-through
+sui campi InsertRetailer.
+
+### Backend
+
+- `server/fic-integration.ts`: estesa `FicClientInfo` con
+  `address_street`, `address_postal_code`, `address_city`,
+  `address_province`, `address_extra`, `country`, `country_iso`,
+  `phone`, `contact_person` (campi standard FiC entities/clients
+  API). Nessun cambio di logica: il fetch già ritornava la struttura
+  completa, era l'interface lato TS che era minimale → ora il
+  payload `metadata.clientsCache` include i campi address e il
+  client li riceve via `ficClients.list`.
+- `server/routers.ts`: aggiunto `ficClientId` opzionale a
+  `retailers.create`. Validation `z.number().int().positive()`.
+
+Nessuna nuova chiamata FiC API: l'UI legge dalla cache
+`systemIntegrations.metadata.clientsCache` aggiornabile manualmente
+da `/settings/integrations`. Match con M3 design (no live FiC fetch
+durante UI flows).
+
+### UI (`client/src/pages/Retailers.tsx`)
+
+Dialog rifatto:
+
+1. **Card import-FiC** in cima al form, bordo dashed + sfondo muted
+   per distinguerla dal form principale. Stati gestiti:
+   - **FiC non connesso**: messaggio + link a `/settings/integrations`
+   - **Cache vuota**: messaggio + link "Aggiorna lista clienti FiC"
+   - **Cliente selezionato**: chip emerald con nome + P.IVA + FiC ID
+     + bottone X per rimuovere associazione (non resetta i campi)
+   - **Stato base**: Combobox cmdk con `CommandInput` (cerca per
+     nome/P.IVA/CF), `CommandEmpty`, lista con CommandItem mostranti
+     nome + città/provincia + P.IVA. Helper text con conteggio.
+2. **Divider visivo** "OPPURE crea da zero" (o "Modifica i dati
+   pre-popolati" se cliente selezionato).
+3. **Form anagrafica esistente** invariato (Nome, Tipo Attività,
+   indirizzo, città, prov, CAP, phone, email, contact, notes).
+
+`importFromFicClient()`: copia campi da `FicClient` → `formData`,
+imposta `selectedFicClientId`, chiude popover. Province
+auto-uppercased + slice(0,2) per allinearsi al constraint DB.
+
+`clearFicImport()`: rimuove solo l'associazione `ficClientId`,
+**lascia i campi pre-popolati intatti** (l'utente potrebbe voler
+mantenere i dati senza il binding, es. retailer storico non più
+in FiC).
+
+`createMutation` toast distinto:
+- "Rivenditore creato + cliente FiC associato" se `ficClientId` set
+- "Rivenditore creato (nessun cliente FiC mappato)" altrimenti
+
+### Edge cases gestiti
+
+- Dialog close → reset `formData` + `selectedFicClientId`
+- `ficClients.list` query `enabled: !!ficStatus?.connected && dialogOpen`
+  → no fetch quando dialog chiuso (perf)
+- Dropdown "Cliente FiC associato" su `/retailers/:id` invariato:
+  si comporta da edit-only sul ficClientId esistente — il flow di
+  M3.0.6 è creation-time, l'edit post-creation è già coperto.
+- P.IVA non duplicata in retailers (vive solo in FiC), come da brief.
+
+### Cosa NON ho fatto
+
+- Nessuna modifica a `retailers.update` per accettare ficClientId in
+  edit massivo: c'è già `retailers.assignFicClient` per quello.
+- Nessun "auto-suggest cliente FiC esistente" cercando per nome
+  durante typing (sarebbe nice-to-have ma fuori scope brief).
+
+### File modificati
+
+- `server/fic-integration.ts` (FicClientInfo estesa)
+- `server/routers.ts` (`retailers.create` + ficClientId opzionale)
+- `client/src/pages/Retailers.tsx` (refactor dialog: +Card import +
+  Combobox cmdk + auto-populate logic)
+
+### Verifica funzionale
+
+- Build: ✅ vite + esbuild
+- Typecheck: ✅
+- E2E (richiesto utente):
+  1. `/settings/integrations` → "Aggiorna lista clienti FiC"
+  2. `/retailers` → "+ Nuovo Rivenditore"
+  3. Cerca cliente in Combobox → seleziona → form auto-popolato
+  4. Modifica Tipo Attività ("Farmacia") → Salva
+  5. Verifica `/retailers/:id` → ficClientId valorizzato + dropdown
+     mostra cliente FiC corretto
+
+### Commit
+
+- (questo) — feat(m3): retailer creation auto-import from FiC client
+
+---
+
 ## 2026-05-02 — 🐞 Bugfix M3.0.5 — FiC non onora prompt=login, workaround UX
 
 ### Sintomo

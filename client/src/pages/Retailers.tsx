@@ -1,6 +1,20 @@
 import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import {
   Dialog,
   DialogContent,
@@ -13,6 +27,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Table,
   TableBody,
   TableCell,
@@ -22,7 +41,15 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
-import { Loader2, Plus, Store } from "lucide-react";
+import {
+  Check,
+  ChevronsUpDown,
+  Loader2,
+  Plug,
+  Plus,
+  Store,
+  X,
+} from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
@@ -40,6 +67,20 @@ const EMPTY_FORM = {
   notes: "",
 };
 
+type FicClient = {
+  id: number;
+  name: string;
+  vat_number?: string;
+  tax_code?: string;
+  email?: string;
+  phone?: string;
+  address_street?: string;
+  address_postal_code?: string;
+  address_city?: string;
+  address_province?: string;
+  contact_person?: string;
+};
+
 export default function Retailers() {
   const { data: retailers, isLoading } = trpc.retailers.list.useQuery();
   const [, setLocation] = useLocation();
@@ -47,21 +88,73 @@ export default function Retailers() {
   const utils = trpc.useUtils();
 
   const [formData, setFormData] = useState(EMPTY_FORM);
+  // M3.0.6: id cliente FiC associato (NULL se "crea da zero")
+  const [selectedFicClientId, setSelectedFicClientId] = useState<number | null>(
+    null,
+  );
+  const [comboboxOpen, setComboboxOpen] = useState(false);
+
+  const { data: ficStatus } = trpc.ficIntegration.getStatus.useQuery();
+  const { data: ficClientsData } = trpc.ficClients.list.useQuery(undefined, {
+    enabled: !!ficStatus?.connected && dialogOpen,
+    retry: false,
+  });
+  const ficClients = (ficClientsData?.clients ?? []) as FicClient[];
+  const selectedFicClient =
+    selectedFicClientId !== null
+      ? ficClients.find((c) => c.id === selectedFicClientId)
+      : null;
 
   const createMutation = trpc.retailers.create.useMutation({
     onSuccess: () => {
       utils.retailers.list.invalidate();
       setDialogOpen(false);
-      toast.success("Rivenditore creato con successo");
+      toast.success(
+        selectedFicClientId
+          ? "Rivenditore creato + cliente FiC associato"
+          : "Rivenditore creato (nessun cliente FiC mappato)",
+      );
       setFormData(EMPTY_FORM);
+      setSelectedFicClientId(null);
     },
     onError: (err) => toast.error(err.message),
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    createMutation.mutate(formData);
+    createMutation.mutate({
+      ...formData,
+      // Pass ficClientId only when set (zod schema is .optional())
+      ...(selectedFicClientId !== null
+        ? { ficClientId: selectedFicClientId }
+        : {}),
+    });
   };
+
+  function importFromFicClient(client: FicClient) {
+    // Compose address_extra into address line if present (FiC sometimes
+    // splits via/civico across street + extra). Tutti i campi rimangono
+    // editabili dopo l'import.
+    setSelectedFicClientId(client.id);
+    setFormData((prev) => ({
+      ...prev,
+      name: client.name ?? prev.name,
+      address: client.address_street ?? prev.address,
+      city: client.address_city ?? prev.city,
+      province: (client.address_province ?? prev.province).toUpperCase().slice(0, 2),
+      postalCode: client.address_postal_code ?? prev.postalCode,
+      phone: client.phone ?? prev.phone,
+      email: client.email ?? prev.email,
+      contactPerson: client.contact_person ?? prev.contactPerson,
+    }));
+    setComboboxOpen(false);
+  }
+
+  function clearFicImport() {
+    setSelectedFicClientId(null);
+    // Lascia i campi pre-popolati intatti: l'utente potrebbe voler
+    // mantenere i dati senza il binding al ficClientId.
+  }
 
   return (
     <DashboardLayout>
@@ -73,7 +166,16 @@ export default function Retailers() {
               Anagrafica punti vendita SoKeto con stock e valore inventario corrente.
             </p>
           </div>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <Dialog
+            open={dialogOpen}
+            onOpenChange={(o) => {
+              setDialogOpen(o);
+              if (!o) {
+                setFormData(EMPTY_FORM);
+                setSelectedFicClientId(null);
+              }
+            }}
+          >
             <DialogTrigger asChild>
               <Button size="lg">
                 <Plus className="h-5 w-5 mr-2" />
@@ -85,10 +187,157 @@ export default function Retailers() {
                 <DialogHeader>
                   <DialogTitle>Nuovo Rivenditore</DialogTitle>
                   <DialogDescription>
-                    Inserisci i dati del nuovo punto vendita
+                    Importa da Fatture in Cloud oppure crea da zero
                   </DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-4 py-4">
+                  {/* M3.0.6: import da cliente FiC */}
+                  <Card className="border-dashed border-border bg-muted/30">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm flex items-center gap-2">
+                        <Plug className="h-4 w-4 text-primary" />
+                        Crea da cliente Fatture in Cloud
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        Seleziona un cliente già in anagrafica FiC: nome, indirizzo,
+                        contatti vengono pre-popolati. La P.IVA è solo nel record FiC,
+                        non duplicata qui. Tipo Attività rimane manuale.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {!ficStatus?.connected ? (
+                        <p className="text-xs text-muted-foreground">
+                          Fatture in Cloud non connesso.{" "}
+                          <button
+                            type="button"
+                            className="underline hover:text-foreground"
+                            onClick={() => setLocation("/settings/integrations")}
+                          >
+                            Connetti l'integrazione
+                          </button>{" "}
+                          per importare clienti.
+                        </p>
+                      ) : ficClients.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          Nessun cliente in cache.{" "}
+                          <button
+                            type="button"
+                            className="underline hover:text-foreground"
+                            onClick={() => setLocation("/settings/integrations")}
+                          >
+                            Vai a Integrazioni
+                          </button>{" "}
+                          e clicca "Aggiorna lista clienti FiC".
+                        </p>
+                      ) : selectedFicClient ? (
+                        <div className="flex items-center justify-between rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2">
+                          <div className="text-sm">
+                            <span className="font-medium text-foreground">
+                              {selectedFicClient.name}
+                            </span>
+                            {selectedFicClient.vat_number && (
+                              <span className="text-muted-foreground ml-2 text-xs font-mono">
+                                P.IVA {selectedFicClient.vat_number}
+                              </span>
+                            )}
+                            <div className="text-xs text-muted-foreground mt-0.5">
+                              FiC ID: {selectedFicClient.id} — campi pre-popolati sotto
+                            </div>
+                          </div>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            onClick={clearFicImport}
+                            title="Rimuovi associazione FiC (mantiene i dati nei campi)"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <Popover open={comboboxOpen} onOpenChange={setComboboxOpen}>
+                            <PopoverTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                role="combobox"
+                                aria-expanded={comboboxOpen}
+                                className="w-full justify-between"
+                              >
+                                <span className="text-muted-foreground">
+                                  Seleziona cliente FiC…
+                                </span>
+                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[--radix-popover-trigger-width] p-0">
+                              <Command>
+                                <CommandInput placeholder="Cerca per nome o P.IVA…" />
+                                <CommandList>
+                                  <CommandEmpty>Nessun cliente trovato</CommandEmpty>
+                                  <CommandGroup>
+                                    {ficClients.map((c) => (
+                                      <CommandItem
+                                        key={c.id}
+                                        // value combina nome + P.IVA per matching cmdk
+                                        value={`${c.name} ${c.vat_number ?? ""} ${c.tax_code ?? ""}`}
+                                        onSelect={() => importFromFicClient(c)}
+                                      >
+                                        <Check
+                                          className={`mr-2 h-4 w-4 ${
+                                            selectedFicClientId === c.id
+                                              ? "opacity-100"
+                                              : "opacity-0"
+                                          }`}
+                                        />
+                                        <div className="flex flex-col flex-1 min-w-0">
+                                          <span className="truncate">{c.name}</span>
+                                          {(c.vat_number ||
+                                            c.address_city ||
+                                            c.address_province) && (
+                                            <span className="text-xs text-muted-foreground truncate">
+                                              {c.vat_number
+                                                ? `P.IVA ${c.vat_number}`
+                                                : ""}
+                                              {c.vat_number && c.address_city
+                                                ? " · "
+                                                : ""}
+                                              {c.address_city ?? ""}
+                                              {c.address_province
+                                                ? ` (${c.address_province})`
+                                                : ""}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </CommandItem>
+                                    ))}
+                                  </CommandGroup>
+                                </CommandList>
+                              </Command>
+                            </PopoverContent>
+                          </Popover>
+                          <p className="text-xs text-muted-foreground">
+                            Ricerca tra {ficClients.length} clienti scaricati da FiC.
+                          </p>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* Divider */}
+                  <div className="relative py-1">
+                    <div className="absolute inset-0 flex items-center">
+                      <span className="w-full border-t border-border" />
+                    </div>
+                    <div className="relative flex justify-center text-xs">
+                      <span className="bg-background px-2 text-muted-foreground uppercase tracking-wider">
+                        {selectedFicClient ? "Modifica i dati pre-popolati" : "Oppure crea da zero"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Form anagrafica */}
                   <div className="grid gap-2">
                     <Label htmlFor="name">Nome *</Label>
                     <Input

@@ -188,6 +188,8 @@ export const appRouter = router({
           contactPerson: z.string().optional(),
           fattureInCloudCompanyId: z.string().optional(),
           notes: z.string().optional(),
+          // M3.0.6: ficClientId in creazione (workflow "import da FiC")
+          ficClientId: z.number().int().positive().optional(),
         }),
       )
       .mutation(async ({ input }) => {

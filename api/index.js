@@ -81328,7 +81328,9 @@ var init_routers = __esm({
             email: external_exports.string().email().optional(),
             contactPerson: external_exports.string().optional(),
             fattureInCloudCompanyId: external_exports.string().optional(),
-            notes: external_exports.string().optional()
+            notes: external_exports.string().optional(),
+            // M3.0.6: ficClientId in creazione (workflow "import da FiC")
+            ficClientId: external_exports.number().int().positive().optional()
           })
         ).mutation(async ({ input }) => {
           return await createRetailer(input);

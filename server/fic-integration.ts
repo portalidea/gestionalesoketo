@@ -30,13 +30,28 @@ export interface FicCompanyInfo {
   type?: string;
 }
 
+/**
+ * Shape parziale di un cliente FiC. I campi address_* + contact sono
+ * usati dal flow "Crea retailer da cliente FiC" (M3.0.6) per auto-popolare
+ * il form. Per l'elenco completo vedi:
+ * https://developers.fattureincloud.it/docs/api-reference/c/companyId/entities/clients
+ */
 export interface FicClientInfo {
   id: number;
   name: string;
   vat_number?: string;
   tax_code?: string;
   email?: string;
+  phone?: string;
   type?: string;
+  address_street?: string;
+  address_postal_code?: string;
+  address_city?: string;
+  address_province?: string;
+  address_extra?: string;
+  country?: string;
+  country_iso?: string;
+  contact_person?: string;
 }
 
 interface FicIntegrationMetadata {
