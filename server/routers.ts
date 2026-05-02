@@ -120,12 +120,28 @@ export const appRouter = router({
     getDetails: protectedProcedure
       .input(z.object({ id: uuid }))
       .query(async ({ input }) => {
+        // M3.0.8 perf timing: timestamp ogni step. Log solo se total >500ms.
+        const tAll = Date.now();
+        const t0 = Date.now();
         const retailer = await db.getRetailerById(input.id);
+        const tRetailer = Date.now() - t0;
         if (!retailer) return null;
 
+        const t1 = Date.now();
         const inventoryItems = await db.getInventoryByBatchByRetailer(input.id);
+        const tInv = Date.now() - t1;
+        const t2 = Date.now();
         const recentMovements = await db.getStockMovementsByRetailer(input.id, 50);
+        const tMov = Date.now() - t2;
+        const t3 = Date.now();
         const retailerAlerts = await db.getAlertsByRetailer(input.id);
+        const tAlerts = Date.now() - t3;
+        const tTotal = Date.now() - tAll;
+        if (tTotal > 500) {
+          console.log(
+            `[retailers.getDetails] retailer=${tRetailer}ms inv=${tInv}ms mov=${tMov}ms alerts=${tAlerts}ms total=${tTotal}ms`,
+          );
+        }
 
         // Calcola stats: aggrega per (productId) per low stock check
         const qtyByProduct = new Map<string, { qty: number; threshold: number }>();
@@ -224,7 +240,11 @@ export const appRouter = router({
     dependentsCount: protectedProcedure
       .input(z.object({ id: uuid }))
       .query(async ({ input }) => {
-        return await db.getRetailerDependentsCount(input.id);
+        const t = Date.now();
+        const r = await db.getRetailerDependentsCount(input.id);
+        const ms = Date.now() - t;
+        if (ms > 500) console.log(`[retailers.dependentsCount] ${ms}ms`);
+        return r;
       }),
 
     delete: writerProcedure
@@ -769,7 +789,11 @@ export const appRouter = router({
   // ============= PRICING PACKAGES (Phase B M3) =============
   pricingPackages: router({
     list: protectedProcedure.query(async () => {
-      return await db.getAllPricingPackages();
+      const t = Date.now();
+      const r = await db.getAllPricingPackages();
+      const ms = Date.now() - t;
+      if (ms > 500) console.log(`[pricingPackages.list] ${ms}ms`);
+      return r;
     }),
 
     create: adminProcedure
@@ -850,7 +874,11 @@ export const appRouter = router({
   // ============= FIC INTEGRATION (Phase B M3) =============
   ficIntegration: router({
     getStatus: protectedProcedure.query(async () => {
-      return await getFicStatus();
+      const t = Date.now();
+      const r = await getFicStatus();
+      const ms = Date.now() - t;
+      if (ms > 500) console.log(`[ficIntegration.getStatus] ${ms}ms`);
+      return r;
     }),
 
     startOAuth: adminProcedure
@@ -875,8 +903,12 @@ export const appRouter = router({
   // ============= FIC CLIENTS CACHE (Phase B M3) =============
   ficClients: router({
     list: protectedProcedure.query(async () => {
+      const t = Date.now();
       try {
-        return await getFicClients(false);
+        const r = await getFicClients(false);
+        const ms = Date.now() - t;
+        if (ms > 500) console.log(`[ficClients.list] ${ms}ms count=${r.clients.length}`);
+        return r;
       } catch (e) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",

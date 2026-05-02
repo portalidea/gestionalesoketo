@@ -39,21 +39,30 @@ export async function createContext(
 ): Promise<TrpcContext> {
   const token = extractBearerToken(opts.req.headers.authorization);
   let user: User | null = null;
+  const t0 = Date.now();
 
   if (token) {
     try {
+      const tVerify = Date.now();
       const { payload } = await jwtVerify(token, JWKS, {
         algorithms: ["ES256"],
         issuer: SUPABASE_ISSUER,
         audience: "authenticated",
       });
+      const verifyMs = Date.now() - tVerify;
       const sub = typeof payload.sub === "string" ? payload.sub : null;
       if (sub) {
+        const tUser = Date.now();
         user = (await db.getUserById(sub)) ?? null;
+        const userMs = Date.now() - tUser;
+        // M3.0.8 perf timing: solo se >100ms per non sporcare i log
+        if (verifyMs > 100 || userMs > 100) {
+          console.log(
+            `[ctx] jwtVerify=${verifyMs}ms getUserById=${userMs}ms total=${Date.now() - t0}ms`,
+          );
+        }
       }
     } catch (error) {
-      // Token invalido o scaduto: lasciamo user null, le procedure protette
-      // risponderanno con UNAUTHORIZED.
       if (process.env.NODE_ENV !== "production") {
         const e = error as Error;
         console.warn(`[Auth] JWT verification failed (${e.name}): ${e.message}`);

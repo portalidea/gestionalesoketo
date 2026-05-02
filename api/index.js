@@ -39016,16 +39016,26 @@ function extractBearerToken(authHeader) {
 async function createContext(opts) {
   const token = extractBearerToken(opts.req.headers.authorization);
   let user = null;
+  const t0 = Date.now();
   if (token) {
     try {
+      const tVerify = Date.now();
       const { payload } = await jwtVerify(token, JWKS, {
         algorithms: ["ES256"],
         issuer: SUPABASE_ISSUER,
         audience: "authenticated"
       });
+      const verifyMs = Date.now() - tVerify;
       const sub = typeof payload.sub === "string" ? payload.sub : null;
       if (sub) {
+        const tUser = Date.now();
         user = await getUserById(sub) ?? null;
+        const userMs = Date.now() - tUser;
+        if (verifyMs > 100 || userMs > 100) {
+          console.log(
+            `[ctx] jwtVerify=${verifyMs}ms getUserById=${userMs}ms total=${Date.now() - t0}ms`
+          );
+        }
       }
     } catch (error46) {
       if (process.env.NODE_ENV !== "production") {
@@ -81271,11 +81281,26 @@ var init_routers = __esm({
          *     con `minStockThreshold` di `products`.
          */
         getDetails: protectedProcedure.input(external_exports.object({ id: uuid5 })).query(async ({ input }) => {
+          const tAll = Date.now();
+          const t0 = Date.now();
           const retailer = await getRetailerById(input.id);
+          const tRetailer = Date.now() - t0;
           if (!retailer) return null;
+          const t1 = Date.now();
           const inventoryItems = await getInventoryByBatchByRetailer(input.id);
+          const tInv = Date.now() - t1;
+          const t2 = Date.now();
           const recentMovements = await getStockMovementsByRetailer(input.id, 50);
+          const tMov = Date.now() - t2;
+          const t3 = Date.now();
           const retailerAlerts = await getAlertsByRetailer(input.id);
+          const tAlerts = Date.now() - t3;
+          const tTotal = Date.now() - tAll;
+          if (tTotal > 500) {
+            console.log(
+              `[retailers.getDetails] retailer=${tRetailer}ms inv=${tInv}ms mov=${tMov}ms alerts=${tAlerts}ms total=${tTotal}ms`
+            );
+          }
           const qtyByProduct = /* @__PURE__ */ new Map();
           let totalValue = 0;
           let expiringCount = 0;
@@ -81357,7 +81382,11 @@ var init_routers = __esm({
           return { success: true };
         }),
         dependentsCount: protectedProcedure.input(external_exports.object({ id: uuid5 })).query(async ({ input }) => {
-          return await getRetailerDependentsCount(input.id);
+          const t2 = Date.now();
+          const r = await getRetailerDependentsCount(input.id);
+          const ms = Date.now() - t2;
+          if (ms > 500) console.log(`[retailers.dependentsCount] ${ms}ms`);
+          return r;
         }),
         delete: writerProcedure.input(external_exports.object({ id: uuid5 })).mutation(async ({ input }) => {
           await deleteRetailer(input.id);
@@ -81790,7 +81819,11 @@ var init_routers = __esm({
       // ============= PRICING PACKAGES (Phase B M3) =============
       pricingPackages: router2({
         list: protectedProcedure.query(async () => {
-          return await getAllPricingPackages();
+          const t2 = Date.now();
+          const r = await getAllPricingPackages();
+          const ms = Date.now() - t2;
+          if (ms > 500) console.log(`[pricingPackages.list] ${ms}ms`);
+          return r;
         }),
         create: adminProcedure.input(
           external_exports.object({
@@ -81854,7 +81887,11 @@ var init_routers = __esm({
       // ============= FIC INTEGRATION (Phase B M3) =============
       ficIntegration: router2({
         getStatus: protectedProcedure.query(async () => {
-          return await getFicStatus();
+          const t2 = Date.now();
+          const r = await getFicStatus();
+          const ms = Date.now() - t2;
+          if (ms > 500) console.log(`[ficIntegration.getStatus] ${ms}ms`);
+          return r;
         }),
         startOAuth: adminProcedure.input(external_exports.object({ forceLogin: external_exports.boolean().optional() }).optional()).query(async ({ input }) => {
           try {
@@ -81874,8 +81911,12 @@ var init_routers = __esm({
       // ============= FIC CLIENTS CACHE (Phase B M3) =============
       ficClients: router2({
         list: protectedProcedure.query(async () => {
+          const t2 = Date.now();
           try {
-            return await getFicClients(false);
+            const r = await getFicClients(false);
+            const ms = Date.now() - t2;
+            if (ms > 500) console.log(`[ficClients.list] ${ms}ms count=${r.clients.length}`);
+            return r;
           } catch (e) {
             throw new TRPCError({
               code: "PRECONDITION_FAILED",
