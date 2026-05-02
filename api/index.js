@@ -38878,7 +38878,9 @@ async function upsertSystemIntegration(data) {
 async function deleteSystemIntegration(type) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.delete(systemIntegrations).where(eq(systemIntegrations.type, type));
+  const deleted = await db.delete(systemIntegrations).where(eq(systemIntegrations.type, type)).returning({ id: systemIntegrations.id });
+  console.log(`[systemIntegrations] DELETE type=${type} affected=${deleted.length}`);
+  return deleted.length;
 }
 async function enqueueProforma(input) {
   const db = await getDb();
@@ -44758,7 +44760,9 @@ async function completeFicOAuth(code) {
   return { companyId: company.id, companyName: company.name };
 }
 async function disconnectFic() {
-  await deleteSystemIntegration(FIC_INTEGRATION_TYPE);
+  const deleted = await deleteSystemIntegration(FIC_INTEGRATION_TYPE);
+  console.log(`[fic] disconnectFic \u2014 righe rimosse da systemIntegrations: ${deleted}`);
+  return { deleted };
 }
 async function getValidFicAccessToken() {
   const integration = await getSystemIntegration(FIC_INTEGRATION_TYPE);
@@ -81861,8 +81865,8 @@ var init_routers = __esm({
           }
         }),
         disconnect: adminProcedure.mutation(async () => {
-          await disconnectFic();
-          return { success: true };
+          const result = await disconnectFic();
+          return { success: true, deleted: result.deleted };
         })
       }),
       // ============= FIC CLIENTS CACHE (Phase B M3) =============

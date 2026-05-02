@@ -45,11 +45,20 @@ export default function Integrations() {
   const [oauthLoading, setOauthLoading] = useState<"normal" | "force" | null>(null);
 
   const disconnectMut = trpc.ficIntegration.disconnect.useMutation({
-    onSuccess: () => {
+    onSuccess: (res) => {
       utils.ficIntegration.getStatus.invalidate();
       utils.ficClients.list.invalidate();
       setDisconnectOpen(false);
-      toast.success("Fatture in Cloud disconnesso");
+      // M3.0.4: marca timestamp post-disconnect così il prossimo "Connetti"
+      // forza prompt=login automaticamente (evita che FiC riusi cookie
+      // sessione e auto-selezioni la stessa azienda). TTL 24h: dopo, il
+      // flag scade e il connect torna fluido. Cleared dopo connect success.
+      try {
+        localStorage.setItem("fic_just_disconnected_at", String(Date.now()));
+      } catch {}
+      toast.success(
+        `Fatture in Cloud disconnesso (${res.deleted} riga rimossa dal DB)`,
+      );
     },
     onError: (e) => toast.error(e.message),
   });
@@ -68,12 +77,31 @@ export default function Integrations() {
       if (e.data?.type === "fic_sso_success") {
         utils.ficIntegration.getStatus.invalidate();
         utils.ficClients.list.invalidate();
+        // M3.0.4: pulisci flag post-disconnect dopo connect riuscito
+        try {
+          localStorage.removeItem("fic_just_disconnected_at");
+        } catch {}
         toast.success("Fatture in Cloud connesso");
       }
     }
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
   }, [utils]);
+
+  // M3.0.4: se l'utente ha disconnesso negli ultimi 24h, il prossimo
+  // "Connetti" forza prompt=login per evitare auto-rilascio della stessa
+  // azienda da parte di FiC via cookie sessione browser.
+  function shouldAutoForceLogin(): boolean {
+    try {
+      const ts = localStorage.getItem("fic_just_disconnected_at");
+      if (!ts) return false;
+      const age = Date.now() - parseInt(ts, 10);
+      if (age < 0 || age > 24 * 60 * 60 * 1000) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   if (me && me.role !== "admin") {
     return (
@@ -85,7 +113,11 @@ export default function Integrations() {
     );
   }
 
-  async function handleConnect(forceLogin = false) {
+  async function handleConnect(explicitForceLogin?: boolean) {
+    // explicitForceLogin precedence: bottoni espliciti scelgono.
+    // Default (undefined): auto-derivato dal flag post-disconnect.
+    const forceLogin =
+      explicitForceLogin !== undefined ? explicitForceLogin : shouldAutoForceLogin();
     setOauthLoading(forceLogin ? "force" : "normal");
     try {
       const r = await utils.ficIntegration.startOAuth.fetch({ forceLogin });

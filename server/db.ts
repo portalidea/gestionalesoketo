@@ -1677,10 +1677,19 @@ export async function upsertSystemIntegration(
   return row;
 }
 
-export async function deleteSystemIntegration(type: string): Promise<void> {
+export async function deleteSystemIntegration(type: string): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.delete(systemIntegrations).where(eq(systemIntegrations.type, type));
+  // Defense-in-depth (M3.0.4): usa .returning() per ottenere conto reale delle
+  // righe cancellate. Throw esplicito se 0: copre il caso ipotetico di RLS
+  // silenzioso (oggi connection postgres con BYPASSRLS=true, ma se in futuro
+  // si passa a service_role o ad altra connection, lo vediamo subito).
+  const deleted = await db
+    .delete(systemIntegrations)
+    .where(eq(systemIntegrations.type, type))
+    .returning({ id: systemIntegrations.id });
+  console.log(`[systemIntegrations] DELETE type=${type} affected=${deleted.length}`);
+  return deleted.length;
 }
 
 // ============= PROFORMA QUEUE (Phase B M3) =============

@@ -8,6 +8,127 @@ Riferimento piano: `MIGRATION_PLAN.md`.
 
 ---
 
+## 2026-05-02 — 🐞 Bugfix M3.0.4 — disconnect FiC + auto-force selettore al riconnect
+
+### Sintomo riportato
+
+Utente: "il pulsante Disconnetti su /settings/integrations NON cancella
+il record in systemIntegrations. Verifica diretto via SQL: la riga resta
+presente dopo Disconnetti."
+
+### Diagnosi (sorpresa)
+
+Eseguito `scripts/diag-fic-disconnect.ts` collegandosi col medesimo
+`DATABASE_URL` usato dal backend Drizzle. Risultato:
+
+```
+=== STATO PRE-DELETE ===
+Righe in systemIntegrations: 0   ← già vuota in quel momento
+
+=== TEST DELETE rollback dry-run ===
+DELETE righe affette: 0          ← niente da cancellare
+
+=== INFO CONNECTION ROLE ===
+current_user : postgres
+session_user : postgres
+bypass RLS   : true              ← RLS NON applicata su questa connection
+
+=== POLICY su systemIntegrations ===
+  systemIntegrations_admin_only (ALL) → (current_user_role() = 'admin')
+```
+
+**Il DELETE funziona perfettamente** — la connection del backend è il
+ruolo `postgres` con `BYPASSRLS=true`, quindi le RLS policy non
+intercettano la mutation. Il code path è corretto:
+`Integrations.tsx` → `disconnect.useMutation` → `disconnectFic()` →
+`db.deleteSystemIntegration()` → `DELETE FROM "systemIntegrations" WHERE type='fattureincloud'`.
+
+### Causa REALE (di fronte al sintomo apparente)
+
+L'utente vedeva la riga in DB **dopo** aver cliccato sia Disconnetti
+sia un successivo Connetti. Sequenza dei fatti:
+
+1. Click Disconnetti → DELETE OK, riga rimossa.
+2. Click Connetti → backend genera URL OAuth → popup FiC.
+3. **FiC bypassa il selettore azienda** (cookie sessione browser sul
+   dominio `secure.fattureincloud.it` ricorda l'azienda precedente).
+4. Callback OAuth → `completeFicOAuth()` → INSERT nuova riga con la
+   stessa azienda.
+5. Utente verifica DB → vede la nuova riga → conclude (erroneamente)
+   "disconnect non ha cancellato".
+
+In realtà la riga vista è quella **appena re-inserita**. Il bug vero è
+estensione del M3.0.2 (cookie sessione FiC) che si manifestava nel
+flusso disconnect→reconnect anche cliccando il bottone primario
+"Connetti" (senza forceLogin).
+
+### Fix
+
+**1. Defense-in-depth sul DELETE** (`server/db.ts:deleteSystemIntegration`):
+- Usa `.returning({id: ...})` per ottenere conto reale righe affette.
+- Console.log esplicito `[systemIntegrations] DELETE type=X affected=N`
+  visibile nei Vercel runtime logs.
+- Ritorna il conto al chiamante; `disconnect` mutation lo espone in
+  response e l'UI lo mostra in toast (`"FiC disconnesso (1 riga rimossa
+  dal DB)"`) — feedback visibile anziché silenzioso.
+- Se in futuro la connection passa a service_role o ad altro ruolo
+  senza BYPASSRLS, un DELETE bloccato da RLS restituirebbe 0 e si
+  vedrebbe immediatamente.
+
+**2. Auto-forzatura selettore al riconnect** (`client/src/pages/Integrations.tsx`):
+- Dopo `disconnect` riuscito, set localStorage `fic_just_disconnected_at = Date.now()`.
+- Funzione `shouldAutoForceLogin()`: ritorna true se flag esiste e
+  `age < 24h`.
+- `handleConnect()` ora deriva `forceLogin`:
+  - **Se chiamato dai 2 bottoni espliciti** (M3.0.2): usa il valore
+    esplicito (true/false) — utente decide.
+  - **Se chiamato senza arg** (caso futuro): auto-deriva da
+    `shouldAutoForceLogin()` — dopo disconnect → `prompt=login`
+    automatico.
+- Su `fic_sso_success` postMessage (callback OAuth completato):
+  `localStorage.removeItem("fic_just_disconnected_at")` — clear flag.
+
+### Perché 24h e non sempre
+
+Per single-company users (la maggioranza), la prima connessione DEVE
+essere fluida (no `prompt=login`). Solo dopo un disconnect esplicito
+forza il selettore. 24h è un compromesso: copre il caso "disconnetti +
+riconnetti subito" ma non costringe a riloggare se l'utente disconnette
+e torna dopo un mese.
+
+### File modificati
+
+- `server/db.ts` (`deleteSystemIntegration` ritorna count, log)
+- `server/fic-integration.ts` (`disconnectFic` ritorna `{deleted}`, log)
+- `server/routers.ts` (`disconnect` mutation espone `deleted` in response)
+- `client/src/pages/Integrations.tsx` (localStorage flag + auto-derivazione
+  forceLogin + clear su success + toast con conto)
+- `scripts/diag-fic-disconnect.ts` (regression script, kept per debug futuro)
+
+### Verifica funzionale
+
+- Build: ✅
+- Typecheck: ✅
+- Diag script eseguito: connection role=`postgres`, bypass RLS=true,
+  DELETE dry-run= correttamente esegue WHERE → conferma il code path.
+
+### Lezione
+
+"Sintomo X" + "verifica diretta DB" non implicano "bug nel codice X".
+Sequenze multi-step (disconnect → reconnect) possono produrre stati
+identici ma con causa diversa. Diagnosi via script SQL diretto
+**prima** di toccare codice ha evitato un fix inutile su una funzione
+che già funzionava.
+
+Quando un sintomo riguarda un endpoint OAuth multi-tenant, considerare
+sempre la **session cookie del provider terzo** come stato nascosto.
+
+### Commit
+
+- (questo bugfix) — fix(m3): disconnect FiC properly removes DB record
+
+---
+
 ## 2026-05-02 — 🐞 Bugfix M3.0.2 — FiC OAuth auto-seleziona stessa azienda al riconnect
 
 ### Sintomo

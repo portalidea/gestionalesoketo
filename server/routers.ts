@@ -865,8 +865,8 @@ export const appRouter = router({
       }),
 
     disconnect: adminProcedure.mutation(async () => {
-      await disconnectFic();
-      return { success: true };
+      const result = await disconnectFic();
+      return { success: true, deleted: result.deleted };
     }),
   }),
 

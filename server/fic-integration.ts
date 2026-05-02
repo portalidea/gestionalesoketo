@@ -181,8 +181,10 @@ export async function completeFicOAuth(code: string): Promise<{
   return { companyId: company.id, companyName: company.name };
 }
 
-export async function disconnectFic(): Promise<void> {
-  await db.deleteSystemIntegration(FIC_INTEGRATION_TYPE);
+export async function disconnectFic(): Promise<{ deleted: number }> {
+  const deleted = await db.deleteSystemIntegration(FIC_INTEGRATION_TYPE);
+  console.log(`[fic] disconnectFic — righe rimosse da systemIntegrations: ${deleted}`);
+  return { deleted };
 }
 
 /**
