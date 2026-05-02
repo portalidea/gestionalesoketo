@@ -260,7 +260,18 @@ async function listFicCompanies(accessToken: string): Promise<FicCompanyInfo[]> 
 
 /**
  * Recupera lista clienti dalla cache locale (systemIntegrations.metadata).
- * Se cache vuota o se forceRefresh, fetch da FiC.
+ *
+ * M3.0.7 BUGFIX: la versione precedente cadeva in `refreshFicClients()` se
+ * la cache era vuota, paginando fino a 50 pagine FiC API in modo SINCRONO
+ * davanti a query frontend hot (es. /retailers/:id). Per N centinaia di
+ * clienti FiC, l'utente vedeva la pagina caricare per minuti.
+ *
+ * Comportamento M3.0.7+: se cache vuota e `!forceRefresh`, ritorna
+ * `{ clients: [], refreshedAt: null }` immediatamente. Il refresh diventa
+ * **strettamente esplicito** — solo dal pulsante "Aggiorna lista clienti
+ * FiC" su /settings/integrations o dal bottone inline "Aggiorna ora" nei
+ * dropdown FiC client. Così le query frontend sono O(1) DB read e gli
+ * empty state UI guidano l'utente al primo refresh manuale.
  */
 export async function getFicClients(forceRefresh = false): Promise<{
   clients: FicClientInfo[];
@@ -269,13 +280,13 @@ export async function getFicClients(forceRefresh = false): Promise<{
   const integration = await db.getSystemIntegration(FIC_INTEGRATION_TYPE);
   if (!integration) throw new Error("Integrazione FiC non connessa");
   const meta = (integration.metadata ?? {}) as FicIntegrationMetadata;
-  if (!forceRefresh && meta.clientsCache && meta.clientsCache.length > 0) {
-    return {
-      clients: meta.clientsCache,
-      refreshedAt: meta.clientsCacheRefreshedAt ?? null,
-    };
+  if (forceRefresh) {
+    return await refreshFicClients();
   }
-  return await refreshFicClients();
+  return {
+    clients: meta.clientsCache ?? [],
+    refreshedAt: meta.clientsCacheRefreshedAt ?? null,
+  };
 }
 
 export async function refreshFicClients(): Promise<{

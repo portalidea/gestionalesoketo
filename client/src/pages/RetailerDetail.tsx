@@ -122,6 +122,13 @@ export default function RetailerDetail() {
     enabled: !!ficStatus?.connected,
     retry: false,
   });
+  const ficRefreshMut = trpc.ficClients.refresh.useMutation({
+    onSuccess: (data) => {
+      utils.ficClients.list.invalidate();
+      toast.success(`Aggiornati ${data.clients.length} clienti FiC`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const assignPackageMut = trpc.retailers.assignPackage.useMutation({
     onSuccess: () => {
       utils.retailers.getDetails.invalidate();
@@ -600,6 +607,7 @@ export default function RetailerDetail() {
                           ficClientId: v === "__none__" ? null : parseInt(v, 10),
                         })
                       }
+                      disabled={(ficClientsData?.clients.length ?? 0) === 0}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Seleziona cliente FiC" />
@@ -614,11 +622,32 @@ export default function RetailerDetail() {
                         ))}
                       </SelectContent>
                     </Select>
-                    {!retailer.ficClientId && (
+                    {(ficClientsData?.clients.length ?? 0) === 0 ? (
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">
+                          Cache clienti FiC vuota. Scarica la lista per popolare il
+                          dropdown.
+                        </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => ficRefreshMut.mutate()}
+                          disabled={ficRefreshMut.isPending}
+                        >
+                          {ficRefreshMut.isPending ? (
+                            <Loader2 className="h-3 w-3 mr-2 animate-spin" />
+                          ) : (
+                            <RefreshCw className="h-3 w-3 mr-2" />
+                          )}
+                          Aggiorna ora
+                        </Button>
+                      </div>
+                    ) : !retailer.ficClientId ? (
                       <p className="text-xs text-yellow-500">
                         Senza mapping cliente FiC non è possibile generare proforma.
                       </p>
-                    )}
+                    ) : null}
                   </>
                 )}
               </div>

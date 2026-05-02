@@ -47,6 +47,7 @@ import {
   Loader2,
   Plug,
   Plus,
+  RefreshCw,
   Store,
   X,
 } from "lucide-react";
@@ -100,6 +101,13 @@ export default function Retailers() {
     retry: false,
   });
   const ficClients = (ficClientsData?.clients ?? []) as FicClient[];
+  const ficRefreshMut = trpc.ficClients.refresh.useMutation({
+    onSuccess: (data) => {
+      utils.ficClients.list.invalidate();
+      toast.success(`Aggiornati ${data.clients.length} clienti FiC`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const selectedFicClient =
     selectedFicClientId !== null
       ? ficClients.find((c) => c.id === selectedFicClientId)
@@ -218,17 +226,26 @@ export default function Retailers() {
                           per importare clienti.
                         </p>
                       ) : ficClients.length === 0 ? (
-                        <p className="text-xs text-muted-foreground">
-                          Nessun cliente in cache.{" "}
-                          <button
+                        <div className="space-y-2">
+                          <p className="text-xs text-muted-foreground">
+                            Nessun cliente in cache. Scarica la lista da Fatture in
+                            Cloud (può richiedere qualche secondo per la prima volta).
+                          </p>
+                          <Button
                             type="button"
-                            className="underline hover:text-foreground"
-                            onClick={() => setLocation("/settings/integrations")}
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => ficRefreshMut.mutate()}
+                            disabled={ficRefreshMut.isPending}
                           >
-                            Vai a Integrazioni
-                          </button>{" "}
-                          e clicca "Aggiorna lista clienti FiC".
-                        </p>
+                            {ficRefreshMut.isPending ? (
+                              <Loader2 className="h-3 w-3 mr-2 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-3 w-3 mr-2" />
+                            )}
+                            Aggiorna ora
+                          </Button>
+                        </div>
                       ) : selectedFicClient ? (
                         <div className="flex items-center justify-between rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2">
                           <div className="text-sm">

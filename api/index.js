@@ -44809,13 +44809,13 @@ async function getFicClients(forceRefresh = false) {
   const integration = await getSystemIntegration(FIC_INTEGRATION_TYPE);
   if (!integration) throw new Error("Integrazione FiC non connessa");
   const meta = integration.metadata ?? {};
-  if (!forceRefresh && meta.clientsCache && meta.clientsCache.length > 0) {
-    return {
-      clients: meta.clientsCache,
-      refreshedAt: meta.clientsCacheRefreshedAt ?? null
-    };
+  if (forceRefresh) {
+    return await refreshFicClients();
   }
-  return await refreshFicClients();
+  return {
+    clients: meta.clientsCache ?? [],
+    refreshedAt: meta.clientsCacheRefreshedAt ?? null
+  };
 }
 async function refreshFicClients() {
   const { accessToken, companyId } = await getValidFicAccessToken();
