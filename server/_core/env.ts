@@ -28,6 +28,8 @@ export const ENV = {
     // di Vercel può essere mantenuta per safety di rollback.
   },
   ownerEmail: optional("OWNER_EMAIL"),
+  anthropicApiKey: optional("ANTHROPIC_API_KEY"),
+  resendApiKey: optional("RESEND_API_KEY"),
   isProduction: process.env.NODE_ENV === "production",
   fattureInCloud: {
     clientId: optional("FATTUREINCLOUD_CLIENT_ID"),
