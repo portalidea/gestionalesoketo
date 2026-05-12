@@ -20,6 +20,8 @@ import RetailerDetail from "./pages/RetailerDetail";
 import Retailers from "./pages/Retailers";
 import Team from "./pages/Team";
 import Warehouse from "./pages/Warehouse";
+import DdtImports from "./pages/DdtImports";
+import DdtImportDetail from "./pages/DdtImportDetail";
 
 function Router() {
   return (
@@ -33,6 +35,8 @@ function Router() {
       <Route path="/products/:id" component={ProductDetail} />
       <Route path="/warehouse" component={Warehouse} />
       <Route path="/movements" component={Movements} />
+      <Route path="/ddt-imports" component={DdtImports} />
+      <Route path="/ddt-imports/:id" component={DdtImportDetail} />
       <Route path="/retailers" component={Retailers} />
       <Route path="/retailers/:id" component={RetailerDetail} />
       <Route path="/alerts" component={Alerts} />
