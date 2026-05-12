@@ -18,6 +18,7 @@ import {
   getFicStatus,
   refreshFicClients,
 } from "./fic-integration";
+import { ddtImportsRouter } from "./ddt-imports-router";
 
 const uuid = z.string().uuid();
 const userRoleSchema = z.enum(["admin", "operator", "viewer"]);
@@ -1072,6 +1073,9 @@ export const appRouter = router({
         return await db.getSyncLogsByRetailer(input.retailerId, input.limit || 20);
       }),
   }),
+
+  // ============= DDT IMPORTS (Phase B M5) =============
+  ddtImports: ddtImportsRouter,
 });
 
 export type AppRouter = typeof appRouter;

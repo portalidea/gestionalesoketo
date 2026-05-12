@@ -49,6 +49,22 @@ export const proformaQueueStatusEnum = pgEnum("proforma_queue_status", [
   "failed",
 ]);
 
+// M5 — DDT Auto-Import enums
+export const ddtImportStatusEnum = pgEnum("ddt_import_status", [
+  "uploaded",
+  "extracting",
+  "review",
+  "confirmed",
+  "failed",
+]);
+export const ddtItemStatusEnum = pgEnum("ddt_item_status", [
+  "pending",
+  "matched",
+  "unmatched",
+  "confirmed",
+  "merged",
+]);
+
 /**
  * Profilo applicativo dell'operatore SoKeto.
  * `id` è 1:1 con `auth.users.id` di Supabase Auth: la riga viene creata da un trigger
@@ -431,3 +447,68 @@ export const proformaQueue = pgTable(
 
 export type ProformaQueue = typeof proformaQueue.$inferSelect;
 export type InsertProformaQueue = typeof proformaQueue.$inferInsert;
+
+/**
+ * DDT Imports — M5: upload PDF DDT da produttore, estrazione AI Claude Vision,
+ * review manuale, conferma → creazione lotti + inventario + movement.
+ */
+export const ddtImports = pgTable(
+  "ddt_imports",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    producerId: uuid("producerId").references(() => producers.id, {
+      onDelete: "set null",
+    }),
+    ddtNumber: varchar("ddtNumber", { length: 100 }),
+    ddtDate: date("ddtDate"),
+    status: ddtImportStatusEnum("status").default("uploaded").notNull(),
+    pdfStoragePath: text("pdfStoragePath").notNull(),
+    pdfFileName: text("pdfFileName").notNull(),
+    pdfFileSize: integer("pdfFileSize").notNull(),
+    extractedData: jsonb("extractedData"),
+    confirmedAt: timestamp("confirmedAt", { withTimezone: true }),
+    confirmedBy: uuid("confirmedBy").references(() => users.id),
+    errorMessage: text("errorMessage"),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("idx_ddt_imports_status").on(t.status),
+    index("idx_ddt_imports_producerId").on(t.producerId),
+    index("idx_ddt_imports_createdAt").on(t.createdAt),
+  ],
+);
+
+export type DdtImport = typeof ddtImports.$inferSelect;
+export type InsertDdtImport = typeof ddtImports.$inferInsert;
+
+export const ddtImportItems = pgTable(
+  "ddt_import_items",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    ddtImportId: uuid("ddtImportId")
+      .notNull()
+      .references(() => ddtImports.id, { onDelete: "cascade" }),
+    productMatchedId: uuid("productMatchedId").references(() => products.id),
+    productNameExtracted: text("productNameExtracted").notNull(),
+    productCodeExtracted: text("productCodeExtracted"),
+    batchNumber: varchar("batchNumber", { length: 100 }).notNull(),
+    expirationDate: date("expirationDate").notNull(),
+    quantityPieces: integer("quantityPieces").notNull(),
+    unitOfMeasure: varchar("unitOfMeasure", { length: 10 }).default("PZ").notNull(),
+    createdBatchId: uuid("createdBatchId").references(() => productBatches.id),
+    mergedIntoBatchId: uuid("mergedIntoBatchId").references(() => productBatches.id),
+    status: ddtItemStatusEnum("status").default("pending").notNull(),
+    notes: text("notes"),
+  },
+  (t) => [
+    index("idx_ddt_import_items_ddtImportId").on(t.ddtImportId),
+    index("idx_ddt_import_items_productMatchedId")
+      .on(t.productMatchedId)
+      .where(sql`${t.productMatchedId} IS NOT NULL`),
+    check("ddt_import_items_qty_positive", sql`${t.quantityPieces} > 0`),
+  ],
+);
+
+export type DdtImportItem = typeof ddtImportItems.$inferSelect;
+export type InsertDdtImportItem = typeof ddtImportItems.$inferInsert;
