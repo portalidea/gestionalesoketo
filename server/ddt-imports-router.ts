@@ -557,6 +557,25 @@ export const ddtImportsRouter = router({
         })
         .where(eq(ddtImports.id, input.id));
 
+      // Invio email notifica conferma DDT
+      try {
+        const { sendEmail } = await import("./email");
+        await sendEmail({
+          to: ctx.user.email ?? "",
+          subject: `DDT ${importRow.ddtNumber ?? importRow.pdfFileName} confermato`,
+          html: `<h2>DDT Confermato</h2>
+            <p><strong>File:</strong> ${importRow.pdfFileName}</p>
+            <p><strong>Numero DDT:</strong> ${importRow.ddtNumber ?? "N/A"}</p>
+            <p><strong>Righe processate:</strong> ${items.length}</p>
+            <p><strong>Lotti creati:</strong> ${batchesCreated}</p>
+            <p><strong>Lotti aggiornati (merge):</strong> ${batchesMerged}</p>
+            <p>I prodotti sono stati caricati nel magazzino centrale.</p>`,
+        });
+      } catch (emailErr) {
+        // Non bloccare la conferma se l'email fallisce
+        console.warn("[DDT] Email notifica fallita:", emailErr);
+      }
+
       return {
         success: true,
         itemsProcessed: items.length,

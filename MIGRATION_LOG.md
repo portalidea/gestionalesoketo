@@ -3099,3 +3099,66 @@ prossima sessione.
 2. Nome progetto Vercel + dominio.
 3. Metodi di login Supabase da abilitare.
 4. Email admin owner (sostituisce `OWNER_OPEN_ID`).
+
+---
+
+## 2026-05-12 — ✨ M5 — DDT Imports con Claude Vision AI
+
+### M5.0 — Prerequisiti setup
+- ✅ Installate dipendenze: `@anthropic-ai/sdk`, `resend`
+- ✅ Creato `server/email.ts` — helper Resend (dominio `sm.soketo.it`)
+- ✅ Creato `lib/storage.ts` — helper Supabase Storage (bucket `ddt-imports`)
+- ✅ Creato `lib/fuzzyMatch.ts` — Jaro-Winkler per match prodotti
+- ✅ Aggiunto `ANTHROPIC_API_KEY` e `RESEND_API_KEY` a `server/_core/env.ts`
+
+### M5.1 — Schema + Backend
+- ✅ Creata migration `0007_phase_b_m5_ddt_imports.sql` (tabelle `ddt_imports`, `ddt_import_items`)
+- ✅ Aggiornato `drizzle/schema.ts` con enum `ddt_import_status`, `ddt_item_status` e tabelle
+- ✅ Creato `server/ddt-vision.ts` — modulo Claude Vision per estrazione dati da PDF DDT
+- ✅ Creato `server/ddt-imports-router.ts` — router tRPC con 9 procedure
+- ✅ Registrato `ddtImportsRouter` in `server/routers.ts`
+
+### M5.2 — Frontend UI
+- ✅ Creata `/ddt-imports` — lista DDT con upload dialog
+- ✅ Creata `/ddt-imports/:id` — review singolo DDT con match prodotti
+- ✅ Aggiunta voce "DDT Import" nella sidebar DashboardLayout
+- ✅ Rotte registrate in App.tsx
+
+### M5.3 — Edge cases + polish
+- ✅ Dialog creazione prodotto inline per righe non matchate (bottone "Crea" nella riga)
+- ✅ Logica merge lotti duplicati (stessa coppia productId + batchNumber → incrementa quantità)
+- ✅ Email notifica conferma DDT via Resend
+- ✅ Componente `DdtUploadButton` riutilizzabile per punti di ingresso /producers e /warehouse
+- ✅ Error handling completo (timeout Claude, file troppo grande, DB non disponibile)
+
+### Note operative
+- **Bucket Supabase `ddt-imports`** va creato manualmente (private, RLS admin/operator)
+- **Env vars da configurare in Vercel:** `ANTHROPIC_API_KEY`, `RESEND_API_KEY`
+- **Timeout Vercel Hobby:** la procedura `upload` può richiedere 5-15s per Claude Vision.
+  Su Hobby plan (10s limit) potrebbe fallire per DDT multi-pagina.
+  Soluzione: upgrade a Pro o architettura async con polling.
+
+### File aggiunti/modificati
+- `server/email.ts` (NEW)
+- `lib/storage.ts` (NEW)
+- `lib/fuzzyMatch.ts` (NEW)
+- `drizzle/0007_phase_b_m5_ddt_imports.sql` (NEW)
+- `drizzle/schema.ts` (enum + tabelle DDT)
+- `server/ddt-vision.ts` (NEW)
+- `server/ddt-imports-router.ts` (NEW)
+- `server/routers.ts` (import + registrazione)
+- `client/src/pages/DdtImports.tsx` (NEW)
+- `client/src/pages/DdtImportDetail.tsx` (NEW)
+- `client/src/components/DdtUploadButton.tsx` (NEW)
+- `client/src/components/DashboardLayout.tsx` (voce sidebar)
+- `client/src/App.tsx` (rotte)
+- `server/_core/env.ts` (ANTHROPIC_API_KEY, RESEND_API_KEY)
+- `package.json` (deps)
+
+### Commit logici
+1. `feat(setup): M5.0 — Resend + Storage + fuzzyMatch + env vars`
+2. `feat(backend): M5.1 — DDT imports schema + router + Claude Vision`
+3. `feat(ui): M5.2 — DDT upload + review pages`
+4. `feat(ux): M5.3 — edge cases (unmatched product create, merge, email notify)`
+
+**Prossimo step:** M6 — Portale Retailer

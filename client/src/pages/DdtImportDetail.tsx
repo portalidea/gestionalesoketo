@@ -38,6 +38,7 @@ import {
   FileText,
   Link2,
   Loader2,
+  Plus,
   RotateCcw,
   Trash2,
   XCircle,
@@ -114,6 +115,35 @@ export default function DdtImportDetail() {
     },
     onError: (err) => {
       toast.error(`Errore: ${err.message}`);
+    },
+  });
+
+  // --- Dialog creazione prodotto inline ---
+  const [createProductOpen, setCreateProductOpen] = useState(false);
+  const [newProductName, setNewProductName] = useState("");
+  const [newProductPrice, setNewProductPrice] = useState("");
+  const [newProductIva, setNewProductIva] = useState("10");
+  const [createForItemId, setCreateForItemId] = useState<string | null>(null);
+
+  const createProductMutation = trpc.products.create.useMutation({
+    onSuccess: (newProduct) => {
+      toast.success(`Prodotto "${newProductName}" creato`);
+      // Auto-match l'item con il nuovo prodotto
+      if (createForItemId && newProduct?.id) {
+        updateItemMutation.mutate({
+          itemId: createForItemId,
+          productMatchedId: newProduct.id,
+        });
+      }
+      setCreateProductOpen(false);
+      setNewProductName("");
+      setNewProductPrice("");
+      setNewProductIva("10");
+      setCreateForItemId(null);
+      utils.products.list.invalidate();
+    },
+    onError: (err) => {
+      toast.error(`Errore creazione prodotto: ${err.message}`);
     },
   });
 
@@ -313,12 +343,87 @@ export default function DdtImportDetail() {
                     }
                     onRemove={() => removeItemMutation.mutate({ itemId: item.id })}
                     isReview={ddtImport.status === "review"}
+                    onCreateProduct={(itemId, extractedName) => {
+                      setCreateForItemId(itemId);
+                      setNewProductName(extractedName);
+                      setCreateProductOpen(true);
+                    }}
                   />
                 ))}
               </TableBody>
             </Table>
           </CardContent>
         </Card>
+
+        {/* Create product dialog */}
+        <Dialog open={createProductOpen} onOpenChange={setCreateProductOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Crea nuovo prodotto</DialogTitle>
+              <DialogDescription>
+                Il prodotto estratto dal DDT non corrisponde a nessun prodotto in anagrafica.
+                Creane uno nuovo per completare il match.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label>Nome prodotto</Label>
+                <Input
+                  value={newProductName}
+                  onChange={(e) => setNewProductName(e.target.value)}
+                  placeholder="es. Brioche Proteica al Cacao"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Prezzo unitario (€)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={newProductPrice}
+                    onChange={(e) => setNewProductPrice(e.target.value)}
+                    placeholder="0.00"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>IVA %</Label>
+                  <Select value={newProductIva} onValueChange={setNewProductIva}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="4">4%</SelectItem>
+                      <SelectItem value="10">10%</SelectItem>
+                      <SelectItem value="22">22%</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setCreateProductOpen(false)}>
+                Annulla
+              </Button>
+              <Button
+                onClick={() => {
+                  createProductMutation.mutate({
+                    name: newProductName,
+                    unitPrice: parseFloat(newProductPrice) || 0,
+                    vatRate: parseInt(newProductIva),
+                  } as any);
+                }}
+                disabled={!newProductName.trim() || createProductMutation.isPending}
+              >
+                {createProductMutation.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Plus className="mr-2 h-4 w-4" />
+                )}
+                Crea e associa
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Confirm dialog */}
         <Dialog open={confirmDialogOpen} onOpenChange={setConfirmDialogOpen}>
@@ -392,6 +497,7 @@ function DdtItemRow({
   onSave,
   onRemove,
   isReview,
+  onCreateProduct,
 }: {
   item: {
     id: string;
@@ -416,6 +522,7 @@ function DdtItemRow({
   }) => void;
   onRemove: () => void;
   isReview: boolean;
+  onCreateProduct?: (itemId: string, extractedName: string) => void;
 }) {
   const [editProductId, setEditProductId] = useState(item.productMatchedId ?? "");
   const [editBatch, setEditBatch] = useState(item.batchNumber);
@@ -528,7 +635,20 @@ function DdtItemRow({
         {item.productMatchedName ? (
           <span className="text-sm">{item.productMatchedName}</span>
         ) : (
-          <span className="text-sm text-destructive italic">Non assegnato</span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-destructive italic">Non assegnato</span>
+            {isReview && onCreateProduct && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 px-2 text-xs"
+                onClick={() => onCreateProduct(item.id, item.productNameExtracted)}
+              >
+                <Plus className="h-3 w-3 mr-1" />
+                Crea
+              </Button>
+            )}
+          </div>
         )}
       </TableCell>
       <TableCell className="font-mono text-sm">{item.batchNumber}</TableCell>
