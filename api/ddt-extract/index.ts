@@ -15,7 +15,9 @@
  * chiamata dal frontend dopo aver ricevuto la risposta.
  */
 
-export const runtime = "edge";
+export const config = {
+  runtime: "edge",
+};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
