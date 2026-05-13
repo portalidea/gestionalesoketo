@@ -171,7 +171,9 @@ export default function DdtImportDetail() {
   }
 
   const unmatchedCount = ddtImport.items.filter((i) => !i.productMatchedId).length;
-  const canConfirm = ddtImport.status === "review" && unmatchedCount === 0;
+  const missingBatchCount = ddtImport.items.filter((i) => !i.batchNumber).length;
+  const missingExpiryCount = ddtImport.items.filter((i) => !i.expirationDate).length;
+  const canConfirm = ddtImport.status === "review" && unmatchedCount === 0 && missingBatchCount === 0 && missingExpiryCount === 0;
 
   return (
     <DashboardLayout>
@@ -251,17 +253,32 @@ export default function DdtImportDetail() {
           </Card>
         )}
 
-        {unmatchedCount > 0 && ddtImport.status === "review" && (
+        {(unmatchedCount > 0 || missingBatchCount > 0 || missingExpiryCount > 0) && ddtImport.status === "review" && (
           <Card className="border-yellow-500/50">
             <CardContent className="pt-4">
               <div className="flex items-start gap-3">
                 <AlertCircle className="h-5 w-5 text-yellow-500 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-medium text-yellow-600">
-                    {unmatchedCount} {unmatchedCount === 1 ? "riga non matchata" : "righe non matchate"}
-                  </p>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Assegna manualmente il prodotto corretto prima di confermare.
+                <div className="space-y-1">
+                  {unmatchedCount > 0 && (
+                    <p className="font-medium text-yellow-600">
+                      {unmatchedCount} {unmatchedCount === 1 ? "riga non matchata" : "righe non matchate"}
+                      {" — "}assegna manualmente il prodotto corretto.
+                    </p>
+                  )}
+                  {missingBatchCount > 0 && (
+                    <p className="font-medium text-yellow-600">
+                      {missingBatchCount} {missingBatchCount === 1 ? "riga senza lotto" : "righe senza lotto"}
+                      {" — "}inserisci il numero di lotto manualmente.
+                    </p>
+                  )}
+                  {missingExpiryCount > 0 && (
+                    <p className="font-medium text-yellow-600">
+                      {missingExpiryCount} {missingExpiryCount === 1 ? "riga senza scadenza" : "righe senza scadenza"}
+                      {" — "}inserisci la data di scadenza manualmente.
+                    </p>
+                  )}
+                  <p className="text-sm text-muted-foreground">
+                    Compila tutti i campi mancanti prima di confermare il DDT.
                   </p>
                 </div>
               </div>
@@ -505,7 +522,7 @@ function DdtItemRow({
     productCodeExtracted: string | null;
     productMatchedId: string | null;
     productMatchedName: string | null;
-    batchNumber: string;
+    batchNumber: string | null;
     expirationDate: string | null;
     quantityPieces: number;
     status: string;
@@ -525,7 +542,7 @@ function DdtItemRow({
   onCreateProduct?: (itemId: string, extractedName: string) => void;
 }) {
   const [editProductId, setEditProductId] = useState(item.productMatchedId ?? "");
-  const [editBatch, setEditBatch] = useState(item.batchNumber);
+  const [editBatch, setEditBatch] = useState(item.batchNumber ?? "");
   const [editExpiry, setEditExpiry] = useState(item.expirationDate ?? "");
   const [editQty, setEditQty] = useState(item.quantityPieces);
 
@@ -651,8 +668,26 @@ function DdtItemRow({
           </div>
         )}
       </TableCell>
-      <TableCell className="font-mono text-sm">{item.batchNumber}</TableCell>
-      <TableCell className="text-sm">{item.expirationDate ?? "—"}</TableCell>
+      <TableCell className="font-mono text-sm">
+        {item.batchNumber ? (
+          item.batchNumber
+        ) : (
+          <span className="text-yellow-600 italic text-xs flex items-center gap-1">
+            <AlertCircle className="h-3 w-3" />
+            Mancante
+          </span>
+        )}
+      </TableCell>
+      <TableCell className="text-sm">
+        {item.expirationDate ? (
+          item.expirationDate
+        ) : (
+          <span className="text-yellow-600 italic text-xs flex items-center gap-1">
+            <AlertCircle className="h-3 w-3" />
+            Mancante
+          </span>
+        )}
+      </TableCell>
       <TableCell className="font-medium">{item.quantityPieces}</TableCell>
       <TableCell>{statusBadge()}</TableCell>
       <TableCell>

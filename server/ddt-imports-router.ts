@@ -319,8 +319,8 @@ export const ddtImportsRouter = router({
               productName: z.string(),
               quantityPieces: z.number().int(),
               quantityKg: z.number().nullable(),
-              batchNumber: z.string(),
-              expirationDate: z.string(),
+              batchNumber: z.string().nullable(),
+              expirationDate: z.string().nullable(),
             })
           ),
         }),
@@ -530,6 +530,19 @@ export const ddtImportsRouter = router({
         });
       }
 
+      // Verifica che tutti gli items abbiano batchNumber e expirationDate compilati
+      const missingBatch = items.filter((i) => !i.batchNumber);
+      const missingExpiry = items.filter((i) => !i.expirationDate);
+      if (missingBatch.length > 0 || missingExpiry.length > 0) {
+        const parts: string[] = [];
+        if (missingBatch.length > 0) parts.push(`${missingBatch.length} item(s) senza lotto`);
+        if (missingExpiry.length > 0) parts.push(`${missingExpiry.length} item(s) senza scadenza`);
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Compila tutti i lotti e scadenze prima di confermare: ${parts.join(", ")}.`,
+        });
+      }
+
       // Trova location magazzino centrale
       const [centralLocation] = await db
         .select()
@@ -550,6 +563,8 @@ export const ddtImportsRouter = router({
       // Processa ogni item
       for (const item of items) {
         const productId = item.productMatchedId!;
+        const batchNumber = item.batchNumber!;
+        const expirationDate = item.expirationDate!;
 
         // Cerca lotto esistente per (productId, batchNumber)
         const [existingBatch] = await db
@@ -558,7 +573,7 @@ export const ddtImportsRouter = router({
           .where(
             and(
               eq(productBatches.productId, productId),
-              eq(productBatches.batchNumber, item.batchNumber)
+              eq(productBatches.batchNumber, batchNumber)
             )
           )
           .limit(1);
@@ -597,8 +612,8 @@ export const ddtImportsRouter = router({
             .values({
               productId,
               producerId: input.producerId,
-              batchNumber: item.batchNumber,
-              expirationDate: item.expirationDate,
+              batchNumber,
+              expirationDate,
               initialQuantity: item.quantityPieces,
             })
             .returning({ id: productBatches.id });
