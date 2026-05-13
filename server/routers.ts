@@ -369,6 +369,104 @@ export const appRouter = router({
         await db.deleteProduct(input.id);
         return { success: true };
       }),
+
+    /**
+     * M5.5: Crea prodotto con codici fornitore e lotto iniziale opzionale.
+     * Transazione atomica: product + supplier codes + batch + inventory + movement.
+     */
+    createExtended: writerProcedure
+      .input(
+        z.object({
+          sku: z.string().min(1),
+          name: z.string().min(1),
+          description: z.string().optional(),
+          category: z.string().optional(),
+          supplierName: z.string().optional(),
+          unitPrice: z.string().optional(),
+          unit: z.string().optional(),
+          minStockThreshold: z.number().optional(),
+          expiryWarningDays: z.number().optional(),
+          vatRate: vatRateSchema.optional(),
+          imageUrl: z.string().optional(),
+          supplierCodes: z
+            .array(
+              z.object({
+                producerId: uuid,
+                supplierCode: z.string().min(1),
+              }),
+            )
+            .optional()
+            .default([]),
+          initialBatch: z
+            .object({
+              producerId: uuid,
+              batchNumber: z.string().min(1),
+              expirationDate: dateString,
+              quantity: z.number().int().positive(),
+            })
+            .optional(),
+        }),
+      )
+      .mutation(async ({ input, ctx }) => {
+        const { supplierCodes, initialBatch, ...productFields } = input;
+
+        // Resolve central warehouse for initial batch
+        let warehouseId: string | undefined;
+        if (initialBatch) {
+          const warehouse = await db.getCentralWarehouseLocation();
+          if (!warehouse) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: "Magazzino centrale non configurato",
+            });
+          }
+          warehouseId = warehouse.id;
+        }
+
+        return await db.createProductExtended({
+          productData: {
+            ...productFields,
+            isLowCarb: 1,
+            isGlutenFree: 1,
+            isKeto: 1,
+            sugarContent: "0%",
+          },
+          supplierCodes,
+          initialBatch: initialBatch && warehouseId
+            ? {
+                ...initialBatch,
+                locationId: warehouseId,
+              }
+            : undefined,
+          createdBy: ctx.user.id,
+        });
+      }),
+
+    // M5.5: CRUD codici fornitore
+    getSupplierCodes: protectedProcedure
+      .input(z.object({ productId: uuid }))
+      .query(async ({ input }) => {
+        return await db.getSupplierCodesByProduct(input.productId);
+      }),
+
+    addSupplierCode: writerProcedure
+      .input(
+        z.object({
+          productId: uuid,
+          producerId: uuid,
+          supplierCode: z.string().min(1),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        return await db.addSupplierCode(input);
+      }),
+
+    removeSupplierCode: writerProcedure
+      .input(z.object({ id: uuid }))
+      .mutation(async ({ input }) => {
+        await db.removeSupplierCode(input.id);
+        return { success: true };
+      }),
   }),
 
   // ============= PRODUCERS (Phase B M1) =============

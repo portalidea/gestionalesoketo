@@ -20,6 +20,9 @@ import {
   locations,
   Location,
   inventoryByBatch,
+  // Phase B M5.5
+  productSupplierCodes,
+  InsertProductSupplierCode,
   // Phase B M3
   pricingPackages,
   PricingPackage,
@@ -353,6 +356,138 @@ export async function deleteProduct(id: string) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(products).where(eq(products.id, id));
+}
+
+/**
+ * M5.5: Crea prodotto con codici fornitore e lotto iniziale opzionale.
+ * Tutto in una sola transazione atomica.
+ */
+export async function createProductExtended(input: {
+  productData: InsertProduct;
+  supplierCodes: { producerId: string; supplierCode: string }[];
+  initialBatch?: {
+    batchNumber: string;
+    expirationDate: string;
+    quantity: number;
+    locationId: string;
+    producerId: string;
+  };
+  createdBy: string;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return await db.transaction(async (tx) => {
+    // 1. Create product
+    const [product] = await tx.insert(products).values(input.productData).returning();
+
+    // 2. Create supplier codes
+    if (input.supplierCodes.length > 0) {
+      await tx.insert(productSupplierCodes).values(
+        input.supplierCodes.map((sc) => ({
+          productId: product.id,
+          producerId: sc.producerId,
+          supplierCode: sc.supplierCode,
+        })),
+      );
+    }
+
+    // 3. Create initial batch + inventory + movement
+    if (input.initialBatch) {
+      const ib = input.initialBatch;
+      const [batch] = await tx
+        .insert(productBatches)
+        .values({
+          productId: product.id,
+          producerId: ib.producerId,
+          batchNumber: ib.batchNumber,
+          expirationDate: ib.expirationDate,
+          initialQuantity: ib.quantity,
+          notes: "Lotto iniziale aggiunto in creazione prodotto",
+        })
+        .returning();
+
+      await tx.insert(inventoryByBatch).values({
+        locationId: ib.locationId,
+        batchId: batch.id,
+        quantity: ib.quantity,
+      });
+
+      await tx.insert(stockMovements).values({
+        productId: product.id,
+        type: "RECEIPT_FROM_PRODUCER",
+        quantity: ib.quantity,
+        newQuantity: ib.quantity,
+        previousQuantity: 0,
+        batchId: batch.id,
+        toLocationId: ib.locationId,
+        createdBy: input.createdBy,
+        notesInternal: "Lotto iniziale aggiunto in creazione prodotto",
+      });
+    }
+
+    return product;
+  });
+}
+
+// ============= PRODUCT SUPPLIER CODES (M5.5) =============
+
+export async function getSupplierCodesByProduct(productId: string) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: productSupplierCodes.id,
+      productId: productSupplierCodes.productId,
+      producerId: productSupplierCodes.producerId,
+      producerName: producers.name,
+      supplierCode: productSupplierCodes.supplierCode,
+      createdAt: productSupplierCodes.createdAt,
+    })
+    .from(productSupplierCodes)
+    .leftJoin(producers, eq(productSupplierCodes.producerId, producers.id))
+    .where(eq(productSupplierCodes.productId, productId))
+    .orderBy(productSupplierCodes.createdAt);
+}
+
+export async function addSupplierCode(data: {
+  productId: string;
+  producerId: string;
+  supplierCode: string;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.insert(productSupplierCodes).values(data).returning();
+  return row;
+}
+
+export async function removeSupplierCode(id: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(productSupplierCodes).where(eq(productSupplierCodes.id, id));
+}
+
+/**
+ * M5.5: Cerca match per codice fornitore in product_supplier_codes.
+ * Usato dal DDT import per match prioritario prima del fuzzy match.
+ */
+export async function findProductBySupplierCode(
+  supplierCode: string,
+  producerId: string,
+): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db
+    .select({ productId: productSupplierCodes.productId })
+    .from(productSupplierCodes)
+    .where(
+      and(
+        eq(productSupplierCodes.supplierCode, supplierCode),
+        eq(productSupplierCodes.producerId, producerId),
+      ),
+    )
+    .limit(1);
+  return row?.productId ?? null;
 }
 
 // ============= PRODUCERS (Phase B M1) =============

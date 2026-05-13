@@ -9,6 +9,56 @@ Roadmap M6 (portale retailer self-service): `MIGRATION_PLAN_M6.md`.
 
 ---
 
+## Stato corrente — 2026-05-13
+
+- **M5.5 completato**: product_supplier_codes mapping, dialog Nuovo Prodotto
+  refactored (codici fornitore, primo lotto, combobox producer), DDT match
+  via codice fornitore prioritario, sezione codici fornitore su dettaglio
+  prodotto, UX improvements (Salva e crea nuovo, auto-redirect).
+- Migration 0009 da applicare manualmente.
+- M5.4 Edge Function fix completati (3 iterazioni: config syntax,
+  jose cross-realm CryptoKey, nullable batch/expiry).
+
+---
+
+## 2026-05-13 — M5.5 — Product Supplier Codes + UX Improvements
+
+### Schema
+- **Migration 0009**: tabella `product_supplier_codes` con vincoli
+  UNIQUE `(producerId, supplierCode)` e `(productId, producerId)`.
+  Indici su `productId` e `supplierCode`.
+- **Migration 0008**: `batchNumber` e `expirationDate` nullable in
+  `ddt_import_items` (fix BUG #5).
+
+### Backend
+- `products.createExtended`: crea prodotto + codici fornitore + lotto
+  iniziale in transazione atomica. Genera batch, inventoryByBatch,
+  stockMovement RECEIPT_FROM_PRODUCER.
+- `products.getSupplierCodes`, `addSupplierCode`, `removeSupplierCode`:
+  CRUD codici fornitore.
+- DDT match logic enhanced: code-based match prioritario (via
+  `product_supplier_codes`), fuzzy Jaro-Winkler come fallback.
+
+### Frontend
+- Dialog "+ Nuovo Prodotto" refactored:
+  - Combobox produttore (trpc.producers.list)
+  - Sezione codici fornitore collassabile con righe dinamiche
+  - Sezione "+ Aggiungi primo lotto" espandibile
+  - Bottone "Salva e crea nuovo" (mantiene producer + categoria)
+  - Auto-redirect a /products/:id dopo Save normale
+- Pagina /products/:id: nuova Card "Codici fornitore" con lista,
+  aggiungi e rimuovi.
+- DdtImportDetail: badge warning per batchNumber/expirationDate null,
+  conferma disabilitata se campi mancanti.
+
+### Fix precedenti (M5.4)
+- Edge Function `api/ddt-extract`: fix `export const config` syntax
+  (non-Next.js), rimozione `runtime` da vercel.json, sostituzione
+  jose con Supabase Auth API per verifica JWT (cross-realm CryptoKey
+  bug su Edge Runtime).
+
+---
+
 ## Stato corrente — 2026-05-02 fine sessione
 
 - **M3 funzionalmente al 100%** in prod su `gestionale.soketo.it`.
