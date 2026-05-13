@@ -6,9 +6,13 @@
   "functions": {
     "api/index.js": {
       "maxDuration": 60
+    },
+    "api/ddt-extract.ts": {
+      "maxDuration": 30
     }
   },
   "rewrites": [
+    { "source": "/api/ddt-extract", "destination": "/api/ddt-extract" },
     { "source": "/api/:path*", "destination": "/api" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]

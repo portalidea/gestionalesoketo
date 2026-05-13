@@ -1,7 +1,7 @@
 import DashboardLayout from "@/components/DashboardLayout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -11,7 +11,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -29,6 +28,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { trpc } from "@/lib/trpc";
+import { callDdtExtract } from "@/lib/ddt-extract";
 import { format } from "date-fns";
 import {
   AlertCircle,
@@ -37,7 +37,6 @@ import {
   FileText,
   Loader2,
   Plus,
-  RotateCcw,
   Upload,
   XCircle,
 } from "lucide-react";
@@ -89,8 +88,12 @@ export default function DdtImports() {
             </DialogTrigger>
             <UploadDialog
               producers={producersData ?? []}
-              onSuccess={() => {
+              onSuccess={(ddtImportId) => {
                 setUploadDialogOpen(false);
+                refetch();
+                setLocation(`/ddt-imports/${ddtImportId}`);
+              }}
+              onError={() => {
                 refetch();
               }}
             />
@@ -192,30 +195,42 @@ export default function DdtImports() {
   );
 }
 
-// ─── Upload Dialog ───────────────────────────────────────────────────────────
+// ─── Upload Dialog (M5.4 — Flusso in 2 step) ────────────────────────────────
+//
+// Step 1: Upload PDF → Serverless (salva su Storage, crea record)
+// Step 2: Estrazione AI → Edge Function /api/ddt-extract (30s timeout)
+// Step 3: Conferma estrazione → Serverless (salva dati + crea items)
+
+type UploadStep = "idle" | "uploading" | "extracting" | "saving" | "done" | "error";
+
+const STEP_LABELS: Record<UploadStep, string> = {
+  idle: "",
+  uploading: "Caricamento PDF...",
+  extracting: "Estrazione AI in corso (max 30s)...",
+  saving: "Salvataggio dati estratti...",
+  done: "Completato!",
+  error: "Errore",
+};
 
 function UploadDialog({
   producers,
   onSuccess,
+  onError,
 }: {
   producers: { id: string; name: string }[];
-  onSuccess: () => void;
+  onSuccess: (ddtImportId: string) => void;
+  onError: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [producerId, setProducerId] = useState<string>("");
-  const [uploading, setUploading] = useState(false);
+  const [step, setStep] = useState<UploadStep>("idle");
+  const [errorMessage, setErrorMessage] = useState<string>("");
 
-  const uploadMutation = trpc.ddtImports.upload.useMutation({
-    onSuccess: (data) => {
-      toast.success(`DDT caricato con successo. ${data.itemCount} righe estratte.`);
-      onSuccess();
-    },
-    onError: (err) => {
-      toast.error(`Errore: ${err.message}`);
-      setUploading(false);
-    },
-  });
+  const uploadMutation = trpc.ddtImports.upload.useMutation();
+  const markExtractingMutation = trpc.ddtImports.markExtracting.useMutation();
+  const confirmExtractionMutation = trpc.ddtImports.confirmExtraction.useMutation();
+  const markFailedMutation = trpc.ddtImports.markFailed.useMutation();
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0];
@@ -229,25 +244,90 @@ function UploadDialog({
         return;
       }
       setFile(selected);
+      setStep("idle");
+      setErrorMessage("");
     }
   };
 
   const handleUpload = useCallback(async () => {
     if (!file) return;
-    setUploading(true);
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = (reader.result as string).split(",")[1];
-      uploadMutation.mutate({
+    setStep("uploading");
+    setErrorMessage("");
+
+    try {
+      // ─── Step 1: Upload PDF su Storage (Serverless, veloce) ──────────
+      const reader = new FileReader();
+      const base64 = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => {
+          const result = (reader.result as string).split(",")[1];
+          resolve(result);
+        };
+        reader.onerror = () => reject(new Error("Errore lettura file"));
+        reader.readAsDataURL(file);
+      });
+
+      const uploadResult = await uploadMutation.mutateAsync({
         fileBase64: base64,
         fileName: file.name,
         fileSize: file.size,
         producerId: producerId || undefined,
       });
-    };
-    reader.readAsDataURL(file);
-  }, [file, producerId, uploadMutation]);
+
+      const { id: ddtImportId, storagePath } = uploadResult;
+
+      // ─── Step 2: Estrazione AI via Edge Function (max 30s) ───────────
+      setStep("extracting");
+
+      // Segna come 'extracting' in DB per aggiornare lo stato in UI
+      await markExtractingMutation.mutateAsync({ id: ddtImportId });
+
+      let extractedData;
+      try {
+        extractedData = await callDdtExtract(storagePath, ddtImportId);
+      } catch (extractErr) {
+        // Segna come 'failed' in DB
+        const errMsg = extractErr instanceof Error ? extractErr.message : String(extractErr);
+        await markFailedMutation.mutateAsync({
+          id: ddtImportId,
+          errorMessage: errMsg,
+        });
+        throw extractErr;
+      }
+
+      // ─── Step 3: Conferma estrazione (Serverless, salva in DB) ───────
+      setStep("saving");
+
+      const confirmResult = await confirmExtractionMutation.mutateAsync({
+        ddtImportId,
+        extractedData,
+      });
+
+      // ─── Successo ────────────────────────────────────────────────────
+      setStep("done");
+      toast.success(
+        `DDT caricato con successo. ${confirmResult.itemCount} righe estratte.`
+      );
+      onSuccess(ddtImportId);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setStep("error");
+      setErrorMessage(errMsg);
+      toast.error(`Errore: ${errMsg}`);
+      onError();
+    }
+  }, [
+    file,
+    producerId,
+    uploadMutation,
+    markExtractingMutation,
+    confirmExtractionMutation,
+    markFailedMutation,
+    onSuccess,
+    onError,
+  ]);
+
+  const isProcessing = step === "uploading" || step === "extracting" || step === "saving";
 
   return (
     <DialogContent className="sm:max-w-md">
@@ -265,7 +345,7 @@ function UploadDialog({
           <Label>File PDF</Label>
           <div
             className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => !isProcessing && fileInputRef.current?.click()}
           >
             {file ? (
               <div className="flex items-center justify-center gap-2">
@@ -291,13 +371,18 @@ function UploadDialog({
             accept="application/pdf"
             className="hidden"
             onChange={handleFileChange}
+            disabled={isProcessing}
           />
         </div>
 
         {/* Producer select */}
         <div className="space-y-2">
           <Label>Produttore (opzionale)</Label>
-          <Select value={producerId} onValueChange={setProducerId}>
+          <Select
+            value={producerId}
+            onValueChange={setProducerId}
+            disabled={isProcessing}
+          >
             <SelectTrigger>
               <SelectValue placeholder="Seleziona produttore" />
             </SelectTrigger>
@@ -310,18 +395,51 @@ function UploadDialog({
             </SelectContent>
           </Select>
         </div>
+
+        {/* Progress indicator */}
+        {isProcessing && (
+          <div className="rounded-lg bg-muted/50 p-4 space-y-3">
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              <div>
+                <p className="text-sm font-medium">{STEP_LABELS[step]}</p>
+                {step === "extracting" && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Claude Vision sta analizzando il PDF. Questo può richiedere fino a 30 secondi.
+                  </p>
+                )}
+              </div>
+            </div>
+            {/* Step indicators */}
+            <div className="flex gap-2">
+              <StepDot active={step === "uploading"} done={["extracting", "saving", "done"].includes(step)} label="Upload" />
+              <StepDot active={step === "extracting"} done={["saving", "done"].includes(step)} label="AI" />
+              <StepDot active={step === "saving"} done={["done"].includes(step)} label="Salva" />
+            </div>
+          </div>
+        )}
+
+        {/* Error message */}
+        {step === "error" && errorMessage && (
+          <div className="rounded-lg bg-destructive/10 border border-destructive/20 p-3">
+            <div className="flex items-start gap-2">
+              <XCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+              <p className="text-sm text-destructive">{errorMessage}</p>
+            </div>
+          </div>
+        )}
       </div>
 
       <DialogFooter>
         <Button
           onClick={handleUpload}
-          disabled={!file || uploading}
+          disabled={!file || isProcessing}
           className="w-full"
         >
-          {uploading ? (
+          {isProcessing ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Estrazione in corso...
+              {STEP_LABELS[step]}
             </>
           ) : (
             <>
@@ -332,5 +450,38 @@ function UploadDialog({
         </Button>
       </DialogFooter>
     </DialogContent>
+  );
+}
+
+// ─── Step Dot Component ──────────────────────────────────────────────────────
+
+function StepDot({
+  active,
+  done,
+  label,
+}: {
+  active: boolean;
+  done: boolean;
+  label: string;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <div
+        className={`h-2 w-2 rounded-full transition-colors ${
+          done
+            ? "bg-green-500"
+            : active
+              ? "bg-primary animate-pulse"
+              : "bg-muted-foreground/30"
+        }`}
+      />
+      <span
+        className={`text-xs ${
+          active ? "text-foreground font-medium" : "text-muted-foreground"
+        }`}
+      >
+        {label}
+      </span>
+    </div>
   );
 }

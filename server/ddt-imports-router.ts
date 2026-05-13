@@ -17,8 +17,9 @@ import {
   locations,
   producers,
 } from "../drizzle/schema";
-import { extractFromPdf } from "./ddt-vision";
-import { uploadDdtPdf, downloadDdtPdf, getSignedUrl, deleteDdtPdf } from "../lib/storage";
+// extractFromPdf non più usato nel router: l'estrazione AI avviene
+// tramite Edge Function /api/ddt-extract (M5.4 refactor)
+import { uploadDdtPdf, getSignedUrl, deleteDdtPdf } from "../lib/storage";
 import { findBestMatch } from "../lib/fuzzyMatch";
 
 const uuid = z.string().uuid();
@@ -174,8 +175,14 @@ export const ddtImportsRouter = router({
     }),
 
   /**
-   * Upload PDF e avvia estrazione.
-   * Input: base64 del PDF (per compatibilità tRPC, no multipart).
+   * Upload PDF su Supabase Storage e crea record DDT.
+   *
+   * M5.4 refactor: NON chiama più Claude Vision.
+   * L'estrazione AI avviene tramite Edge Function /api/ddt-extract
+   * chiamata dal frontend dopo l'upload.
+   *
+   * Ritorna { id, storagePath } per permettere al frontend di
+   * chiamare l'Edge Function con il path del PDF.
    */
   upload: writerProcedure
     .input(
@@ -210,50 +217,17 @@ export const ddtImportsRouter = router({
         // Upload su Supabase Storage
         const { path } = await uploadDdtPdf(fileBuffer, input.fileName, importId);
 
-        // Aggiorna path e status
+        // Aggiorna path e status → 'uploaded' (pronto per estrazione Edge)
         await db
           .update(ddtImports)
-          .set({ pdfStoragePath: path, status: "extracting" })
+          .set({ pdfStoragePath: path, status: "uploaded", updatedAt: new Date() })
           .where(eq(ddtImports.id, importId));
 
-        // Estrazione AI (Claude Vision)
-        const extractedData = await extractFromPdf(fileBuffer);
-
-        // Salva dati estratti
-        await db
-          .update(ddtImports)
-          .set({
-            extractedData: extractedData as unknown as Record<string, unknown>,
-            ddtNumber: extractedData.ddtNumber,
-            ddtDate: extractedData.ddtDate,
-            status: "review",
-            updatedAt: new Date(),
-          })
-          .where(eq(ddtImports.id, importId));
-
-        // Carica anagrafica prodotti per fuzzy match
-        const allProducts = await db
-          .select({ id: products.id, name: products.name })
-          .from(products);
-
-        // Crea items con tentativo di match
-        for (const item of extractedData.items) {
-          const match = findBestMatch(item.productName, allProducts, 0.7);
-
-          await db.insert(ddtImportItems).values({
-            ddtImportId: importId,
-            productNameExtracted: item.productName,
-            productCodeExtracted: item.productCode,
-            batchNumber: item.batchNumber,
-            expirationDate: item.expirationDate,
-            quantityPieces: item.quantityPieces,
-            unitOfMeasure: "PZ",
-            productMatchedId: match?.productId ?? null,
-            status: match ? "matched" : "unmatched",
-          });
-        }
-
-        return { id: importId, status: "review" as const, itemCount: extractedData.items.length };
+        return {
+          id: importId,
+          storagePath: path,
+          status: "uploaded" as const,
+        };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         await db
@@ -263,13 +237,17 @@ export const ddtImportsRouter = router({
 
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: `Estrazione fallita: ${errorMsg}`,
+          message: `Upload fallito: ${errorMsg}`,
         });
       }
     }),
 
   /**
    * Riprova estrazione su un DDT fallito.
+   *
+   * M5.4 refactor: non chiama più Claude Vision direttamente.
+   * Resetta lo stato a 'uploaded' e ritorna storagePath per permettere
+   * al frontend di richiamare l'Edge Function /api/ddt-extract.
    */
   retryExtraction: writerProcedure
     .input(z.object({ id: uuid }))
@@ -293,39 +271,106 @@ export const ddtImportsRouter = router({
         });
       }
 
+      // Elimina vecchi items se presenti
+      await db.delete(ddtImportItems).where(eq(ddtImportItems.ddtImportId, input.id));
+
+      // Resetta stato a 'uploaded' per ri-estrazione via Edge Function
       await db
         .update(ddtImports)
-        .set({ status: "extracting", errorMessage: null, updatedAt: new Date() })
+        .set({
+          status: "uploaded",
+          errorMessage: null,
+          extractedData: null,
+          updatedAt: new Date(),
+        })
         .where(eq(ddtImports.id, input.id));
 
+      return {
+        id: input.id,
+        storagePath: importRow.pdfStoragePath,
+        status: "uploaded" as const,
+      };
+    }),
+
+  /**
+   * Conferma i dati estratti dall'Edge Function e crea gli items.
+   *
+   * M5.4: nuova procedura. Riceve il JSON estratto da Claude Vision
+   * (passato dal frontend dopo la chiamata all'Edge Function),
+   * salva i dati in DB, esegue fuzzy match, crea ddt_import_items.
+   *
+   * Flusso:
+   * 1. Frontend chiama upload → riceve { id, storagePath }
+   * 2. Frontend chiama /api/ddt-extract (Edge) → riceve extractedData
+   * 3. Frontend chiama confirmExtraction → salva dati + crea items
+   */
+  confirmExtraction: writerProcedure
+    .input(
+      z.object({
+        ddtImportId: uuid,
+        extractedData: z.object({
+          ddtNumber: z.string().nullable(),
+          ddtDate: z.string().nullable(),
+          producerName: z.string().nullable(),
+          destinationName: z.string().nullable(),
+          items: z.array(
+            z.object({
+              productCode: z.string().nullable(),
+              productName: z.string(),
+              quantityPieces: z.number().int(),
+              quantityKg: z.number().nullable(),
+              batchNumber: z.string(),
+              expirationDate: z.string(),
+            })
+          ),
+        }),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database non disponibile" });
+
+      // Verifica che il DDT esista e sia in stato 'uploaded' o 'extracting'
+      const [importRow] = await db
+        .select()
+        .from(ddtImports)
+        .where(eq(ddtImports.id, input.ddtImportId))
+        .limit(1);
+
+      if (!importRow) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "DDT import non trovato" });
+      }
+      if (importRow.status !== "uploaded" && importRow.status !== "extracting") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `DDT in stato '${importRow.status}', atteso 'uploaded' o 'extracting'`,
+        });
+      }
+
       try {
-        const pdfBuffer = await downloadDdtPdf(importRow.pdfStoragePath);
-        const extractedData = await extractFromPdf(pdfBuffer);
-
-        // Elimina vecchi items
-        await db.delete(ddtImportItems).where(eq(ddtImportItems.ddtImportId, input.id));
-
-        // Salva nuovi dati
+        // Salva dati estratti nel record DDT
         await db
           .update(ddtImports)
           .set({
-            extractedData: extractedData as unknown as Record<string, unknown>,
-            ddtNumber: extractedData.ddtNumber,
-            ddtDate: extractedData.ddtDate,
+            extractedData: input.extractedData as unknown as Record<string, unknown>,
+            ddtNumber: input.extractedData.ddtNumber,
+            ddtDate: input.extractedData.ddtDate,
             status: "review",
             updatedAt: new Date(),
           })
-          .where(eq(ddtImports.id, input.id));
+          .where(eq(ddtImports.id, input.ddtImportId));
 
-        // Fuzzy match
+        // Carica anagrafica prodotti per fuzzy match
         const allProducts = await db
           .select({ id: products.id, name: products.name })
           .from(products);
 
-        for (const item of extractedData.items) {
+        // Crea items con tentativo di match
+        for (const item of input.extractedData.items) {
           const match = findBestMatch(item.productName, allProducts, 0.7);
+
           await db.insert(ddtImportItems).values({
-            ddtImportId: input.id,
+            ddtImportId: input.ddtImportId,
             productNameExtracted: item.productName,
             productCodeExtracted: item.productCode,
             batchNumber: item.batchNumber,
@@ -337,19 +382,59 @@ export const ddtImportsRouter = router({
           });
         }
 
-        return { status: "review" as const, itemCount: extractedData.items.length };
+        return {
+          id: input.ddtImportId,
+          status: "review" as const,
+          itemCount: input.extractedData.items.length,
+        };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         await db
           .update(ddtImports)
           .set({ status: "failed", errorMessage: errorMsg, updatedAt: new Date() })
-          .where(eq(ddtImports.id, input.id));
+          .where(eq(ddtImports.id, input.ddtImportId));
 
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: `Estrazione fallita: ${errorMsg}`,
+          message: `Salvataggio dati estratti fallito: ${errorMsg}`,
         });
       }
+    }),
+
+  /**
+   * Segna un DDT come 'extracting' (chiamato dal frontend prima
+   * di invocare l'Edge Function, per aggiornare lo stato in UI).
+   */
+  markExtracting: writerProcedure
+    .input(z.object({ id: uuid }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database non disponibile" });
+
+      await db
+        .update(ddtImports)
+        .set({ status: "extracting", updatedAt: new Date() })
+        .where(eq(ddtImports.id, input.id));
+
+      return { success: true };
+    }),
+
+  /**
+   * Segna un DDT come 'failed' (chiamato dal frontend se l'Edge
+   * Function fallisce, per aggiornare lo stato in DB).
+   */
+  markFailed: writerProcedure
+    .input(z.object({ id: uuid, errorMessage: z.string() }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database non disponibile" });
+
+      await db
+        .update(ddtImports)
+        .set({ status: "failed", errorMessage: input.errorMessage, updatedAt: new Date() })
+        .where(eq(ddtImports.id, input.id));
+
+      return { success: true };
     }),
 
   /**

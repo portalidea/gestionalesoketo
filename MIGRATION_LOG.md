@@ -3162,3 +3162,49 @@ prossima sessione.
 4. `feat(ux): M5.3 — edge cases (unmatched product create, merge, email notify)`
 
 **Prossimo step:** M6 — Portale Retailer
+
+---
+
+## M5.4 — Edge Function Refactor per Claude Vision (30s timeout)
+
+**Data:** 2026-05-13
+
+### Problema risolto
+
+L'architettura precedente eseguiva Claude Vision all'interno della Serverless Function Express monolitica (`api/index.js`). Su Vercel Hobby plan, il timeout massimo per Serverless Functions è **10 secondi** (il `maxDuration: 60` in `vercel.json` è ignorato su Hobby). L'estrazione AI di un PDF DDT richiede tipicamente 5-20 secondi, causando timeout frequenti.
+
+### Soluzione: Edge Function isolata
+
+Creata una **Edge Function separata** (`api/ddt-extract.ts`) con `export const runtime = 'edge'` che gira con timeout di **30 secondi** su Hobby plan. L'Edge Function:
+
+- Non usa `@anthropic-ai/sdk` (incompatibile con Edge Runtime per dipendenze `node:fs`)
+- Usa `fetch()` diretto a `https://api.anthropic.com/v1/messages` (100% Edge-compatible)
+- Verifica JWT Supabase con `jose` (Edge-compatible, ECDSA P-256)
+- Scarica PDF da Supabase Storage via REST API (no `@supabase/supabase-js`)
+- Ritorna JSON strutturato estratto da Claude Vision
+
+### Nuovo flusso (3 step)
+
+1. **Upload** (Serverless, ~2s): Frontend chiama `ddtImports.upload` → salva PDF su Storage, crea record `ddt_imports` con `status='uploaded'`, ritorna `{ id, storagePath }`
+2. **Estrazione AI** (Edge, max 30s): Frontend chiama `/api/ddt-extract` → scarica PDF, chiama Claude Vision, ritorna `extractedData` JSON
+3. **Conferma estrazione** (Serverless, ~2s): Frontend chiama `ddtImports.confirmExtraction` → salva dati in DB, esegue fuzzy match, crea `ddt_import_items`, aggiorna `status='review'`
+
+### File aggiunti/modificati
+
+- `api/ddt-extract.ts` (NEW) — Edge Function isolata per Claude Vision
+- `client/src/lib/ddt-extract.ts` (NEW) — Helper frontend per chiamare Edge Function
+- `server/ddt-imports-router.ts` (MODIFIED) — Refactored `upload` (solo Storage), rimosso `extractFromPdf`, aggiunto `confirmExtraction`, `markExtracting`, `markFailed`, refactored `retryExtraction`
+- `client/src/pages/DdtImports.tsx` (MODIFIED) — Flusso upload in 3 step con progress indicator
+- `client/src/components/DdtUploadButton.tsx` (MODIFIED) — Stesso flusso 3 step
+- `vercel.json` (MODIFIED) — Aggiunta config Edge Function + rewrite rule
+
+### Note deploy
+
+- L'Edge Function `api/ddt-extract.ts` viene compilata automaticamente da Vercel (TypeScript nativo)
+- Non richiede `esbuild` o build manuale — Vercel gestisce la compilazione
+- Le env vars `ANTHROPIC_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` devono essere configurate su Vercel
+- Il file `server/ddt-vision.ts` resta nel repo come reference ma non è più importato dal router
+
+### Commit
+
+- `feat(arch): M5.4 — Edge Function refactor for Claude Vision (30s timeout)`
