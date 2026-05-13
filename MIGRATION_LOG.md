@@ -51,6 +51,23 @@ Roadmap M6 (portale retailer self-service): `MIGRATION_PLAN_M6.md`.
 - DdtImportDetail: badge warning per batchNumber/expirationDate null,
   conferma disabilitata se campi mancanti.
 
+### Bug fix migration 0009 (applicata manualmente)
+1. **LIKE su enum non supportato**: policy retailer usava
+   `LIKE 'retailer_%'` su enum `user_role` → errore Postgres.
+   Fix: `IN ('retailer_admin', 'retailer_user')` esplicito.
+2. **Enum user_role mancava valori retailer**: i valori
+   `retailer_admin` e `retailer_user` erano previsti da M6.1
+   (file orfani 0007a/0007b mai applicati). Aggiunti manualmente
+   con `ALTER TYPE "user_role" ADD VALUE IF NOT EXISTS`.
+   Stato enum attuale: `admin`, `operator`, `viewer`,
+   `retailer_admin`, `retailer_user` (5 valori).
+
+**Regole per future migrazioni:**
+- NON usare LIKE su enum, sempre IN esplicito
+- Verificare dipendenze enum prima di creare policies
+- I file orfani 0007a/0007b di M6.1 restano rilevanti per il
+  resto dello schema M6, ma i valori enum sono già presenti
+
 ### Fix precedenti (M5.4)
 - Edge Function `api/ddt-extract`: fix `export const config` syntax
   (non-Next.js), rimozione `runtime` da vercel.json, sostituzione
