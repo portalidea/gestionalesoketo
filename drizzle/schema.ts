@@ -169,6 +169,36 @@ export type Producer = typeof producers.$inferSelect;
 export type InsertProducer = typeof producers.$inferInsert;
 
 /**
+ * Product supplier codes — M5.5: mapping tra codice fornitore e prodotto.
+ * Permette match automatico DDT via codice produttore.
+ * UNIQUE (producerId, supplierCode): stesso codice da stesso produttore → 1 prodotto.
+ * UNIQUE (productId, producerId): un produttore ha un solo codice per prodotto.
+ */
+export const productSupplierCodes = pgTable(
+  "product_supplier_codes",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    productId: uuid("productId")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    producerId: uuid("producerId")
+      .notNull()
+      .references(() => producers.id, { onDelete: "cascade" }),
+    supplierCode: varchar("supplierCode", { length: 100 }).notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    unique("product_supplier_codes_producer_code_unique").on(t.producerId, t.supplierCode),
+    unique("product_supplier_codes_product_producer_unique").on(t.productId, t.producerId),
+    index("idx_product_supplier_codes_productId").on(t.productId),
+    index("idx_product_supplier_codes_supplierCode").on(t.supplierCode),
+  ],
+);
+
+export type ProductSupplierCode = typeof productSupplierCodes.$inferSelect;
+export type InsertProductSupplierCode = typeof productSupplierCodes.$inferInsert;
+
+/**
  * Product batches — lotti per prodotto, con scadenza obbligatoria
  * (Phase B M1). `initialQuantity` è la quantità iniziale del lotto al
  * ricevimento dal produttore; lo stock corrente vive in
