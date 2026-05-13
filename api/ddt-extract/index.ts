@@ -2,13 +2,15 @@
  * M5.4 — Edge Function isolata per estrazione DDT con Claude Vision.
  *
  * Runtime: Vercel Edge (timeout 30s su Hobby plan)
- * Nessuna dipendenza Node.js: usa solo fetch() nativo + jose per JWT.
+ * Zero dipendenze Node.js: usa solo fetch() nativo.
+ * Auth: verifica token via Supabase Auth API (no jose — cross-realm CryptoKey bug).
  *
  * Flusso:
  * 1. Frontend invia { storagePath, ddtImportId } + JWT Supabase in header
- * 2. Edge Function verifica JWT, scarica PDF da Supabase Storage
- * 3. Chiama Claude Vision via fetch() diretto (no SDK, Edge-compatible)
- * 4. Ritorna JSON strutturato estratto
+ * 2. Edge Function verifica JWT via Supabase /auth/v1/user
+ * 3. Scarica PDF da Supabase Storage via REST API
+ * 4. Chiama Claude Vision via fetch() diretto (no SDK, Edge-compatible)
+ * 5. Ritorna JSON strutturato estratto
  *
  * L'Edge Function NON accede al database. Il salvataggio dei dati
  * estratti avviene tramite la procedura tRPC ddtImports.confirmExtraction
@@ -43,6 +45,18 @@ interface RequestBody {
   ddtImportId: string;
 }
 
+interface SupabaseUser {
+  id: string;
+  email?: string;
+  app_metadata?: {
+    role?: string;
+    [key: string]: unknown;
+  };
+  user_metadata?: {
+    [key: string]: unknown;
+  };
+}
+
 // ─── Claude Vision System Prompt ─────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `Sei un assistente che estrae dati da Documenti Di Trasporto (DDT) italiani PDF di aziende alimentari. Estrai i dati in JSON strutturato. Non aggiungere testo prima o dopo il JSON.
@@ -75,37 +89,37 @@ Regole:
 
 Se non trovi un campo, valore null. Se zero items, items=[].`;
 
-// ─── JWT Verification (Edge-compatible via jose) ─────────────────────────────
-
-import { createRemoteJWKSet, jwtVerify } from "jose";
+// ─── Auth: Supabase Auth API (Edge-compatible, no jose) ─────────────────────
 
 /**
- * Verifica il JWT Supabase usando JWKS pubblico (ECDSA P-256).
- * jose è 100% Edge-compatible (nessuna dipendenza Node.js).
+ * Verifica il token JWT chiamando Supabase Auth API.
+ * Bypassa completamente jose (cross-realm CryptoKey bug su Edge Runtime).
+ * ~50ms overhead, trascurabile vs 5-20s Claude Vision.
  */
-async function verifySupabaseJwt(
+async function verifyToken(
   token: string,
-  supabaseUrl: string
-): Promise<{ sub: string; email?: string }> {
-  const issuer = `${supabaseUrl}/auth/v1`;
-  const JWKS = createRemoteJWKSet(
-    new URL(`${issuer}/.well-known/jwks.json`)
-  );
-
-  const { payload } = await jwtVerify(token, JWKS, {
-    algorithms: ["ES256"],
-    issuer,
-    audience: "authenticated",
+  supabaseUrl: string,
+  supabaseServiceRoleKey: string
+): Promise<SupabaseUser | null> {
+  const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: supabaseServiceRoleKey,
+    },
   });
 
-  if (!payload.sub) {
-    throw new Error("JWT mancante campo sub");
+  if (!response.ok) {
+    return null;
   }
 
-  return {
-    sub: payload.sub,
-    email: typeof payload.email === "string" ? payload.email : undefined,
-  };
+  const user = (await response.json()) as SupabaseUser;
+
+  // Verifica che l'utente abbia un ID valido
+  if (!user.id) {
+    return null;
+  }
+
+  return user;
 }
 
 // ─── Supabase Storage Download (Edge-compatible via fetch) ───────────────────
@@ -258,7 +272,7 @@ export default async function handler(request: Request): Promise<Response> {
       );
     }
 
-    // ─── Auth: verifica JWT Supabase ─────────────────────────────────────
+    // ─── Auth: verifica token via Supabase Auth API ─────────────────────
     const authHeader = request.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return new Response(
@@ -268,15 +282,13 @@ export default async function handler(request: Request): Promise<Response> {
     }
 
     const token = authHeader.slice(7);
-    let jwtPayload: { sub: string; email?: string };
+    const user = await verifyToken(token, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    try {
-      jwtPayload = await verifySupabaseJwt(token, SUPABASE_URL);
-    } catch (jwtErr) {
+    if (!user) {
       return new Response(
         JSON.stringify({
           error: "Unauthorized",
-          detail: `JWT verification failed: ${jwtErr instanceof Error ? jwtErr.message : String(jwtErr)}`,
+          detail: "Invalid or expired token",
         }),
         { status: 401, headers: corsHeaders }
       );
@@ -333,7 +345,7 @@ export default async function handler(request: Request): Promise<Response> {
         success: true,
         ddtImportId: body.ddtImportId,
         extractedData,
-        extractedBy: jwtPayload.sub,
+        extractedBy: user.id,
       }),
       { status: 200, headers: corsHeaders }
     );
