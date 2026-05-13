@@ -8,12 +8,11 @@
       "maxDuration": 60
     },
     "api/ddt-extract/index.ts": {
-      "runtime": "edge",
       "maxDuration": 30
     }
   },
   "rewrites": [
-    { "source": "/api/ddt-extract", "destination": "/api/ddt-extract" },
+    { "source": "/api/ddt-extract", "destination": "/api/ddt-extract/index" },
     { "source": "/api/:path*", "destination": "/api" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
