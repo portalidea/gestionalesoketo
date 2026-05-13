@@ -51,11 +51,13 @@ import { trpc } from "@/lib/trpc";
 import { format } from "date-fns";
 import {
   ArrowLeft,
+  Link2,
   Loader2,
   Package,
   Plus,
   Save,
   Trash2,
+  X,
   XCircle,
 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
@@ -113,6 +115,172 @@ const EMPTY_BATCH_FORM: BatchFormState = {
   initialQuantity: "",
   notes: "",
 };
+
+// ====================== Codici Fornitore (M5.5) ======================
+
+function SupplierCodesSection({
+  productId,
+  producers,
+}: {
+  productId: string;
+  producers: Array<{ id: string; name: string }>;
+}) {
+  const utils = trpc.useUtils();
+  const { data: codes, isLoading } = trpc.products.getSupplierCodes.useQuery(
+    { productId },
+    { enabled: productId.length > 0 },
+  );
+
+  const [addOpen, setAddOpen] = useState(false);
+  const [newProducerId, setNewProducerId] = useState("__none__");
+  const [newCode, setNewCode] = useState("");
+
+  const addMutation = trpc.products.addSupplierCode.useMutation({
+    onSuccess: () => {
+      utils.products.getSupplierCodes.invalidate({ productId });
+      setAddOpen(false);
+      setNewProducerId("__none__");
+      setNewCode("");
+      toast.success("Codice fornitore aggiunto");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const removeMutation = trpc.products.removeSupplierCode.useMutation({
+    onSuccess: () => {
+      utils.products.getSupplierCodes.invalidate({ productId });
+      toast.success("Codice fornitore rimosso");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const handleAdd = (e: FormEvent) => {
+    e.preventDefault();
+    if (newProducerId === "__none__" || !newCode.trim()) {
+      toast.error("Seleziona produttore e inserisci codice");
+      return;
+    }
+    addMutation.mutate({
+      productId,
+      producerId: newProducerId,
+      supplierCode: newCode.trim(),
+    });
+  };
+
+  return (
+    <Card className="border-border bg-card">
+      <CardHeader>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Link2 className="h-5 w-5" />
+              Codici fornitore
+            </CardTitle>
+            <CardDescription>
+              Codici prodotto usati dai fornitori (per match automatico DDT).
+            </CardDescription>
+          </div>
+          <Dialog open={addOpen} onOpenChange={setAddOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm" variant="outline">
+                <Plus className="h-4 w-4 mr-1" />
+                Aggiungi
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-md">
+              <form onSubmit={handleAdd}>
+                <DialogHeader>
+                  <DialogTitle>Aggiungi codice fornitore</DialogTitle>
+                  <DialogDescription>
+                    Associa un codice produttore a questo prodotto per il match automatico DDT.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                  <div className="grid gap-2">
+                    <Label>Produttore *</Label>
+                    <Select value={newProducerId} onValueChange={setNewProducerId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Seleziona produttore" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">— Seleziona</SelectItem>
+                        {producers.map((p) => (
+                          <SelectItem key={p.id} value={p.id}>
+                            {p.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Codice produttore *</Label>
+                    <Input
+                      placeholder="es. LS571"
+                      value={newCode}
+                      onChange={(e) => setNewCode(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={() => setAddOpen(false)}>
+                    Annulla
+                  </Button>
+                  <Button type="submit" disabled={addMutation.isPending}>
+                    {addMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    Aggiungi
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-4">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+          </div>
+        ) : codes && codes.length > 0 ? (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Produttore</TableHead>
+                <TableHead>Codice</TableHead>
+                <TableHead className="w-16" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {codes.map((c) => (
+                <TableRow key={c.id}>
+                  <TableCell className="text-muted-foreground">
+                    {c.producerName}
+                  </TableCell>
+                  <TableCell className="font-mono text-sm">{c.supplierCode}</TableCell>
+                  <TableCell>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      onClick={() => removeMutation.mutate({ id: c.id })}
+                      disabled={removeMutation.isPending}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : (
+          <p className="text-sm text-muted-foreground text-center py-4">
+            Nessun codice fornitore associato.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function ProductDetail() {
   const [, params] = useRoute("/products/:id");
@@ -593,6 +761,9 @@ export default function ProductDetail() {
             </Button>
           </div>
         </form>
+
+        {/* =============== Sezione Codici Fornitore (M5.5) =============== */}
+        <SupplierCodesSection productId={productId} producers={producers ?? []} />
 
         {/* Sezione Lotti — separata visivamente dal form anagrafica */}
         <div className="mt-12">

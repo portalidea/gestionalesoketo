@@ -34,72 +34,229 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
 import { format } from "date-fns";
-import { Loader2, Package, Plus } from "lucide-react";
-import { useState } from "react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  Package,
+  Plus,
+  X,
+} from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 
+const NO_PRODUCER_VALUE = "__none__";
+
+type SupplierCodeRow = {
+  producerId: string;
+  supplierCode: string;
+};
+
+type InitialBatchForm = {
+  batchNumber: string;
+  expirationDate: string;
+  quantity: string;
+};
+
+type FormData = {
+  sku: string;
+  name: string;
+  description: string;
+  category: string;
+  producerId: string;
+  unitPrice: string;
+  unit: string;
+  minStockThreshold: number;
+  expiryWarningDays: number;
+  vatRate: "4.00" | "5.00" | "10.00" | "22.00";
+  supplierCodes: SupplierCodeRow[];
+  showInitialBatch: boolean;
+  initialBatch: InitialBatchForm;
+};
+
+const EMPTY_FORM: FormData = {
+  sku: "",
+  name: "",
+  description: "",
+  category: "",
+  producerId: NO_PRODUCER_VALUE,
+  unitPrice: "",
+  unit: "",
+  minStockThreshold: 10,
+  expiryWarningDays: 30,
+  vatRate: "10.00",
+  supplierCodes: [],
+  showInitialBatch: false,
+  initialBatch: {
+    batchNumber: "",
+    expirationDate: "",
+    quantity: "",
+  },
+};
+
 export default function Products() {
   const { data: products, isLoading } = trpc.products.list.useQuery();
+  const { data: producers } = trpc.producers.list.useQuery();
   const [, setLocation] = useLocation();
   const [dialogOpen, setDialogOpen] = useState(false);
   const utils = trpc.useUtils();
 
-  const [formData, setFormData] = useState<{
-    sku: string;
-    name: string;
-    description: string;
-    category: string;
-    supplierName: string;
-    unitPrice: string;
-    unit: string;
-    minStockThreshold: number;
-    expiryWarningDays: number;
-    vatRate: "4.00" | "5.00" | "10.00" | "22.00";
-  }>({
-    sku: "",
-    name: "",
-    description: "",
-    category: "",
-    supplierName: "",
-    unitPrice: "",
-    unit: "",
-    minStockThreshold: 10,
-    expiryWarningDays: 30,
-    vatRate: "10.00",
-  });
+  const [formData, setFormData] = useState<FormData>({ ...EMPTY_FORM });
 
-  const createMutation = trpc.products.create.useMutation({
-    onSuccess: () => {
+  const resetForm = useCallback(
+    (keepContext = false) => {
+      if (keepContext) {
+        // Mantieni producer e categoria per workflow rapido
+        setFormData((prev) => ({
+          ...EMPTY_FORM,
+          producerId: prev.producerId,
+          category: prev.category,
+          supplierCodes: [],
+          showInitialBatch: false,
+          initialBatch: { batchNumber: "", expirationDate: "", quantity: "" },
+        }));
+      } else {
+        setFormData({ ...EMPTY_FORM });
+      }
+    },
+    [],
+  );
+
+  const createMutation = trpc.products.createExtended.useMutation({
+    onSuccess: (product, _vars, _ctx) => {
       utils.products.list.invalidate();
-      setDialogOpen(false);
+      utils.warehouse.getStockOverview.invalidate();
       toast.success("Prodotto creato con successo");
-      setFormData({
-        sku: "",
-        name: "",
-        description: "",
-        category: "",
-        supplierName: "",
-        unitPrice: "",
-        unit: "",
-        minStockThreshold: 10,
-        expiryWarningDays: 30,
-        vatRate: "10.00",
-      });
+      return product;
     },
     onError: (err) => toast.error(err.message),
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent, keepOpen = false) => {
     e.preventDefault();
-    createMutation.mutate({
-      ...formData,
-      isLowCarb: 1,
-      isGlutenFree: 1,
-      isKeto: 1,
-      sugarContent: "0%",
+
+    // Validate supplier codes: no empty codes
+    const validCodes = formData.supplierCodes.filter(
+      (sc) => sc.supplierCode.trim().length > 0 && sc.producerId !== NO_PRODUCER_VALUE,
+    );
+
+    // Validate initial batch if shown
+    if (formData.showInitialBatch) {
+      const ib = formData.initialBatch;
+      if (!ib.batchNumber || !ib.expirationDate || !ib.quantity) {
+        toast.error("Compila tutti i campi del lotto iniziale o chiudi la sezione");
+        return;
+      }
+      const qty = parseInt(ib.quantity, 10);
+      if (!Number.isFinite(qty) || qty <= 0) {
+        toast.error("Quantità lotto deve essere un numero positivo");
+        return;
+      }
+    }
+
+    const producerName =
+      formData.producerId !== NO_PRODUCER_VALUE
+        ? producers?.find((p) => p.id === formData.producerId)?.name
+        : undefined;
+
+    const product = await createMutation.mutateAsync({
+      sku: formData.sku,
+      name: formData.name,
+      description: formData.description || undefined,
+      category: formData.category || undefined,
+      supplierName: producerName || undefined,
+      unitPrice: formData.unitPrice || undefined,
+      unit: formData.unit || undefined,
+      minStockThreshold: formData.minStockThreshold,
+      expiryWarningDays: formData.expiryWarningDays,
+      vatRate: formData.vatRate,
+      supplierCodes: validCodes,
+      initialBatch:
+        formData.showInitialBatch && formData.producerId !== NO_PRODUCER_VALUE
+          ? {
+              producerId: formData.producerId,
+              batchNumber: formData.initialBatch.batchNumber,
+              expirationDate: formData.initialBatch.expirationDate,
+              quantity: parseInt(formData.initialBatch.quantity, 10),
+            }
+          : undefined,
     });
+
+    if (keepOpen) {
+      resetForm(true);
+    } else {
+      setDialogOpen(false);
+      resetForm(false);
+      // Auto-redirect a pagina dettaglio
+      if (product?.id) {
+        setLocation(`/products/${product.id}`);
+      }
+    }
   };
+
+  // ============== Supplier codes management ==============
+  const addSupplierCodeRow = () => {
+    setFormData((prev) => ({
+      ...prev,
+      supplierCodes: [
+        ...prev.supplierCodes,
+        {
+          producerId: prev.producerId !== NO_PRODUCER_VALUE ? prev.producerId : NO_PRODUCER_VALUE,
+          supplierCode: "",
+        },
+      ],
+    }));
+  };
+
+  const removeSupplierCodeRow = (index: number) => {
+    setFormData((prev) => ({
+      ...prev,
+      supplierCodes: prev.supplierCodes.filter((_, i) => i !== index),
+    }));
+  };
+
+  const updateSupplierCodeRow = (
+    index: number,
+    field: keyof SupplierCodeRow,
+    value: string,
+  ) => {
+    setFormData((prev) => ({
+      ...prev,
+      supplierCodes: prev.supplierCodes.map((sc, i) =>
+        i === index ? { ...sc, [field]: value } : sc,
+      ),
+    }));
+  };
+
+  // Auto-add first supplier code row when producer is selected
+  useEffect(() => {
+    if (
+      formData.producerId !== NO_PRODUCER_VALUE &&
+      formData.supplierCodes.length === 0
+    ) {
+      setFormData((prev) => ({
+        ...prev,
+        supplierCodes: [{ producerId: prev.producerId, supplierCode: "" }],
+      }));
+    }
+  }, [formData.producerId]);
+
+  // Sync supplier code rows when main producer changes
+  useEffect(() => {
+    if (formData.producerId !== NO_PRODUCER_VALUE) {
+      setFormData((prev) => ({
+        ...prev,
+        supplierCodes: prev.supplierCodes.map((sc) =>
+          sc.producerId === NO_PRODUCER_VALUE
+            ? { ...sc, producerId: prev.producerId }
+            : sc,
+        ),
+      }));
+    }
+  }, [formData.producerId]);
+
+  const [supplierCodesOpen, setSupplierCodesOpen] = useState(true);
 
   const now = Date.now();
   const formatDate = (d: string | null) =>
@@ -135,7 +292,10 @@ export default function Products() {
               Catalogo prodotti SoKeto con stock per location e scadenze.
             </p>
           </div>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <Dialog open={dialogOpen} onOpenChange={(open) => {
+            setDialogOpen(open);
+            if (!open) resetForm(false);
+          }}>
             <DialogTrigger asChild>
               <Button size="lg">
                 <Plus className="h-5 w-5 mr-2" />
@@ -143,7 +303,7 @@ export default function Products() {
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-              <form onSubmit={handleSubmit}>
+              <form onSubmit={(e) => handleSubmit(e, false)}>
                 <DialogHeader>
                   <DialogTitle>Nuovo Prodotto</DialogTitle>
                   <DialogDescription>
@@ -151,6 +311,7 @@ export default function Products() {
                   </DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-4 py-4">
+                  {/* SKU + Categoria */}
                   <div className="grid grid-cols-2 gap-4">
                     <div className="grid gap-2">
                       <Label htmlFor="sku">SKU *</Label>
@@ -171,6 +332,8 @@ export default function Products() {
                       />
                     </div>
                   </div>
+
+                  {/* Nome */}
                   <div className="grid gap-2">
                     <Label htmlFor="name">Nome Prodotto *</Label>
                     <Input
@@ -180,23 +343,136 @@ export default function Products() {
                       required
                     />
                   </div>
+
+                  {/* Descrizione */}
                   <div className="grid gap-2">
                     <Label htmlFor="description">Descrizione</Label>
                     <Textarea
                       id="description"
                       value={formData.description}
                       onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                      rows={3}
+                      rows={2}
                     />
                   </div>
+
+                  {/* Fornitore (Combobox via Select) */}
                   <div className="grid gap-2">
-                    <Label htmlFor="supplierName">Fornitore</Label>
-                    <Input
-                      id="supplierName"
-                      value={formData.supplierName}
-                      onChange={(e) => setFormData({ ...formData, supplierName: e.target.value })}
-                    />
+                    <Label htmlFor="producerId">Produttore / Fornitore</Label>
+                    <Select
+                      value={formData.producerId}
+                      onValueChange={(v) => setFormData({ ...formData, producerId: v })}
+                    >
+                      <SelectTrigger id="producerId">
+                        <SelectValue placeholder="Seleziona produttore" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={NO_PRODUCER_VALUE}>— Nessuno</SelectItem>
+                        {producers?.map((p) => (
+                          <SelectItem key={p.id} value={p.id}>
+                            {p.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {producers && producers.length === 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        Nessun produttore disponibile.{" "}
+                        <button
+                          type="button"
+                          className="text-primary underline"
+                          onClick={() => setLocation("/producers")}
+                        >
+                          Creane uno
+                        </button>
+                      </p>
+                    )}
                   </div>
+
+                  {/* Codici fornitore (collapsible) */}
+                  {formData.producerId !== NO_PRODUCER_VALUE && (
+                    <div className="border border-border rounded-lg">
+                      <button
+                        type="button"
+                        className="flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-foreground hover:bg-accent/50 rounded-t-lg"
+                        onClick={() => setSupplierCodesOpen(!supplierCodesOpen)}
+                      >
+                        <span>Codici fornitore ({formData.supplierCodes.length})</span>
+                        {supplierCodesOpen ? (
+                          <ChevronUp className="h-4 w-4" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4" />
+                        )}
+                      </button>
+                      {supplierCodesOpen && (
+                        <div className="px-4 pb-4 space-y-3">
+                          {formData.supplierCodes.map((sc, idx) => (
+                            <div key={idx} className="flex items-end gap-2">
+                              <div className="flex-1 grid gap-1">
+                                {idx === 0 && (
+                                  <Label className="text-xs text-muted-foreground">
+                                    Produttore
+                                  </Label>
+                                )}
+                                <Select
+                                  value={sc.producerId}
+                                  onValueChange={(v) =>
+                                    updateSupplierCodeRow(idx, "producerId", v)
+                                  }
+                                >
+                                  <SelectTrigger className="h-9">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {producers?.map((p) => (
+                                      <SelectItem key={p.id} value={p.id}>
+                                        {p.name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className="flex-1 grid gap-1">
+                                {idx === 0 && (
+                                  <Label className="text-xs text-muted-foreground">
+                                    Codice produttore
+                                  </Label>
+                                )}
+                                <Input
+                                  className="h-9"
+                                  placeholder="es. LS571"
+                                  value={sc.supplierCode}
+                                  onChange={(e) =>
+                                    updateSupplierCodeRow(idx, "supplierCode", e.target.value)
+                                  }
+                                />
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-9 w-9 text-muted-foreground hover:text-destructive shrink-0"
+                                onClick={() => removeSupplierCodeRow(idx)}
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          ))}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="w-full"
+                            onClick={addSupplierCodeRow}
+                          >
+                            <Plus className="h-3 w-3 mr-1" />
+                            Aggiungi codice
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Prezzo + Unità */}
                   <div className="grid grid-cols-2 gap-4">
                     <div className="grid gap-2">
                       <Label htmlFor="unitPrice">Prezzo Unitario (€)</Label>
@@ -209,7 +485,7 @@ export default function Products() {
                       />
                     </div>
                     <div className="grid gap-2">
-                      <Label htmlFor="unit">Unità di Misura</Label>
+                      <Label htmlFor="unit">Unità di misura (etichetta)</Label>
                       <Input
                         id="unit"
                         placeholder="es. kg, pz, conf"
@@ -218,6 +494,8 @@ export default function Products() {
                       />
                     </div>
                   </div>
+
+                  {/* Soglie */}
                   <div className="grid grid-cols-2 gap-4">
                     <div className="grid gap-2">
                       <Label htmlFor="minStockThreshold">Soglia Scorta Minima</Label>
@@ -248,6 +526,8 @@ export default function Products() {
                       />
                     </div>
                   </div>
+
+                  {/* IVA */}
                   <div className="grid gap-2">
                     <Label htmlFor="vatRate">Aliquota IVA *</Label>
                     <Select
@@ -270,10 +550,131 @@ export default function Products() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {/* Primo lotto (opzionale, expandable) */}
+                  {formData.producerId !== NO_PRODUCER_VALUE && (
+                    <div className="border border-border rounded-lg">
+                      {!formData.showInitialBatch ? (
+                        <button
+                          type="button"
+                          className="flex items-center gap-2 w-full px-4 py-3 text-sm font-medium text-primary hover:bg-accent/50 rounded-lg"
+                          onClick={() =>
+                            setFormData({ ...formData, showInitialBatch: true })
+                          }
+                        >
+                          <Plus className="h-4 w-4" />
+                          Aggiungi primo lotto
+                        </button>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between px-4 py-3">
+                            <span className="text-sm font-medium text-foreground">
+                              Primo lotto
+                            </span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-xs text-muted-foreground"
+                              onClick={() =>
+                                setFormData({
+                                  ...formData,
+                                  showInitialBatch: false,
+                                  initialBatch: { batchNumber: "", expirationDate: "", quantity: "" },
+                                })
+                              }
+                            >
+                              Rimuovi
+                            </Button>
+                          </div>
+                          <div className="px-4 pb-4 grid gap-3">
+                            <div className="grid gap-1">
+                              <Label className="text-xs text-muted-foreground">
+                                Produttore
+                              </Label>
+                              <Input
+                                value={
+                                  producers?.find((p) => p.id === formData.producerId)?.name ?? ""
+                                }
+                                disabled
+                                className="bg-muted"
+                              />
+                            </div>
+                            <div className="grid gap-1">
+                              <Label className="text-xs">Numero lotto *</Label>
+                              <Input
+                                placeholder="es. TH24C31K0"
+                                value={formData.initialBatch.batchNumber}
+                                onChange={(e) =>
+                                  setFormData({
+                                    ...formData,
+                                    initialBatch: {
+                                      ...formData.initialBatch,
+                                      batchNumber: e.target.value,
+                                    },
+                                  })
+                                }
+                                required={formData.showInitialBatch}
+                              />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="grid gap-1">
+                                <Label className="text-xs">Scadenza *</Label>
+                                <Input
+                                  type="date"
+                                  value={formData.initialBatch.expirationDate}
+                                  onChange={(e) =>
+                                    setFormData({
+                                      ...formData,
+                                      initialBatch: {
+                                        ...formData.initialBatch,
+                                        expirationDate: e.target.value,
+                                      },
+                                    })
+                                  }
+                                  required={formData.showInitialBatch}
+                                />
+                              </div>
+                              <div className="grid gap-1">
+                                <Label className="text-xs">Quantità *</Label>
+                                <Input
+                                  type="number"
+                                  min={1}
+                                  placeholder="es. 390"
+                                  value={formData.initialBatch.quantity}
+                                  onChange={(e) =>
+                                    setFormData({
+                                      ...formData,
+                                      initialBatch: {
+                                        ...formData.initialBatch,
+                                        quantity: e.target.value,
+                                      },
+                                    })
+                                  }
+                                  required={formData.showInitialBatch}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <DialogFooter>
+                <DialogFooter className="gap-2">
                   <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
                     Annulla
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={createMutation.isPending}
+                    onClick={(e) => handleSubmit(e as unknown as React.FormEvent, true)}
+                  >
+                    {createMutation.isPending && (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    )}
+                    Salva e crea nuovo
                   </Button>
                   <Button type="submit" disabled={createMutation.isPending}>
                     {createMutation.isPending && (
@@ -303,7 +704,7 @@ export default function Products() {
                       <TableHead>Categoria</TableHead>
                       <TableHead className="text-right">Prezzo</TableHead>
                       <TableHead className="text-right">IVA</TableHead>
-                      <TableHead className="text-right">Min</TableHead>
+                      <TableHead className="text-right">Soglia min</TableHead>
                       <TableHead className="text-right">Stock centrale</TableHead>
                       <TableHead className="text-right">Stock totale</TableHead>
                       <TableHead className="text-right">Lotti attivi</TableHead>
