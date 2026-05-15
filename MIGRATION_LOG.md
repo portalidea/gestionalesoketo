@@ -11,11 +11,41 @@ Roadmap M6 (portale retailer self-service): `MIGRATION_PLAN_M6.md`.
 
 ## Stato corrente — 2026-05-15
 
+- **M5.8 completato**: piecesPerUnit/sellableUnitLabel su products.
+  Migration 0011 applicata. UI prodotti e warehouse aggiornate.
+- **M5.7 fix**: threshold fuzzy 0.85, supplier_codes come fallback secondario.
 - **M6.1 completato**: Foundation multi-tenant auth + orders schema.
   Migration 0010 applicata. Backend retailerPortalRouter (invite/revoke/list/dashboard).
   Frontend PartnerLayout + PartnerDashboard + routing condizionale.
   Admin UI card utenti portale su RetailerDetail.
 - M5.5 completato. M5.4 Edge Function fix completati.
+
+---
+
+## 2026-05-15 — M5.7 fix — Match logic adjustments
+
+### Modifiche
+- Threshold fuzzy alzato da 0.80 a 0.85 per ridurre falsi positivi
+- Aggiunto supplier_codes come SECONDARY fallback (step 2) tra substring-match SKU (step 1) e fuzzy (step 3)
+- Ordine match: 1) substring SKU, 2) supplier code, 3) fuzzy Jaro-Winkler 0.85, 4) unmatched
+
+---
+
+## 2026-05-15 — M5.8 — piecesPerUnit / sellableUnitLabel
+
+### Migration 0011
+```sql
+ALTER TABLE "products" ADD COLUMN "piecesPerUnit" integer DEFAULT 1 NOT NULL;
+ALTER TABLE "products" ADD COLUMN "sellableUnitLabel" varchar(50) DEFAULT 'PZ';
+```
+
+### Modifiche
+- Schema Drizzle: aggiunto piecesPerUnit (int, default 1) e sellableUnitLabel (varchar, default 'PZ') a products
+- Router: products.create, products.update, products.createExtended accettano i nuovi campi
+- db.ts: getWarehouseStockOverview include piecesPerUnit e sellableUnitLabel nell'aggregazione
+- UI Products dialog: nuovi campi "Pezzi per confezione" e "Etichetta unità vendita" con helper text
+- UI ProductDetail: nuovi campi nel form modifica + card riepilogo stock con pezzi vendibili (visibile solo se piecesPerUnit > 1)
+- UI Warehouse: nuova colonna "Pezzi vendibili" nella tabella stock (mostra totalStock × piecesPerUnit)
 
 ---
 
