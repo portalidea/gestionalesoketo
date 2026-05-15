@@ -2029,3 +2029,85 @@ export async function getRetailerDashboardStats(retailerId: string) {
     inventoryValue: stockStats?.inventoryValue ?? "0.00",
   };
 }
+
+/**
+ * Dashboard: prodotti con stock totale (magazzino centrale) sotto soglia minima.
+ * Ritorna solo prodotti con minStockThreshold > 0 e stock < soglia.
+ */
+export async function getProductsUnderThreshold(limit = 20) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const rows = await db.execute(sql`
+    SELECT
+      p."id",
+      p."name",
+      p."sku",
+      p."minStockThreshold",
+      p."piecesPerUnit",
+      COALESCE(SUM(ibb."quantity"), 0)::int AS "totalStock"
+    FROM "products" p
+    LEFT JOIN "productBatches" pb ON pb."productId" = p."id"
+    LEFT JOIN "inventoryByBatch" ibb ON ibb."batchId" = pb."id"
+      AND ibb."locationId" IN (SELECT l."id" FROM "locations" l WHERE l."type" = 'central_warehouse')
+    WHERE p."minStockThreshold" IS NOT NULL AND p."minStockThreshold" > 0
+    GROUP BY p."id", p."name", p."sku", p."minStockThreshold", p."piecesPerUnit"
+    HAVING COALESCE(SUM(ibb."quantity"), 0) < p."minStockThreshold"
+    ORDER BY COALESCE(SUM(ibb."quantity"), 0) ASC
+    LIMIT ${limit}
+  `);
+
+  return rows as unknown as Array<{
+    id: string;
+    name: string;
+    sku: string;
+    minStockThreshold: number;
+    piecesPerUnit: number | null;
+    totalStock: number;
+  }>;
+}
+
+/**
+ * Dashboard: lotti con scadenza imminente (entro expiryWarningDays del prodotto).
+ * Ritorna solo lotti con stock > 0 nel magazzino centrale.
+ */
+export async function getExpiringBatches(limit = 20) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const rows = await db.execute(sql`
+    SELECT
+      pb."id" AS "batchId",
+      pb."batchNumber",
+      pb."expirationDate"::text,
+      p."id" AS "productId",
+      p."name" AS "productName",
+      p."sku" AS "productSku",
+      p."expiryWarningDays",
+      COALESCE(SUM(ibb."quantity"), 0)::int AS "stock",
+      (pb."expirationDate"::date - CURRENT_DATE)::int AS "daysToExpiry"
+    FROM "productBatches" pb
+    INNER JOIN "products" p ON p."id" = pb."productId"
+    INNER JOIN "inventoryByBatch" ibb ON ibb."batchId" = pb."id"
+    INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'central_warehouse'
+    WHERE
+      pb."expirationDate" IS NOT NULL
+      AND (pb."expirationDate"::date - CURRENT_DATE) <= COALESCE(p."expiryWarningDays", 30)
+    GROUP BY pb."id", pb."batchNumber", pb."expirationDate", p."id", p."name", p."sku", p."expiryWarningDays"
+    HAVING COALESCE(SUM(ibb."quantity"), 0) > 0
+    ORDER BY pb."expirationDate" ASC
+    LIMIT ${limit}
+  `);
+
+  return rows as unknown as Array<{
+    batchId: string;
+    batchNumber: string;
+    expirationDate: string;
+    productId: string;
+    productName: string;
+    productSku: string;
+    expiryWarningDays: number | null;
+    stock: number;
+    daysToExpiry: number;
+  }>;
+}

@@ -893,6 +893,12 @@ export const appRouter = router({
     getStats: protectedProcedure.query(async () => {
       return await db.getDashboardStats();
     }),
+    getStockAlerts: protectedProcedure.query(async () => {
+      return await db.getProductsUnderThreshold(20);
+    }),
+    getExpiringBatches: protectedProcedure.query(async () => {
+      return await db.getExpiringBatches(20);
+    }),
   }),
 
   // ============= PRICING PACKAGES (Phase B M3) =============

@@ -1,22 +1,53 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
-import { Store, Package, AlertTriangle, TrendingUp, Loader2 } from "lucide-react";
+import {
+  Store,
+  Package,
+  AlertTriangle,
+  TrendingUp,
+  Loader2,
+  ArrowDown,
+  Clock,
+  ShoppingCart,
+} from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+
+/** Helper: classe colore per scadenza */
+function getExpiryClass(daysToExpiry: number): string {
+  if (daysToExpiry < 0) return "text-red-700 line-through";
+  if (daysToExpiry < 7) return "text-red-500 font-semibold";
+  return "text-amber-500 font-medium";
+}
+
+function getExpiryLabel(daysToExpiry: number): string {
+  if (daysToExpiry < 0) return `Scaduto da ${Math.abs(daysToExpiry)}g`;
+  if (daysToExpiry === 0) return "Scade oggi";
+  return `${daysToExpiry}g rimanenti`;
+}
 
 export default function Home() {
   const { data: stats, isLoading } = trpc.dashboard.getStats.useQuery();
   const { data: activeAlerts } = trpc.alerts.getActive.useQuery();
+  const { data: stockAlerts } = trpc.dashboard.getStockAlerts.useQuery();
+  const { data: expiringBatches } = trpc.dashboard.getExpiringBatches.useQuery();
 
   return (
     <DashboardLayout>
       <div className="space-y-8">
         {/* Header */}
         <div>
-          <h1 className="text-4xl font-bold text-foreground mb-2">
-            Dashboard
-          </h1>
+          <h1 className="text-4xl font-bold text-foreground mb-2">Dashboard</h1>
           <p className="text-muted-foreground">
             Panoramica generale della gestione magazzino rivenditori SoKeto
           </p>
@@ -90,7 +121,7 @@ export default function Home() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-3xl font-bold text-foreground">
-                    €{stats?.totalInventoryValue || "0.00"}
+                    &euro;{stats?.totalInventoryValue || "0.00"}
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
                     Valore totale stimato
@@ -99,7 +130,180 @@ export default function Home() {
               </Card>
             </div>
 
-            {/* Alert Section */}
+            {/* Stock sotto soglia + Scadenze imminenti — side by side */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Card: Prodotti sotto soglia stock */}
+              <Card className="border-border bg-card">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-lg text-foreground flex items-center gap-2">
+                        <ArrowDown className="h-5 w-5 text-amber-500" />
+                        Scorte Basse
+                      </CardTitle>
+                      <CardDescription>
+                        Prodotti sotto soglia minima (magazzino centrale)
+                      </CardDescription>
+                    </div>
+                    {stockAlerts && stockAlerts.length > 0 && (
+                      <Badge variant="destructive" className="text-xs">
+                        {stockAlerts.length}
+                      </Badge>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {!stockAlerts ? (
+                    <div className="flex items-center justify-center py-6">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : stockAlerts.length === 0 ? (
+                    <div className="text-center py-6 text-muted-foreground text-sm">
+                      Nessun prodotto sotto soglia
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Prodotto</TableHead>
+                            <TableHead className="text-right">Stock</TableHead>
+                            <TableHead className="text-right">Soglia</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {stockAlerts.slice(0, 10).map((p) => {
+                            const pct = p.minStockThreshold > 0
+                              ? Math.round((p.totalStock / p.minStockThreshold) * 100)
+                              : 0;
+                            return (
+                              <TableRow key={p.id}>
+                                <TableCell>
+                                  <Link href={`/products/${p.id}`}>
+                                    <span className="text-sm font-medium hover:underline cursor-pointer">
+                                      {p.name}
+                                    </span>
+                                  </Link>
+                                  <span className="text-xs text-muted-foreground ml-2 font-mono">
+                                    {p.sku}
+                                  </span>
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <span className={`font-mono text-sm font-semibold ${
+                                    p.totalStock === 0 ? "text-red-500" : "text-amber-500"
+                                  }`}>
+                                    {p.totalStock}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground ml-1">
+                                    ({pct}%)
+                                  </span>
+                                </TableCell>
+                                <TableCell className="text-right font-mono text-sm text-muted-foreground">
+                                  {p.minStockThreshold}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                      {stockAlerts.length > 10 && (
+                        <div className="mt-3 text-center">
+                          <Link href="/products">
+                            <Button variant="outline" size="sm">
+                              Vedi tutti ({stockAlerts.length})
+                            </Button>
+                          </Link>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Card: Scadenze imminenti */}
+              <Card className="border-border bg-card">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-lg text-foreground flex items-center gap-2">
+                        <Clock className="h-5 w-5 text-red-500" />
+                        Scadenze Imminenti
+                      </CardTitle>
+                      <CardDescription>
+                        Lotti in scadenza (magazzino centrale)
+                      </CardDescription>
+                    </div>
+                    {expiringBatches && expiringBatches.length > 0 && (
+                      <Badge variant="destructive" className="text-xs">
+                        {expiringBatches.length}
+                      </Badge>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {!expiringBatches ? (
+                    <div className="flex items-center justify-center py-6">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : expiringBatches.length === 0 ? (
+                    <div className="text-center py-6 text-muted-foreground text-sm">
+                      Nessun lotto in scadenza imminente
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Prodotto</TableHead>
+                            <TableHead>Lotto</TableHead>
+                            <TableHead className="text-right">Stock</TableHead>
+                            <TableHead className="text-right">Scadenza</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {expiringBatches.slice(0, 10).map((b) => (
+                            <TableRow key={b.batchId}>
+                              <TableCell>
+                                <Link href={`/products/${b.productId}`}>
+                                  <span className="text-sm font-medium hover:underline cursor-pointer">
+                                    {b.productName}
+                                  </span>
+                                </Link>
+                              </TableCell>
+                              <TableCell className="font-mono text-xs">
+                                {b.batchNumber}
+                              </TableCell>
+                              <TableCell className="text-right font-mono text-sm">
+                                {b.stock}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <span className={`text-sm ${getExpiryClass(b.daysToExpiry)}`}>
+                                  {b.expirationDate?.slice(0, 10) ?? "—"}
+                                </span>
+                                <span className={`block text-xs ${getExpiryClass(b.daysToExpiry)}`}>
+                                  {getExpiryLabel(b.daysToExpiry)}
+                                </span>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                      {expiringBatches.length > 10 && (
+                        <div className="mt-3 text-center">
+                          <Link href="/products">
+                            <Button variant="outline" size="sm">
+                              Vedi tutti ({expiringBatches.length})
+                            </Button>
+                          </Link>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Alert Recenti (dalla tabella alerts) */}
             {activeAlerts && activeAlerts.length > 0 && (
               <Card className="border-border bg-card">
                 <CardHeader>
@@ -132,9 +336,7 @@ export default function Home() {
                               ? "Prodotto in Scadenza"
                               : "Prodotto Scaduto"}
                           </p>
-                          <p className="text-sm text-muted-foreground">
-                            {alert.message}
-                          </p>
+                          <p className="text-sm text-muted-foreground">{alert.message}</p>
                         </div>
                       </div>
                     ))}
@@ -157,11 +359,11 @@ export default function Home() {
               <CardHeader>
                 <CardTitle className="text-xl text-foreground">Azioni Rapide</CardTitle>
                 <CardDescription>
-                  Accesso veloce alle funzionalità principali
+                  Accesso veloce alle funzionalita principali
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <Link href="/retailers">
                     <Button variant="outline" className="w-full h-auto py-4 flex-col gap-2">
                       <Store className="h-6 w-6" />
@@ -172,6 +374,12 @@ export default function Home() {
                     <Button variant="outline" className="w-full h-auto py-4 flex-col gap-2">
                       <Package className="h-6 w-6" />
                       <span>Gestisci Prodotti</span>
+                    </Button>
+                  </Link>
+                  <Link href="/orders/new">
+                    <Button variant="outline" className="w-full h-auto py-4 flex-col gap-2">
+                      <ShoppingCart className="h-6 w-6" />
+                      <span>Nuovo Ordine</span>
                     </Button>
                   </Link>
                   <Link href="/reports">
