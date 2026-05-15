@@ -1,4 +1,5 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import { daysToExpiry, getExpiryColorClass, getExpiryLabel } from "@/lib/expiry-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -518,16 +519,24 @@ export default function Movements() {
                           </TableCell>
                           <TableCell className="font-mono text-xs">
                             {m.batchNumber && m.productId ? (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setLocation(`/products/${m.productId}`)
-                                }
-                                className="hover:text-primary hover:underline"
-                                title={`${TYPE_LABELS[m.type as MovementType] ?? m.type}: vai al prodotto`}
-                              >
-                                {m.batchNumber}
-                              </button>
+                              <div>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setLocation(`/products/${m.productId}`)
+                                  }
+                                  className="hover:text-primary hover:underline"
+                                  title={`${TYPE_LABELS[m.type as MovementType] ?? m.type}: vai al prodotto`}
+                                >
+                                  {m.batchNumber}
+                                </button>
+                                {m.expirationDate && (() => {
+                                  const days = daysToExpiry(m.expirationDate);
+                                  const cls = getExpiryColorClass(days);
+                                  if (!cls) return null;
+                                  return <span className={`block text-[10px] ${cls}`}>{getExpiryLabel(days)}</span>;
+                                })()}
+                              </div>
                             ) : (
                               "-"
                             )}

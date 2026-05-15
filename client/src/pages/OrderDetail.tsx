@@ -8,6 +8,7 @@
  * - Note interne/esterne
  */
 import DashboardLayout from "@/components/DashboardLayout";
+import { daysToExpiry, getExpiryColorClass, getExpiryLabel } from "@/lib/expiry-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -152,6 +153,11 @@ function BatchSelector({
             </TooltipTrigger>
             <TooltipContent>
               Scad. {item.expirationDate ?? "—"}
+              {(() => {
+                const days = daysToExpiry(item.expirationDate);
+                const cls = getExpiryColorClass(days);
+                return cls ? <span className={`ml-1 ${cls}`}>({getExpiryLabel(days)})</span> : null;
+              })()}
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -183,8 +189,13 @@ function BatchSelector({
           {batchesQuery.data?.map((b) => (
             <SelectItem key={b.id} value={b.id}>
               <span className="font-mono">{b.batchNumber}</span>
-              <span className="text-muted-foreground ml-2 text-xs">
+              <span className={`ml-2 text-xs ${getExpiryColorClass(daysToExpiry(b.expirationDate)) || 'text-muted-foreground'}`}>
                 scad. {b.expirationDate}
+                {(() => {
+                  const days = daysToExpiry(b.expirationDate);
+                  const label = getExpiryLabel(days);
+                  return label ? ` (${label})` : '';
+                })()}
               </span>
             </SelectItem>
           ))}

@@ -1,4 +1,10 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import {
+  daysToExpiry as daysToExpiryFn,
+  getExpiryColorClass,
+  getExpiryLabel,
+  getExpiryBadgeVariant,
+} from "@/lib/expiry-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -324,24 +330,19 @@ export default function Products() {
   const formatDate = (d: string | null) =>
     d ? format(new Date(d), "dd/MM/yyyy") : "-";
 
-  const expirationBadge = (d: string | null) => {
+  const expirationBadge = (d: string | null, warningDays = 30) => {
     if (!d) return null;
-    const days = Math.floor((new Date(d).getTime() - now) / 86_400_000);
-    if (days <= 0) {
-      return (
-        <Badge variant="destructive" className="text-xs">
-          Scaduto
-        </Badge>
-      );
-    }
-    if (days <= 30) {
-      return (
-        <Badge className="text-xs bg-orange-500 hover:bg-orange-600">
-          {days}gg
-        </Badge>
-      );
-    }
-    return null;
+    const days = daysToExpiryFn(d);
+    if (days === null) return null;
+    const colorClass = getExpiryColorClass(days, warningDays);
+    if (!colorClass && days >= warningDays) return null; // nessun highlight
+    const label = getExpiryLabel(days);
+    const variant = getExpiryBadgeVariant(days);
+    return (
+      <Badge variant={variant} className="text-xs">
+        {label}
+      </Badge>
+    );
   };
 
   return (
@@ -869,7 +870,7 @@ export default function Products() {
                           <TableCell>
                             <div className="flex items-center gap-2">
                               <span>{formatDate(p.nearestExpiration)}</span>
-                              {expirationBadge(p.nearestExpiration)}
+                              {expirationBadge(p.nearestExpiration, p.expiryWarningDays ?? 30)}
                             </div>
                           </TableCell>
                         </TableRow>
