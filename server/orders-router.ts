@@ -19,6 +19,7 @@ import {
   orderItems,
   retailers,
   products,
+  productBatches,
 } from "../drizzle/schema";
 import { eq, desc, and, gte, lte, sql, inArray } from "drizzle-orm";
 import { calculateOrderPricing, type PricingItemInput } from "./pricing";
@@ -163,12 +164,29 @@ export const ordersRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
       }
 
-      const items = await db
-        .select()
+       const items = await db
+        .select({
+          id: orderItems.id,
+          orderId: orderItems.orderId,
+          productId: orderItems.productId,
+          batchId: orderItems.batchId,
+          quantity: orderItems.quantity,
+          unitPriceBase: orderItems.unitPriceBase,
+          discountPercent: orderItems.discountPercent,
+          unitPriceFinal: orderItems.unitPriceFinal,
+          vatRate: orderItems.vatRate,
+          lineTotalNet: orderItems.lineTotalNet,
+          lineTotalGross: orderItems.lineTotalGross,
+          productSku: orderItems.productSku,
+          productName: orderItems.productName,
+          createdAt: orderItems.createdAt,
+          batchNumber: productBatches.batchNumber,
+          expirationDate: productBatches.expirationDate,
+        })
         .from(orderItems)
+        .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
         .where(eq(orderItems.orderId, input.id))
         .orderBy(orderItems.createdAt);
-
       return { ...order, items };
     }),
 
@@ -357,6 +375,21 @@ export const ordersRouter = router({
         });
       }
 
+      // Validazione pre-shipped: tutti gli items devono avere batchId assegnato
+      if (input.newStatus === "shipped") {
+        const items = await db
+          .select({ id: orderItems.id, batchId: orderItems.batchId, productName: orderItems.productName })
+          .from(orderItems)
+          .where(eq(orderItems.orderId, input.orderId));
+        const unassigned = items.filter((it) => !it.batchId);
+        if (unassigned.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Impossibile spedire: ${unassigned.length} item(s) senza lotto assegnato (${unassigned.map((u) => u.productName).join(", ")})`,
+          });
+        }
+      }
+
       // Timestamp per lo status
       const timestampMap: Record<string, string> = {
         paid: "paidAt",
@@ -382,6 +415,111 @@ export const ordersRouter = router({
 
   /**
    * 7. Genera proforma FiC e salva riferimento
+   */
+  /**
+   * 8. Assegna/rimuovi lotto su un orderItem
+   */
+  assignBatch: protectedProcedure
+    .input(
+      z.object({
+        orderItemId: z.string().uuid(),
+        batchId: z.string().uuid().nullable(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+      // Verifica orderItem esiste
+      const [item] = await db
+        .select({
+          id: orderItems.id,
+          orderId: orderItems.orderId,
+          productId: orderItems.productId,
+        })
+        .from(orderItems)
+        .where(eq(orderItems.id, input.orderItemId))
+        .limit(1);
+
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item ordine non trovato" });
+
+      // Verifica ordine non è in stato finale
+      const [order] = await db
+        .select({ status: orders.status })
+        .from(orders)
+        .where(eq(orders.id, item.orderId))
+        .limit(1);
+
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
+      if (["delivered", "cancelled"].includes(order.status)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Non è possibile modificare lotti su un ordine ${order.status}`,
+        });
+      }
+
+      if (input.batchId) {
+        // Verifica batch esiste e appartiene allo stesso prodotto
+        const [batch] = await db
+          .select({
+            id: productBatches.id,
+            productId: productBatches.productId,
+            batchNumber: productBatches.batchNumber,
+            expirationDate: productBatches.expirationDate,
+          })
+          .from(productBatches)
+          .where(eq(productBatches.id, input.batchId))
+          .limit(1);
+
+        if (!batch) throw new TRPCError({ code: "NOT_FOUND", message: "Lotto non trovato" });
+        if (batch.productId !== item.productId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Il lotto selezionato non appartiene allo stesso prodotto dell'item",
+          });
+        }
+
+        await db
+          .update(orderItems)
+          .set({ batchId: input.batchId })
+          .where(eq(orderItems.id, input.orderItemId));
+
+        return { batchId: input.batchId, batchNumber: batch.batchNumber, expirationDate: batch.expirationDate };
+      } else {
+        // Rimuovi assegnazione
+        await db
+          .update(orderItems)
+          .set({ batchId: null })
+          .where(eq(orderItems.id, input.orderItemId));
+
+        return { batchId: null, batchNumber: null, expirationDate: null };
+      }
+    }),
+
+  /**
+   * 9. Lista lotti disponibili per un prodotto (per dropdown assegnazione)
+   */
+  batchesForProduct: protectedProcedure
+    .input(z.object({ productId: z.string().uuid() }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+      const batches = await db
+        .select({
+          id: productBatches.id,
+          batchNumber: productBatches.batchNumber,
+          expirationDate: productBatches.expirationDate,
+        })
+        .from(productBatches)
+        .where(eq(productBatches.productId, input.productId))
+        .orderBy(productBatches.expirationDate);
+
+      return batches;
+    }),
+
+  /**
+   * 10. Genera proforma FiC e salva riferimento
    */
   generateProforma: protectedProcedure
     .input(z.object({ orderId: z.string().uuid() }))
