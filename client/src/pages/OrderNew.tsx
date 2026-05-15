@@ -1,5 +1,5 @@
 /**
- * M6.2.A — OrderNew page (Admin) — UX fix
+ * M6.2.A — OrderNew page (Admin) — UX fix v2
  *
  * Layout responsive:
  * - Carrello VUOTO: nascosto, catalogo full-width. FAB bottom-right "Carrello (0)".
@@ -7,6 +7,11 @@
  *
  * Catalogo: SKU, Prodotto, Prezzo, Stock disponibile, IVA badge, Azione "+".
  * Ricerca client-side con count risultati. Query prodotti una sola volta.
+ *
+ * Fix v2:
+ * - CartContent estratto come componente separato (no unmount/remount su re-render)
+ * - Prezzo riga: lineTotalNet (netto IVA esclusa) per coerenza B2B
+ * - Sconto pacchetto: mostra nome pacchetto (es. "Premium 46.48%")
  */
 import DashboardLayout from "@/components/DashboardLayout";
 import { Badge } from "@/components/ui/badge";
@@ -51,7 +56,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 
@@ -60,8 +65,204 @@ type CartItem = {
   quantity: number;
 };
 
+type PreviewData = {
+  discountPercent: string;
+  packageName: string | null;
+  items: Array<{
+    productId: string;
+    lineTotalNet: string;
+    lineTotalGross: string;
+    stockAvailableConfezioni: number;
+    stockWarning: boolean;
+  }>;
+  subtotalNet: string;
+  vatAmount: string;
+  totalGross: string;
+  warnings: string[];
+};
+
 const NO_RETAILER = "__none__";
 
+// ====================== COMPONENTE CARRELLO (estratto per evitare unmount/remount) ======================
+function CartContent({
+  cart,
+  productMap,
+  previewData,
+  previewIsPending,
+  previewError,
+  retailerId,
+  isSubmitting,
+  onSetQuantity,
+  onRemove,
+  onSubmit,
+}: {
+  cart: CartItem[];
+  productMap: Map<string, any>;
+  previewData: PreviewData | undefined;
+  previewIsPending: boolean;
+  previewError: string | null;
+  retailerId: string;
+  isSubmitting: boolean;
+  onSetQuantity: (productId: string, qty: number) => void;
+  onRemove: (productId: string) => void;
+  onSubmit: () => void;
+}) {
+  // Ref per preservare scroll position durante re-render
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const totalCartQty = cart.reduce((sum, c) => sum + c.quantity, 0);
+
+  return (
+    <div className="space-y-4">
+      {cart.length === 0 ? (
+        <p className="text-sm text-muted-foreground text-center py-6">
+          Aggiungi prodotti dal catalogo
+        </p>
+      ) : (
+        <div ref={scrollRef} className="space-y-3 max-h-[50vh] overflow-y-auto pr-1">
+          {cart.map((item) => {
+            const prod = productMap.get(item.productId);
+            const previewItem = previewData?.items.find(
+              (pi) => pi.productId === item.productId,
+            );
+            return (
+              <div key={item.productId} className="border rounded-lg p-3 space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">
+                      {prod?.name ?? item.productId}
+                    </p>
+                    <p className="text-xs text-muted-foreground font-mono">{prod?.sku}</p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0"
+                    onClick={() => onRemove(item.productId)}
+                  >
+                    <Trash2 className="h-3 w-3 text-destructive" />
+                  </Button>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => onSetQuantity(item.productId, item.quantity - 1)}
+                    >
+                      <Minus className="h-3 w-3" />
+                    </Button>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={9999}
+                      value={item.quantity}
+                      onChange={(e) =>
+                        onSetQuantity(item.productId, parseInt(e.target.value) || 1)
+                      }
+                      className="w-16 h-7 text-center text-sm font-medium px-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => onSetQuantity(item.productId, item.quantity + 1)}
+                    >
+                      <Plus className="h-3 w-3" />
+                    </Button>
+                  </div>
+                  {previewItem && (
+                    <span className="text-sm font-mono font-medium">
+                      € {previewItem.lineTotalNet}
+                    </span>
+                  )}
+                </div>
+                {previewItem?.stockWarning && (
+                  <div className="flex items-center gap-1 text-xs text-amber-500">
+                    <AlertTriangle className="h-3 w-3" />
+                    Stock insufficiente ({previewItem.stockAvailableConfezioni} disp.)
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Riepilogo pricing */}
+      {previewData && cart.length > 0 && (
+        <>
+          <Separator />
+          <div className="space-y-2 text-sm">
+            {parseFloat(previewData.discountPercent) > 0 && (
+              <div className="flex justify-between text-muted-foreground">
+                <span>
+                  Sconto{" "}
+                  {previewData.packageName
+                    ? `${previewData.packageName}`
+                    : "pacchetto"}
+                </span>
+                <span className="text-green-500">-{previewData.discountPercent}%</span>
+              </div>
+            )}
+            <div className="flex justify-between text-muted-foreground">
+              <span>Subtotale netto</span>
+              <span className="font-mono">€ {previewData.subtotalNet}</span>
+            </div>
+            <div className="flex justify-between text-muted-foreground">
+              <span>IVA</span>
+              <span className="font-mono">€ {previewData.vatAmount}</span>
+            </div>
+            <Separator />
+            <div className="flex justify-between font-semibold text-base">
+              <span>Totale lordo</span>
+              <span className="font-mono">€ {previewData.totalGross}</span>
+            </div>
+          </div>
+
+          {previewData.warnings.length > 0 && (
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-md p-3 space-y-1">
+              {previewData.warnings.map((w, i) => (
+                <p key={i} className="text-xs text-amber-500 flex items-start gap-1">
+                  <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+                  {w}
+                </p>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {previewIsPending && cart.length > 0 && (
+        <div className="flex justify-center py-2">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        </div>
+      )}
+
+      {previewError && (
+        <p className="text-xs text-destructive text-center">
+          Errore calcolo prezzi: {previewError}
+        </p>
+      )}
+
+      <Button
+        className="w-full"
+        disabled={retailerId === NO_RETAILER || cart.length === 0 || isSubmitting}
+        onClick={onSubmit}
+      >
+        {isSubmitting ? (
+          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+        ) : (
+          <ShoppingCart className="h-4 w-4 mr-2" />
+        )}
+        Crea Ordine ({totalCartQty} pz)
+      </Button>
+    </div>
+  );
+}
+
+// ====================== COMPONENTE PRINCIPALE ======================
 export default function OrderNew() {
   const [, setLocation] = useLocation();
   const [retailerId, setRetailerId] = useState(NO_RETAILER);
@@ -135,7 +336,7 @@ export default function OrderNew() {
   const cartProductIds = useMemo(() => new Set(cart.map((c) => c.productId)), [cart]);
   const hasCartItems = cart.length > 0;
 
-  // --- Cart actions ---
+  // --- Cart actions (useCallback per stabilità reference) ---
   const addToCart = useCallback((productId: string) => {
     setCart((prev) => {
       const existing = prev.find((c) => c.productId === productId);
@@ -160,7 +361,7 @@ export default function OrderNew() {
   }, []);
 
   // Submit
-  const handleSubmit = () => {
+  const handleSubmit = useCallback(() => {
     if (retailerId === NO_RETAILER) {
       toast.error("Seleziona un rivenditore");
       return;
@@ -176,155 +377,24 @@ export default function OrderNew() {
       notes: notes || undefined,
       notesInternal: notesInternal || undefined,
     });
-  };
+  }, [retailerId, cart, notes, notesInternal, createOrder]);
 
   // Conteggio totale pezzi nel carrello
   const totalCartQty = cart.reduce((sum, c) => sum + c.quantity, 0);
 
-  // --- Componente carrello riusabile (desktop sidebar + mobile sheet) ---
-  const CartContent = () => (
-    <div className="space-y-4">
-      {cart.length === 0 ? (
-        <p className="text-sm text-muted-foreground text-center py-6">
-          Aggiungi prodotti dal catalogo
-        </p>
-      ) : (
-        <div className="space-y-3 max-h-[50vh] overflow-y-auto pr-1">
-          {cart.map((item) => {
-            const prod = productMap.get(item.productId);
-            const previewItem = preview.data?.items.find(
-              (pi) => pi.productId === item.productId,
-            );
-            return (
-              <div key={item.productId} className="border rounded-lg p-3 space-y-2">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">
-                      {prod?.name ?? item.productId}
-                    </p>
-                    <p className="text-xs text-muted-foreground font-mono">{prod?.sku}</p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 shrink-0"
-                    onClick={() => removeFromCart(item.productId)}
-                  >
-                    <Trash2 className="h-3 w-3 text-destructive" />
-                  </Button>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={() => setQuantity(item.productId, item.quantity - 1)}
-                    >
-                      <Minus className="h-3 w-3" />
-                    </Button>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={9999}
-                      value={item.quantity}
-                      onChange={(e) =>
-                        setQuantity(item.productId, parseInt(e.target.value) || 1)
-                      }
-                      className="w-16 h-7 text-center text-sm font-medium px-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                    />
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={() => setQuantity(item.productId, item.quantity + 1)}
-                    >
-                      <Plus className="h-3 w-3" />
-                    </Button>
-                  </div>
-                  {previewItem && (
-                    <span className="text-sm font-mono font-medium">
-                      € {previewItem.lineTotalNet}
-                    </span>
-                  )}
-                </div>
-                {previewItem?.stockWarning && (
-                  <div className="flex items-center gap-1 text-xs text-amber-500">
-                    <AlertTriangle className="h-3 w-3" />
-                    Stock insufficiente ({previewItem.stockAvailableConfezioni} disp.)
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Riepilogo pricing */}
-      {preview.data && cart.length > 0 && (
-        <>
-          <Separator />
-          <div className="space-y-2 text-sm">
-            {parseFloat(preview.data.discountPercent) > 0 && (
-              <div className="flex justify-between text-muted-foreground">
-                <span>Sconto pacchetto</span>
-                <span className="text-green-500">-{preview.data.discountPercent}%</span>
-              </div>
-            )}
-            <div className="flex justify-between text-muted-foreground">
-              <span>Subtotale netto</span>
-              <span className="font-mono">€ {preview.data.subtotalNet}</span>
-            </div>
-            <div className="flex justify-between text-muted-foreground">
-              <span>IVA</span>
-              <span className="font-mono">€ {preview.data.vatAmount}</span>
-            </div>
-            <Separator />
-            <div className="flex justify-between font-semibold text-base">
-              <span>Totale lordo</span>
-              <span className="font-mono">€ {preview.data.totalGross}</span>
-            </div>
-          </div>
-
-          {preview.data.warnings.length > 0 && (
-            <div className="bg-amber-500/10 border border-amber-500/20 rounded-md p-3 space-y-1">
-              {preview.data.warnings.map((w, i) => (
-                <p key={i} className="text-xs text-amber-500 flex items-start gap-1">
-                  <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
-                  {w}
-                </p>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-
-      {preview.isPending && cart.length > 0 && (
-        <div className="flex justify-center py-2">
-          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        </div>
-      )}
-
-      {preview.isError && (
-        <p className="text-xs text-destructive text-center">
-          Errore calcolo prezzi: {preview.error.message}
-        </p>
-      )}
-
-      <Button
-        className="w-full"
-        disabled={retailerId === NO_RETAILER || cart.length === 0 || isSubmitting}
-        onClick={handleSubmit}
-      >
-        {isSubmitting ? (
-          <Loader2 className="h-4 w-4 animate-spin mr-2" />
-        ) : (
-          <ShoppingCart className="h-4 w-4 mr-2" />
-        )}
-        Crea Ordine
-      </Button>
-    </div>
-  );
+  // Props condivise per CartContent (desktop + mobile)
+  const cartContentProps = {
+    cart,
+    productMap,
+    previewData: preview.data as PreviewData | undefined,
+    previewIsPending: preview.isPending,
+    previewError: preview.isError ? preview.error.message : null,
+    retailerId,
+    isSubmitting,
+    onSetQuantity: setQuantity,
+    onRemove: removeFromCart,
+    onSubmit: handleSubmit,
+  };
 
   return (
     <DashboardLayout>
@@ -550,7 +620,7 @@ export default function OrderNew() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <CartContent />
+                  <CartContent {...cartContentProps} />
                 </CardContent>
               </Card>
             </div>
@@ -591,7 +661,7 @@ export default function OrderNew() {
                 </SheetTitle>
               </SheetHeader>
               <div className="mt-4">
-                <CartContent />
+                <CartContent {...cartContentProps} />
               </div>
             </SheetContent>
           </Sheet>

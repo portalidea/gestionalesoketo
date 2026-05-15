@@ -36,6 +36,7 @@ export interface PricingItemOutput {
 
 export interface PricingResult {
   discountPercent: string; // 2 decimali
+  packageName: string | null; // nome pacchetto pricing (null se prezzo pieno)
   items: PricingItemOutput[];
   subtotalNet: string; // 2 decimali
   vatAmount: string; // 2 decimali
@@ -70,14 +71,19 @@ export async function calculateOrderPricing(
   if (!retailer) throw new Error("Retailer non trovato");
 
   let discountPercent = 0;
+  let packageName: string | null = null;
   if (retailer.pricingPackageId) {
     const [pkg] = await db
-      .select({ discountPercent: pricingPackages.discountPercent })
+      .select({
+        discountPercent: pricingPackages.discountPercent,
+        name: pricingPackages.name,
+      })
       .from(pricingPackages)
       .where(eq(pricingPackages.id, retailer.pricingPackageId))
       .limit(1);
     if (pkg) {
       discountPercent = parseFloat(pkg.discountPercent);
+      packageName = pkg.name;
     }
   }
 
@@ -170,6 +176,7 @@ export async function calculateOrderPricing(
 
   return {
     discountPercent: discountPercent.toFixed(2),
+    packageName,
     items: pricedItems,
     subtotalNet: roundTo2(sumNet).toFixed(2),
     vatAmount: roundTo2(sumVat).toFixed(2),
