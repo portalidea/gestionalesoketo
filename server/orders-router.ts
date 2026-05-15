@@ -775,4 +775,125 @@ export const ordersRouter = router({
         ficProformaNumber: proforma.number,
       };
     }),
+
+  /**
+   * 8. Rigenera proforma FiC (reset + ricrea)
+   */
+  regenerateProforma: protectedProcedure
+    .input(z.object({ orderId: z.string().uuid() }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+      // Reset ficProformaId e ficProformaNumber
+      await db
+        .update(orders)
+        .set({
+          ficProformaId: null,
+          ficProformaNumber: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(orders.id, input.orderId));
+
+      // Riusa la logica di generateProforma
+      // Fetch order
+      const [order] = await db
+        .select({
+          id: orders.id,
+          orderNumber: orders.orderNumber,
+          retailerId: orders.retailerId,
+          totalGross: orders.totalGross,
+          notesInternal: orders.notesInternal,
+        })
+        .from(orders)
+        .where(eq(orders.id, input.orderId))
+        .limit(1);
+
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
+
+      // Verifica retailer ha ficClientId
+      const [retailer] = await db
+        .select({ ficClientId: retailers.ficClientId, name: retailers.name })
+        .from(retailers)
+        .where(eq(retailers.id, order.retailerId))
+        .limit(1);
+
+      if (!retailer?.ficClientId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Retailer non ha ficClientId associato",
+        });
+      }
+
+      // Carica items con product description e batch info
+      const items = await db
+        .select({
+          id: orderItems.id,
+          productSku: orderItems.productSku,
+          productName: orderItems.productName,
+          quantity: orderItems.quantity,
+          unitPriceFinal: orderItems.unitPriceFinal,
+          vatRate: orderItems.vatRate,
+          batchId: orderItems.batchId,
+          productDescription: products.description,
+          batchNumber: productBatches.batchNumber,
+          expirationDate: productBatches.expirationDate,
+        })
+        .from(orderItems)
+        .leftJoin(products, eq(orderItems.productId, products.id))
+        .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
+        .where(eq(orderItems.orderId, input.orderId));
+
+      if (items.length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Ordine senza righe" });
+      }
+
+      // Crea proforma su FiC — name multi-riga, no code
+      const ficItems = items.map((it) => {
+        const lines: string[] = [it.productName];
+        if (it.productDescription?.trim()) {
+          lines.push(it.productDescription.trim());
+        }
+        if (it.batchId && it.batchNumber) {
+          const expDate = it.expirationDate
+            ? new Date(it.expirationDate).toLocaleDateString("it-IT")
+            : null;
+          lines.push(
+            expDate
+              ? `Lotto: ${it.batchNumber} - Scadenza: ${expDate}`
+              : `Lotto: ${it.batchNumber}`,
+          );
+        }
+        return {
+          description: lines.join("\n"),
+          qty: it.quantity,
+          unitPriceFinal: it.unitPriceFinal,
+          vatRate: it.vatRate,
+        };
+      });
+
+      const proforma = await createFicProforma({
+        ficClientId: retailer.ficClientId,
+        date: new Date().toISOString().split("T")[0],
+        orderNumber: order.orderNumber ?? undefined,
+        totalGross: order.totalGross ? parseFloat(order.totalGross) : undefined,
+        notesInternal: `Ordine ${order.orderNumber} (rigenerata)${order.notesInternal ? ` — ${order.notesInternal}` : ""}`,
+        items: ficItems,
+      });
+
+      // Salva nuovi riferimenti proforma
+      await db
+        .update(orders)
+        .set({
+          ficProformaId: proforma.id,
+          ficProformaNumber: proforma.number,
+          updatedAt: new Date(),
+        })
+        .where(eq(orders.id, input.orderId));
+
+      return {
+        ficProformaId: proforma.id,
+        ficProformaNumber: proforma.number,
+      };
+    }),
 });

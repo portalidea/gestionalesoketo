@@ -21,6 +21,17 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -48,6 +59,7 @@ import {
   Loader2,
   Package,
   ShoppingCart,
+  RefreshCw,
   Truck,
   XCircle,
 } from "lucide-react";
@@ -234,6 +246,17 @@ export default function OrderDetail() {
     },
     onError: (err) => {
       toast.error(`Errore generazione proforma: ${err.message}`);
+    },
+  });
+
+  const regenerateProforma = trpc.orders.regenerateProforma.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Proforma rigenerata: ${data.ficProformaNumber}`);
+      utils.orders.getById.invalidate({ id: params.id ?? "" });
+      utils.orders.list.invalidate();
+    },
+    onError: (err) => {
+      toast.error(`Errore rigenerazione proforma: ${err.message}`);
     },
   });
 
@@ -586,9 +609,46 @@ export default function OrderDetail() {
                 )}
 
                 {order.ficProformaId && (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <CheckCircle2 className="h-4 w-4 text-green-500" />
-                    Proforma già generata
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <CheckCircle2 className="h-4 w-4 text-green-500" />
+                      Proforma già generata
+                    </div>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full justify-start gap-2 text-destructive border-destructive/30 hover:bg-destructive/10"
+                          disabled={regenerateProforma.isPending}
+                        >
+                          {regenerateProforma.isPending ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <RefreshCw className="h-4 w-4" />
+                          )}
+                          Rigenera Proforma
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Rigenera proforma?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Se la proforma precedente esiste ancora su FiC, verrà creata una duplicata.
+                            Assicurati di aver cancellato la proforma precedente dal pannello FiC prima di procedere.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Annulla</AlertDialogCancel>
+                          <AlertDialogAction
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            onClick={() => regenerateProforma.mutate({ orderId: order.id })}
+                          >
+                            Rigenera
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
                   </div>
                 )}
               </CardContent>
