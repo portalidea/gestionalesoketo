@@ -343,6 +343,54 @@ export async function refreshFicClients(): Promise<{
   return { clients, refreshedAt };
 }
 
+// ─── Single FiC Client fetch (by id) with cache ─────────────────────────
+const ficClientByIdCache = new Map<number, { data: FicClientInfo; fetchedAt: number }>();
+const FIC_CLIENT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 min
+
+/**
+ * Fetch un singolo cliente FiC per id.
+ * Prima cerca nella clientsCache locale (metadata DB), poi fallback a API diretta.
+ * Cache in-memory 5 min per evitare chiamate ripetute.
+ */
+export async function getFicClientById(clientId: number): Promise<FicClientInfo> {
+  // Check in-memory cache
+  const cached = ficClientByIdCache.get(clientId);
+  if (cached && Date.now() - cached.fetchedAt < FIC_CLIENT_CACHE_TTL_MS) {
+    console.log(`[fic:getClientById] cache HIT id=${clientId}`);
+    return cached.data;
+  }
+
+  // Try clientsCache from DB metadata first (no API call)
+  try {
+    const { clients } = await getFicClients();
+    const fromCache = clients.find((c) => c.id === clientId);
+    if (fromCache) {
+      console.log(`[fic:getClientById] found in clientsCache id=${clientId} name=${fromCache.name}`);
+      ficClientByIdCache.set(clientId, { data: fromCache, fetchedAt: Date.now() });
+      return fromCache;
+    }
+  } catch (e) {
+    console.warn("[fic:getClientById] clientsCache lookup failed, trying API", e);
+  }
+
+  // Fallback: direct API call
+  console.log(`[fic:getClientById] API fetch id=${clientId}`);
+  const { accessToken, companyId } = await getValidFicAccessToken();
+  try {
+    const r = await axios.get<{ data: FicClientInfo }>(
+      `${FIC_API_BASE}/c/${companyId}/entities/clients/${clientId}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    const client = r.data?.data;
+    if (!client) throw new Error(`FiC client id=${clientId} non trovato`);
+    ficClientByIdCache.set(clientId, { data: client, fetchedAt: Date.now() });
+    return client;
+  } catch (e: any) {
+    console.error(`[fic:getClientById] API error for id=${clientId}:`, e?.response?.data ?? e?.message);
+    throw new Error(`Impossibile recuperare cliente FiC id=${clientId}: ${e?.response?.data?.error?.message ?? e?.message}`);
+  }
+}
+
 // ─── VAT Types cache in-memory ───────────────────────────────────────────
 
 export interface FicVatType {
@@ -527,38 +575,14 @@ export async function createFicProforma(input: {
     },
   ];
 
+  // Fetch entity completa da FiC API (cached 5 min)
+  const ficEntity = await getFicClientById(input.ficClientId);
+  console.log(`[fic:createProforma] entity: ${ficEntity.name} (id=${ficEntity.id})`);
+
   const body = {
     data: {
       type: "proforma",
-      entity: await (async () => {
-        // Fetch entity completa dalla cache FiC clients
-        try {
-          const { clients } = await getFicClients();
-          const ficClient = clients.find((c) => c.id === input.ficClientId);
-          if (ficClient) {
-            console.log(`[fic:createProforma] entity from cache: ${ficClient.name} (id=${ficClient.id})`);
-            return {
-              id: ficClient.id,
-              name: ficClient.name,
-              vat_number: ficClient.vat_number ?? "",
-              tax_code: ficClient.tax_code ?? "",
-              address_street: ficClient.address_street ?? "",
-              address_postal_code: ficClient.address_postal_code ?? "",
-              address_city: ficClient.address_city ?? "",
-              address_province: ficClient.address_province ?? "",
-              country: ficClient.country ?? "Italia",
-              country_iso: ficClient.country_iso ?? "IT",
-              email: ficClient.email ?? "",
-              type: ficClient.type ?? "company",
-            };
-          }
-        } catch (e) {
-          console.warn("[fic:createProforma] Failed to fetch FiC client from cache, falling back to id-only", e);
-        }
-        // Fallback: solo id (FiC potrebbe risolverlo se il cliente esiste)
-        console.warn(`[fic:createProforma] entity fallback id-only: ${input.ficClientId}`);
-        return { id: input.ficClientId };
-      })(),
+      entity: ficEntity,
       date: input.date,
       currency: { id: "EUR" },
       payment_method: { id: paymentMethodId },
