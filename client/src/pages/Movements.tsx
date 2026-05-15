@@ -46,8 +46,13 @@ import {
   Truck,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
+import {
+  SortableTableHead,
+  sortData,
+  type SortConfig,
+} from "@/components/SortableTableHead";
 
 const PAGE_SIZE = 50;
 const ALL_TYPES_VALUE = "__all__";
@@ -232,6 +237,7 @@ function MovementBadge({ type }: { type: string }) {
 
 export default function Movements() {
   const [, setLocation] = useLocation();
+  const [sort, setSort] = useState<SortConfig>(null);
 
   // ============== Filters state ==============
   const [filterType, setFilterType] = useState<string>(ALL_TYPES_VALUE);
@@ -309,7 +315,24 @@ export default function Movements() {
     },
   });
 
-  const items = data?.items ?? [];
+  const rawItems = data?.items ?? [];
+  const items = useMemo(
+    () =>
+      sort
+        ? sortData(rawItems, sort, (item, key) => {
+            switch (key) {
+              case "timestamp": return item.timestamp ? new Date(item.timestamp) : null;
+              case "type": return item.type;
+              case "batchNumber": return item.batchNumber ?? "";
+              case "productName": return item.productName ?? "";
+              case "quantity": return item.quantity;
+              case "fromTo": return `${item.fromLocationName ?? ""} ${item.toLocationName ?? ""}`;
+              default: return null;
+            }
+          })
+        : rawItems,
+    [rawItems, sort],
+  );
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -462,12 +485,12 @@ export default function Movements() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Data/Ora</TableHead>
-                      <TableHead>Tipo</TableHead>
-                      <TableHead>Lotto</TableHead>
-                      <TableHead>Prodotto</TableHead>
-                      <TableHead className="text-right">Qty</TableHead>
-                      <TableHead>Da → A</TableHead>
+                      <SortableTableHead sortKey="timestamp" sort={sort} onSort={setSort}>Data/Ora</SortableTableHead>
+                      <SortableTableHead sortKey="type" sort={sort} onSort={setSort}>Tipo</SortableTableHead>
+                      <SortableTableHead sortKey="batchNumber" sort={sort} onSort={setSort}>Lotto</SortableTableHead>
+                      <SortableTableHead sortKey="productName" sort={sort} onSort={setSort}>Prodotto</SortableTableHead>
+                      <SortableTableHead sortKey="quantity" sort={sort} onSort={setSort} className="text-right">Qty</SortableTableHead>
+                      <SortableTableHead sortKey="fromTo" sort={sort} onSort={setSort}>Da → A</SortableTableHead>
                       <TableHead>Note</TableHead>
                       <TableHead>Proforma</TableHead>
                     </TableRow>

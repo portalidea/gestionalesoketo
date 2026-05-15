@@ -42,9 +42,14 @@ import {
   Plus,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
-import { useLocation } from "wouter";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation, useSearch } from "wouter";
 import { toast } from "sonner";
+import {
+  SortableTableHead,
+  sortData,
+  type SortConfig,
+} from "@/components/SortableTableHead";
 
 const NO_PRODUCER_VALUE = "__none__";
 
@@ -100,9 +105,60 @@ const EMPTY_FORM: FormData = {
 };
 
 export default function Products() {
-  const { data: products, isLoading } = trpc.products.list.useQuery();
+  const { data: rawProducts, isLoading } = trpc.products.list.useQuery();
   const { data: producers } = trpc.producers.list.useQuery();
   const [, setLocation] = useLocation();
+  const searchStr = useSearch();
+
+  // Sort state from URL query params
+  const sortFromUrl = useMemo((): SortConfig => {
+    const params = new URLSearchParams(searchStr);
+    const key = params.get("sort");
+    const dir = params.get("dir");
+    if (key && (dir === "asc" || dir === "desc")) return { key, dir };
+    return null;
+  }, [searchStr]);
+
+  const setSort = useCallback(
+    (config: SortConfig) => {
+      const params = new URLSearchParams(searchStr);
+      if (config) {
+        params.set("sort", config.key);
+        params.set("dir", config.dir);
+      } else {
+        params.delete("sort");
+        params.delete("dir");
+      }
+      const qs = params.toString();
+      setLocation(`/products${qs ? `?${qs}` : ""}`, { replace: true });
+    },
+    [searchStr, setLocation],
+  );
+
+  // Sort accessor for products
+  const productAccessor = useCallback(
+    (item: NonNullable<typeof rawProducts>[number], key: string): unknown => {
+      switch (key) {
+        case "name": return item.name;
+        case "sku": return item.sku;
+        case "category": return item.category ?? "";
+        case "unitPrice": return item.unitPrice ? parseFloat(item.unitPrice) : 0;
+        case "vatRate": return parseFloat(item.vatRate);
+        case "minStockThreshold": return item.minStockThreshold ?? 0;
+        case "centralStock": return item.centralStock;
+        case "totalStock": return item.totalStock;
+        case "activeBatchCount": return item.activeBatchCount;
+        case "nearestExpiration": return item.nearestExpiration ? new Date(item.nearestExpiration) : null;
+        default: return null;
+      }
+    },
+    [],
+  );
+
+  const products = useMemo(
+    () => (rawProducts ? sortData(rawProducts, sortFromUrl, productAccessor) : undefined),
+    [rawProducts, sortFromUrl, productAccessor],
+  );
   const [dialogOpen, setDialogOpen] = useState(false);
   const utils = trpc.useUtils();
 
@@ -743,16 +799,16 @@ export default function Products() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Nome</TableHead>
-                      <TableHead>SKU</TableHead>
-                      <TableHead>Categoria</TableHead>
-                      <TableHead className="text-right">Prezzo</TableHead>
-                      <TableHead className="text-right">IVA</TableHead>
-                      <TableHead className="text-right">Soglia min</TableHead>
-                      <TableHead className="text-right">Stock centrale</TableHead>
-                      <TableHead className="text-right">Stock totale</TableHead>
-                      <TableHead className="text-right">Lotti attivi</TableHead>
-                      <TableHead>Scadenza più vicina</TableHead>
+                      <SortableTableHead sortKey="name" sort={sortFromUrl} onSort={setSort}>Nome</SortableTableHead>
+                      <SortableTableHead sortKey="sku" sort={sortFromUrl} onSort={setSort}>SKU</SortableTableHead>
+                      <SortableTableHead sortKey="category" sort={sortFromUrl} onSort={setSort}>Categoria</SortableTableHead>
+                      <SortableTableHead sortKey="unitPrice" sort={sortFromUrl} onSort={setSort} className="text-right">Prezzo</SortableTableHead>
+                      <SortableTableHead sortKey="vatRate" sort={sortFromUrl} onSort={setSort} className="text-right">IVA</SortableTableHead>
+                      <SortableTableHead sortKey="minStockThreshold" sort={sortFromUrl} onSort={setSort} className="text-right">Soglia min</SortableTableHead>
+                      <SortableTableHead sortKey="centralStock" sort={sortFromUrl} onSort={setSort} className="text-right">Stock centrale</SortableTableHead>
+                      <SortableTableHead sortKey="totalStock" sort={sortFromUrl} onSort={setSort} className="text-right">Stock totale</SortableTableHead>
+                      <SortableTableHead sortKey="activeBatchCount" sort={sortFromUrl} onSort={setSort} className="text-right">Lotti attivi</SortableTableHead>
+                      <SortableTableHead sortKey="nearestExpiration" sort={sortFromUrl} onSort={setSort}>Scadenza più vicina</SortableTableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>

@@ -33,8 +33,13 @@ import {
   Plus,
   ShoppingCart,
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useLocation } from "wouter";
+import {
+  SortableTableHead,
+  sortData,
+  type SortConfig,
+} from "@/components/SortableTableHead";
 
 const STATUS_LABELS: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   pending: { label: "In attesa", variant: "outline" },
@@ -49,6 +54,7 @@ const ALL_STATUSES = "ALL_STATUSES";
 
 export default function Orders() {
   const [, setLocation] = useLocation();
+  const [sort, setSort] = useState<SortConfig>(null);
   const [statusFilter, setStatusFilter] = useState<string>(ALL_STATUSES);
   const [retailerFilter, setRetailerFilter] = useState<string>("ALL_RETAILERS");
   const [dateFrom, setDateFrom] = useState("");
@@ -161,16 +167,29 @@ export default function Orders() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>N. Ordine</TableHead>
-                      <TableHead>Rivenditore</TableHead>
-                      <TableHead>Stato</TableHead>
-                      <TableHead className="text-right">Totale lordo</TableHead>
-                      <TableHead>Proforma FiC</TableHead>
-                      <TableHead>Data</TableHead>
+                      <SortableTableHead sortKey="orderNumber" sort={sort} onSort={setSort}>N. Ordine</SortableTableHead>
+                      <SortableTableHead sortKey="retailerName" sort={sort} onSort={setSort}>Rivenditore</SortableTableHead>
+                      <SortableTableHead sortKey="status" sort={sort} onSort={setSort}>Stato</SortableTableHead>
+                      <SortableTableHead sortKey="totalGross" sort={sort} onSort={setSort} className="text-right">Totale lordo</SortableTableHead>
+                      <SortableTableHead sortKey="ficProformaNumber" sort={sort} onSort={setSort}>Proforma FiC</SortableTableHead>
+                      <SortableTableHead sortKey="createdAt" sort={sort} onSort={setSort}>Data</SortableTableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {ordersQuery.data?.orders.map((order) => {
+                    {(sort
+                      ? sortData(ordersQuery.data?.orders ?? [], sort, (item, key) => {
+                          switch (key) {
+                            case "orderNumber": return item.orderNumber;
+                            case "retailerName": return item.retailerName;
+                            case "status": return item.status;
+                            case "totalGross": return parseFloat(item.totalGross);
+                            case "ficProformaNumber": return item.ficProformaNumber ?? "";
+                            case "createdAt": return item.createdAt ? new Date(item.createdAt) : null;
+                            default: return null;
+                          }
+                        })
+                      : ordersQuery.data?.orders ?? []
+                    ).map((order) => {
                       const st = STATUS_LABELS[order.status] ?? { label: order.status, variant: "outline" as const };
                       return (
                         <TableRow

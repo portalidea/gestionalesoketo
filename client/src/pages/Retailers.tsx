@@ -51,8 +51,13 @@ import {
   Store,
   X,
 } from "lucide-react";
-import { useState } from "react";
-import { useLocation } from "wouter";
+import { useCallback, useMemo, useState } from "react";
+import { useLocation, useSearch } from "wouter";
+import {
+  SortableTableHead,
+  sortData,
+  type SortConfig,
+} from "@/components/SortableTableHead";
 import { toast } from "sonner";
 
 const EMPTY_FORM = {
@@ -83,8 +88,54 @@ type FicClient = {
 };
 
 export default function Retailers() {
-  const { data: retailers, isLoading } = trpc.retailers.list.useQuery();
+  const { data: rawRetailers, isLoading } = trpc.retailers.list.useQuery();
   const [, setLocation] = useLocation();
+  const searchStr = useSearch();
+
+  const sortFromUrl = useMemo((): SortConfig => {
+    const params = new URLSearchParams(searchStr);
+    const key = params.get("sort");
+    const dir = params.get("dir");
+    if (key && (dir === "asc" || dir === "desc")) return { key, dir };
+    return null;
+  }, [searchStr]);
+
+  const setSort = useCallback(
+    (config: SortConfig) => {
+      const params = new URLSearchParams(searchStr);
+      if (config) {
+        params.set("sort", config.key);
+        params.set("dir", config.dir);
+      } else {
+        params.delete("sort");
+        params.delete("dir");
+      }
+      const qs = params.toString();
+      setLocation(`/retailers${qs ? `?${qs}` : ""}`, { replace: true });
+    },
+    [searchStr, setLocation],
+  );
+
+  const retailerAccessor = useCallback(
+    (item: NonNullable<typeof rawRetailers>[number], key: string): unknown => {
+      switch (key) {
+        case "name": return item.name;
+        case "businessType": return item.businessType ?? "";
+        case "city": return item.city ?? "";
+        case "email": return item.email ?? "";
+        case "activeBatchCount": return item.activeBatchCount;
+        case "totalStock": return item.totalStock;
+        case "inventoryValue": return parseFloat(item.inventoryValue);
+        default: return null;
+      }
+    },
+    [],
+  );
+
+  const retailers = useMemo(
+    () => (rawRetailers ? sortData(rawRetailers, sortFromUrl, retailerAccessor) : undefined),
+    [rawRetailers, sortFromUrl, retailerAccessor],
+  );
   const [dialogOpen, setDialogOpen] = useState(false);
   const utils = trpc.useUtils();
 
@@ -482,13 +533,13 @@ export default function Retailers() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Nome</TableHead>
-                      <TableHead>Tipo attività</TableHead>
-                      <TableHead>Città</TableHead>
-                      <TableHead>Email</TableHead>
-                      <TableHead className="text-right">Lotti attivi</TableHead>
-                      <TableHead className="text-right">Stock totale</TableHead>
-                      <TableHead className="text-right">Valore inventario</TableHead>
+                      <SortableTableHead sortKey="name" sort={sortFromUrl} onSort={setSort}>Nome</SortableTableHead>
+                      <SortableTableHead sortKey="businessType" sort={sortFromUrl} onSort={setSort}>Tipo attività</SortableTableHead>
+                      <SortableTableHead sortKey="city" sort={sortFromUrl} onSort={setSort}>Città</SortableTableHead>
+                      <SortableTableHead sortKey="email" sort={sortFromUrl} onSort={setSort}>Email</SortableTableHead>
+                      <SortableTableHead sortKey="activeBatchCount" sort={sortFromUrl} onSort={setSort} className="text-right">Lotti attivi</SortableTableHead>
+                      <SortableTableHead sortKey="totalStock" sort={sortFromUrl} onSort={setSort} className="text-right">Stock totale</SortableTableHead>
+                      <SortableTableHead sortKey="inventoryValue" sort={sortFromUrl} onSort={setSort} className="text-right">Valore inventario</SortableTableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
