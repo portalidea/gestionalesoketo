@@ -18,6 +18,8 @@ Roadmap M6 (portale retailer self-service): `MIGRATION_PLAN_M6.md`.
   Migration 0010 applicata. Backend retailerPortalRouter (invite/revoke/list/dashboard).
   Frontend PartnerLayout + PartnerDashboard + routing condizionale.
   Admin UI card utenti portale su RetailerDetail.
+- **M6.2.A completato**: Admin Order Creation — ordersRouter (7 procedure tRPC),
+  pricing calculator, UI lista/creazione/dettaglio ordini, sidebar aggiornata.
 - M5.5 completato. M5.4 Edge Function fix completati.
 
 ---
@@ -3381,3 +3383,36 @@ Creata una **Edge Function separata** (`api/ddt-extract.ts`) con `export const r
 ### Commit
 
 - `feat(arch): M5.4 — Edge Function refactor for Claude Vision (30s timeout)`
+
+---
+
+## M6.2.A — Admin Order Creation (2026-05-15)
+
+### Nessuna nuova migration
+- Lo schema `orders` + `orderItems` è stato creato con migration 0010 (M6.1)
+- Unica modifica allo schema Drizzle: aggiunto `.default(sql`...`)` su `orderNumber` per allineare il tipo TypeScript al DEFAULT SQL già presente nel DB
+
+### Backend
+- `server/pricing.ts`: Pricing calculator riusabile — calcola prezzi con sconto pacchetto, IVA, stock warning
+- `server/orders-router.ts`: Router tRPC ordini con 7 procedure:
+  1. `orders.list` — lista ordini con filtri (status, retailer, date range, paginazione)
+  2. `orders.getById` — dettaglio ordine con items
+  3. `orders.preview` — calcola pricing senza creare ordine (per carrello live)
+  4. `orders.create` — crea ordine con items (snapshot pricing frozen)
+  5. `orders.updateItems` — modifica items ordine pending
+  6. `orders.updateStatus` — transizione status con validazione FSM
+  7. `orders.generateProforma` — genera proforma FiC e salva riferimento
+- FSM status: pending → paid → transferring → shipped → delivered ∪ cancelled
+
+### Frontend
+- `client/src/pages/Orders.tsx`: Lista ordini con filtri status/retailer/date, paginazione, badge colorati
+- `client/src/pages/OrderNew.tsx`: Form creazione ordine con select retailer, catalogo prodotti ricercabile, carrello live con preview pricing debounced, note interne/esterne
+- `client/src/pages/OrderDetail.tsx`: Dettaglio ordine con timeline status visuale, tabella items snapshot, bottoni transizione FSM, genera proforma FiC
+- Sidebar aggiornata con voce "Ordini" (icona ShoppingCart)
+- Routes registrate: `/orders`, `/orders/new`, `/orders/:id`
+
+### Commit
+- `feat(backend): M6.2.A — ordersRouter + pricing calculator`
+- `feat(ui): M6.2.A — Orders list + OrderNew + OrderDetail pages`
+- `feat(ui): M6.2.A — sidebar Ordini link`
+- `docs: M6.2.A — MIGRATION_LOG update`
