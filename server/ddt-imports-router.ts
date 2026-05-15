@@ -16,7 +16,6 @@ import {
   stockMovements,
   locations,
   producers,
-  productSupplierCodes,
 } from "../drizzle/schema";
 // extractFromPdf non più usato nel router: l'estrazione AI avviene
 // tramite Edge Function /api/ddt-extract (M5.4 refactor)
@@ -361,48 +360,66 @@ export const ddtImportsRouter = router({
           })
           .where(eq(ddtImports.id, input.ddtImportId));
 
-        // Carica anagrafica prodotti per fuzzy match
+        // Carica anagrafica prodotti con SKU per substring-match
         const allProducts = await db
-          .select({ id: products.id, name: products.name })
+          .select({ id: products.id, name: products.name, sku: products.sku })
           .from(products);
 
-        // M5.5: Carica codici fornitore per code-based match prioritario
-        // Se il DDT ha un producerId, cerca match per codice fornitore prima del fuzzy
-        const producerId = importRow.producerId;
-        let supplierCodeMap: Map<string, string> = new Map();
-        if (producerId) {
-          const codes = await db
-            .select({
-              supplierCode: productSupplierCodes.supplierCode,
-              productId: productSupplierCodes.productId,
-            })
-            .from(productSupplierCodes)
-            .where(eq(productSupplierCodes.producerId, producerId));
-          for (const c of codes) {
-            supplierCodeMap.set(c.supplierCode.toLowerCase().trim(), c.productId);
-          }
-        }
+        /**
+         * M5.7: Normalizza stringa per substring-match.
+         * trim + uppercase + strip punteggiatura (.,;:_-) → space + collapse whitespace
+         */
+        const normalizeForMatch = (s: string): string => {
+          return s
+            .trim()
+            .toUpperCase()
+            .replace(/[.,;:_\-\/\\()\[\]{}"']/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+        };
 
-        // Crea items con tentativo di match (code-based prioritario, poi fuzzy)
+        /**
+         * M5.7: Substring-match SKU primario.
+         * Cerca se lo SKU normalizzato è contenuto nel nome DDT normalizzato.
+         * Se multipli match, vince lo SKU più lungo (più specifico).
+         */
+        const substringMatchSku = (
+          ddtProductName: string,
+          productList: Array<{ id: string; name: string; sku: string }>
+        ): { productId: string; sku: string } | null => {
+          const ddtNorm = normalizeForMatch(ddtProductName);
+          let bestMatch: { productId: string; sku: string; skuLen: number } | null = null;
+
+          for (const p of productList) {
+            const skuNorm = normalizeForMatch(p.sku);
+            if (skuNorm.length === 0) continue;
+            if (ddtNorm.includes(skuNorm)) {
+              if (!bestMatch || skuNorm.length > bestMatch.skuLen) {
+                bestMatch = { productId: p.id, sku: p.sku, skuLen: skuNorm.length };
+              }
+            }
+          }
+
+           return bestMatch ? { productId: bestMatch.productId, sku: bestMatch.sku } : null;
+        };
+
+        // Crea items con tentativo di match (M5.7: substring SKU primario, fuzzy fallback)
         for (const item of input.extractedData.items) {
           let matchedProductId: string | null = null;
           let matchStatus: "matched" | "unmatched" = "unmatched";
 
-          // 1. Code-based match (prioritario, 100% affidabile)
-          if (item.productCode && supplierCodeMap.size > 0) {
-            const codeKey = item.productCode.toLowerCase().trim();
-            const codeMatch = supplierCodeMap.get(codeKey);
-            if (codeMatch) {
-              matchedProductId = codeMatch;
-              matchStatus = "matched";
-            }
+          // 1. PRIMARY: Substring-match SKU (M5.7)
+          const skuMatch = substringMatchSku(item.productName, allProducts);
+          if (skuMatch) {
+            matchedProductId = skuMatch.productId;
+            matchStatus = "matched";
           }
 
-          // 2. Fuzzy match (fallback se code-based non ha trovato)
+          // 2. FALLBACK: Fuzzy match nome prodotto (Jaro-Winkler, threshold 0.8)
           if (!matchedProductId) {
-            const fuzzyMatch = findBestMatch(item.productName, allProducts, 0.7);
-            if (fuzzyMatch) {
-              matchedProductId = fuzzyMatch.productId;
+            const fuzzyResult = findBestMatch(item.productName, allProducts, 0.8);
+            if (fuzzyResult) {
+              matchedProductId = fuzzyResult.productId;
               matchStatus = "matched";
             }
           }

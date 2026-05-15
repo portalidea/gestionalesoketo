@@ -321,6 +321,10 @@ export default function Products() {
                         onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
                         required
                       />
+                      <p className="text-xs text-muted-foreground">
+                        Inserisci una porzione di testo che apparirà sempre nei DDT dei tuoi produttori.
+                        Es. &quot;FROLLINI VAN CON GOCCE&quot; fa match con &quot;CONF.FROLLINI VAN CON GOCCE CIOC 4X30g...&quot;
+                      </p>
                     </div>
                     <div className="grid gap-2">
                       <Label htmlFor="category">Categoria</Label>
