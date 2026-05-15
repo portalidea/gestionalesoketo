@@ -398,20 +398,86 @@ function findVatTypeId(vatTypes: FicVatType[], vatRate: number): number {
   return match.id;
 }
 
+// ─── Payment Methods cache in-memory ──────────────────────────────────────
+
+export interface FicPaymentMethod {
+  id: number;
+  name: string;
+  type: string; // 'standard', etc.
+  is_default: boolean;
+}
+
+const paymentMethodsCache = new Map<number, { data: FicPaymentMethod[]; fetchedAt: number }>();
+const PM_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minuti
+
+/**
+ * Fetch payment_methods da FiC per la company corrente, con cache in-memory 5 min.
+ */
+export async function getFicPaymentMethods(): Promise<FicPaymentMethod[]> {
+  const { accessToken, companyId } = await getValidFicAccessToken();
+
+  const cached = paymentMethodsCache.get(companyId);
+  if (cached && Date.now() - cached.fetchedAt < PM_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  console.log(`[fic:paymentMethods] Fetching payment_methods for company ${companyId}...`);
+  try {
+    const r = await axios.get<{ data: FicPaymentMethod[] }>(
+      `${FIC_API_BASE}/c/${companyId}/info/payment_methods`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    const methods = r.data?.data ?? [];
+    paymentMethodsCache.set(companyId, { data: methods, fetchedAt: Date.now() });
+    console.log(`[fic:paymentMethods] Cached ${methods.length} methods: ${methods.map((m) => `${m.id}="${m.name}"`).join(", ")}`);
+    return methods;
+  } catch (e: any) {
+    console.error("[fic:paymentMethods] ERROR:", e?.response?.data ?? e?.message);
+    throw new Error(
+      `Impossibile leggere payment_methods da FiC: ${e?.response?.data?.error?.message ?? e?.message}`,
+    );
+  }
+}
+
+/**
+ * Trova il payment_method FiC per nome (case-insensitive, partial match).
+ * Fallback: ritorna il default, o il primo disponibile.
+ */
+function findPaymentMethodId(methods: FicPaymentMethod[], nameHint: string): number {
+  const lower = nameHint.toLowerCase();
+  const exact = methods.find((m) => m.name.toLowerCase() === lower);
+  if (exact) return exact.id;
+  const partial = methods.find((m) => m.name.toLowerCase().includes(lower));
+  if (partial) return partial.id;
+  const def = methods.find((m) => m.is_default);
+  if (def) {
+    console.warn(`[fic:paymentMethod] "${nameHint}" non trovato, uso default "${def.name}" (id=${def.id})`);
+    return def.id;
+  }
+  if (methods.length > 0) {
+    console.warn(`[fic:paymentMethod] "${nameHint}" non trovato, uso primo disponibile "${methods[0].name}" (id=${methods[0].id})`);
+    return methods[0].id;
+  }
+  throw new Error(`Nessun metodo di pagamento configurato su FiC. Configura almeno un metodo.`);
+}
+
 /**
  * Crea proforma su FiC dato payload retailer-side.
  *
  * Ritorna {id, number} su success, throw su qualsiasi errore (rete, 4xx,
  * 5xx). Il caller decide se enqueue per retry o fail hard.
  *
- * M6.2.A FIX: usa vat.id (ID del vat_type FiC) invece di vat.value.
- * FiC API richiede "data.items_list.0.vat.id field is required."
+ * M6.2.A FIX:
+ * - vat.id (ID del vat_type FiC) invece di vat.value
+ * - payment_method.id (ID del payment_method FiC) invece di name
+ * - payments_list con singola rata = totalGross
  */
 export async function createFicProforma(input: {
   ficClientId: number;
   date: string; // YYYY-MM-DD
   notesInternal: string;
   orderNumber?: string;
+  totalGross?: number; // totale lordo per payments_list
   items: Array<{
     code: string; // SKU
     description: string;
@@ -422,8 +488,13 @@ export async function createFicProforma(input: {
 }): Promise<{ id: number; number: string }> {
   const { accessToken, companyId } = await getValidFicAccessToken();
 
-  // Fetch vat_types (cached 5 min)
-  const vatTypes = await getFicVatTypes();
+  // Fetch vat_types + payment_methods (cached 5 min)
+  const [vatTypes, paymentMethods] = await Promise.all([
+    getFicVatTypes(),
+    getFicPaymentMethods(),
+  ]);
+
+  const paymentMethodId = findPaymentMethodId(paymentMethods, "Bonifico");
 
   // Mappa items con vat.id corretto
   const items_list = input.items.map((it) => {
@@ -440,16 +511,33 @@ export async function createFicProforma(input: {
     };
   });
 
+  // Calcola totalGross se non fornito (somma lineTotalGross)
+  const totalGross = input.totalGross ?? items_list.reduce((sum, it) => {
+    // Approssimazione: net_price * qty * (1 + vatRate/100)
+    const vatRate = parseFloat(input.items.find((i) => i.code === it.code)?.vatRate ?? "0");
+    return sum + it.net_price * it.qty * (1 + vatRate / 100);
+  }, 0);
+
+  // payments_list: singola rata = totale lordo documento
+  const payments_list = [
+    {
+      amount: Math.round(totalGross * 100) / 100, // arrotonda a 2 decimali
+      due_date: input.date,
+      status: "not_paid" as const,
+    },
+  ];
+
   const body = {
     data: {
       type: "proforma",
       entity: { id: input.ficClientId },
       date: input.date,
       currency: { id: "EUR" },
-      payment_method: { name: "Bonifico" },
+      payment_method: { id: paymentMethodId },
       subject: input.orderNumber ? `Ordine ${input.orderNumber}` : "Proforma SoKeto",
       visible_subject: input.orderNumber ? `Ordine ${input.orderNumber}` : "Proforma SoKeto",
       items_list,
+      payments_list,
       notes: input.notesInternal,
     },
   };
