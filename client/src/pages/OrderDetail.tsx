@@ -3,7 +3,7 @@
  * Dettaglio ordine con:
  * - Header: orderNumber, retailer, status badge, totali
  * - Timeline status con bottoni transizione FSM
- * - Tabella items con snapshot prezzi
+ * - Tabella items con snapshot prezzi + assegnazione lotti differita
  * - Bottone "Genera Proforma FiC" (se ficClientId presente)
  * - Note interne/esterne
  */
@@ -11,6 +11,13 @@ import DashboardLayout from "@/components/DashboardLayout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import {
   Table,
@@ -20,6 +27,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { trpc } from "@/lib/trpc";
 import { format } from "date-fns";
 import { it } from "date-fns/locale";
@@ -87,6 +100,100 @@ const TIMELINE_STEPS = [
   { key: "delivered", label: "Consegnato", tsField: "deliveredAt" },
 ];
 
+const NO_BATCH = "__none__";
+
+/**
+ * Sub-component: batch selector per un singolo orderItem
+ */
+function BatchSelector({
+  item,
+  canEdit,
+  orderId,
+}: {
+  item: {
+    id: string;
+    productId: string;
+    batchId: string | null;
+    batchNumber: string | null;
+    expirationDate: string | null;
+  };
+  canEdit: boolean;
+  orderId: string;
+}) {
+  const utils = trpc.useUtils();
+
+  const batchesQuery = trpc.orders.batchesForProduct.useQuery(
+    { productId: item.productId },
+    { enabled: canEdit },
+  );
+
+  const assignBatch = trpc.orders.assignBatch.useMutation({
+    onSuccess: (data) => {
+      utils.orders.getById.invalidate({ id: orderId });
+      if (data.batchId) {
+        toast.success(`Lotto ${data.batchNumber} assegnato`);
+      } else {
+        toast.success("Lotto rimosso");
+      }
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  // Se non editabile, mostra solo il lotto assegnato
+  if (!canEdit) {
+    if (item.batchNumber) {
+      return (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge variant="outline" className="font-mono text-xs">
+                {item.batchNumber}
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent>
+              Scad. {item.expirationDate ?? "—"}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      );
+    }
+    return <span className="text-muted-foreground text-xs">—</span>;
+  }
+
+  // Editabile: mostra select
+  return (
+    <div className="min-w-[160px]">
+      <Select
+        value={item.batchId ?? NO_BATCH}
+        onValueChange={(val) => {
+          assignBatch.mutate({
+            orderItemId: item.id,
+            batchId: val === NO_BATCH ? null : val,
+          });
+        }}
+        disabled={assignBatch.isPending}
+      >
+        <SelectTrigger className="h-8 text-xs">
+          <SelectValue placeholder="Seleziona lotto..." />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_BATCH}>
+            <span className="text-muted-foreground">Nessun lotto</span>
+          </SelectItem>
+          {batchesQuery.data?.map((b) => (
+            <SelectItem key={b.id} value={b.id}>
+              <span className="font-mono">{b.batchNumber}</span>
+              <span className="text-muted-foreground ml-2 text-xs">
+                scad. {b.expirationDate}
+              </span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 export default function OrderDetail() {
   const params = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
@@ -148,11 +255,16 @@ export default function OrderDetail() {
   const StatusIcon = statusCfg.icon;
   const transitions = ALLOWED_TRANSITIONS[order.status] ?? [];
   const isCancelled = order.status === "cancelled";
+  const isDelivered = order.status === "delivered";
+  const canEditBatches = !isCancelled && !isDelivered;
 
   // Determina quale step della timeline è attivo
   const activeStepIndex = isCancelled
     ? -1
     : TIMELINE_STEPS.findIndex((s) => s.key === order.status);
+
+  // Conteggio items senza lotto assegnato
+  const unassignedCount = order.items.filter((it) => !it.batchId).length;
 
   return (
     <DashboardLayout>
@@ -252,6 +364,23 @@ export default function OrderDetail() {
           </Card>
         )}
 
+        {/* Warning: items senza lotto */}
+        {canEditBatches && unassignedCount > 0 && (
+          <Card className="border-amber-500/30 bg-amber-500/5">
+            <CardContent className="pt-6 flex items-center gap-3">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              <div>
+                <p className="font-medium text-amber-600 dark:text-amber-400">
+                  {unassignedCount} item{unassignedCount > 1 ? "s" : ""} senza lotto assegnato
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Assegna i lotti prima di spedire l'ordine. Seleziona il lotto dalla colonna "Lotto" nella tabella sottostante.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Colonna sinistra: items + note */}
           <div className="lg:col-span-2 space-y-6">
@@ -261,44 +390,46 @@ export default function OrderDetail() {
                 <CardTitle className="text-base">Righe ordine</CardTitle>
               </CardHeader>
               <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>SKU</TableHead>
-                      <TableHead>Prodotto</TableHead>
-                      <TableHead className="text-right">Qtà</TableHead>
-                      <TableHead className="text-right">Prezzo base</TableHead>
-                      <TableHead className="text-right">Sconto</TableHead>
-                      <TableHead className="text-right">Prezzo finale</TableHead>
-                      <TableHead className="text-right">IVA</TableHead>
-                      <TableHead className="text-right">Totale lordo</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {order.items.map((item) => (
-                      <TableRow key={item.id}>
-                        <TableCell className="font-mono text-xs">{item.productSku}</TableCell>
-                        <TableCell className="text-sm">{item.productName}</TableCell>
-                        <TableCell className="text-right">{item.quantity}</TableCell>
-                        <TableCell className="text-right font-mono text-sm">
-                          € {parseFloat(item.unitPriceBase).toFixed(2)}
-                        </TableCell>
-                        <TableCell className="text-right text-sm text-muted-foreground">
-                          {parseFloat(item.discountPercent).toFixed(0)}%
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-sm">
-                          € {parseFloat(item.unitPriceFinal).toFixed(2)}
-                        </TableCell>
-                        <TableCell className="text-right text-sm text-muted-foreground">
-                          {parseFloat(item.vatRate).toFixed(0)}%
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-sm font-medium">
-                          € {parseFloat(item.lineTotalGross).toFixed(2)}
-                        </TableCell>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>SKU</TableHead>
+                        <TableHead>Prodotto</TableHead>
+                        <TableHead className="text-right">Qtà</TableHead>
+                        <TableHead className="text-right">Prezzo finale</TableHead>
+                        <TableHead className="text-right">IVA</TableHead>
+                        <TableHead className="text-right">Totale lordo</TableHead>
+                        <TableHead>Lotto</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {order.items.map((item) => (
+                        <TableRow key={item.id}>
+                          <TableCell className="font-mono text-xs">{item.productSku}</TableCell>
+                          <TableCell className="text-sm">{item.productName}</TableCell>
+                          <TableCell className="text-right">{item.quantity}</TableCell>
+                          <TableCell className="text-right font-mono text-sm">
+                            € {parseFloat(item.unitPriceFinal).toFixed(2)}
+                          </TableCell>
+                          <TableCell className="text-right text-sm text-muted-foreground">
+                            {parseFloat(item.vatRate).toFixed(0)}%
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-sm font-medium">
+                            € {parseFloat(item.lineTotalGross).toFixed(2)}
+                          </TableCell>
+                          <TableCell>
+                            <BatchSelector
+                              item={item}
+                              canEdit={canEditBatches}
+                              orderId={order.id}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               </CardContent>
             </Card>
 
