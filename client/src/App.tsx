@@ -23,6 +23,9 @@ import Team from "./pages/Team";
 import Warehouse from "./pages/Warehouse";
 import DdtImports from "./pages/DdtImports";
 import DdtImportDetail from "./pages/DdtImportDetail";
+import Orders from "./pages/Orders";
+import OrderNew from "./pages/OrderNew";
+import OrderDetail from "./pages/OrderDetail";
 import PartnerDashboard from "./pages/PartnerDashboard";
 
 /**
@@ -86,6 +89,9 @@ function Router() {
       <Route path="/ddt-imports/:id" component={DdtImportDetail} />
       <Route path="/retailers" component={Retailers} />
       <Route path="/retailers/:id" component={RetailerDetail} />
+      <Route path="/orders" component={Orders} />
+      <Route path="/orders/new" component={OrderNew} />
+      <Route path="/orders/:id" component={OrderDetail} />
       <Route path="/alerts" component={Alerts} />
       <Route path="/reports" component={Reports} />
       <Route path="/settings/team" component={Team} />
