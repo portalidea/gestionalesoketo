@@ -16,6 +16,7 @@ import {
   stockMovements,
   locations,
   producers,
+  productSupplierCodes,
 } from "../drizzle/schema";
 // extractFromPdf non più usato nel router: l'estrazione AI avviene
 // tramite Edge Function /api/ddt-extract (M5.4 refactor)
@@ -415,9 +416,31 @@ export const ddtImportsRouter = router({
             matchStatus = "matched";
           }
 
-          // 2. FALLBACK: Fuzzy match nome prodotto (Jaro-Winkler, threshold 0.8)
+          // 2. SECONDARY: product_supplier_codes code-based match (M5.5, fallback)
+          if (!matchedProductId && item.productCode) {
+            const producerId = importRow.producerId;
+            if (producerId) {
+              const codes = await db
+                .select({
+                  supplierCode: productSupplierCodes.supplierCode,
+                  productId: productSupplierCodes.productId,
+                })
+                .from(productSupplierCodes)
+                .where(eq(productSupplierCodes.producerId, producerId));
+              const codeKey = item.productCode.toLowerCase().trim();
+              const codeMatch = codes.find(
+                (c) => c.supplierCode.toLowerCase().trim() === codeKey
+              );
+              if (codeMatch) {
+                matchedProductId = codeMatch.productId;
+                matchStatus = "matched";
+              }
+            }
+          }
+
+          // 3. TERTIARY: Fuzzy match nome prodotto (Jaro-Winkler, threshold 0.85)
           if (!matchedProductId) {
-            const fuzzyResult = findBestMatch(item.productName, allProducts, 0.8);
+            const fuzzyResult = findBestMatch(item.productName, allProducts, 0.85);
             if (fuzzyResult) {
               matchedProductId = fuzzyResult.productId;
               matchStatus = "matched";
