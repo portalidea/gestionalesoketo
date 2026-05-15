@@ -9,13 +9,75 @@ Roadmap M6 (portale retailer self-service): `MIGRATION_PLAN_M6.md`.
 
 ---
 
-## Stato corrente — 2026-05-13
+## Stato corrente — 2026-05-15
+
+- **M6.1 completato**: Foundation multi-tenant auth + orders schema.
+  Migration 0010 applicata. Backend retailerPortalRouter (invite/revoke/list/dashboard).
+  Frontend PartnerLayout + PartnerDashboard + routing condizionale.
+  Admin UI card utenti portale su RetailerDetail.
+- M5.5 completato. M5.4 Edge Function fix completati.
+
+---
+
+## 2026-05-15 — M6.1 — Foundation: Multi-Tenant Auth + Orders Schema
+
+### Migration 0010 (applicata manualmente via SQL Editor)
+- Tabelle: `orders`, `orderItems`
+- Enum: `order_status` (pending, paid, transferring, shipped, delivered, cancelled)
+- Sequence: `orders_number_seq` per orderNumber auto-generato (ORD-YYYY-NNNN)
+- Colonna `retailerId` su `users` con FK cascade + check constraint
+  `users_retailerId_role_coherence` (retailer_* DEVE avere retailerId)
+- Funzione `current_retailer_id()` per RLS multi-tenant
+- 9 policies RLS (4 orders + 5 orderItems) con separazione admin/retailer
+
+### Backend (TASK 3+4)
+- `server/_core/trpc.ts`: `retailerProcedure` middleware
+  - Verifica role IN ('retailer_admin', 'retailer_user')
+  - Inietta `ctx.retailerId` (throw FORBIDDEN se mancante)
+- `server/retailer-portal-router.ts`: 5 procedure
+  - `listUsers` (adminProcedure): lista utenti portale per retailerId con
+    lastSignInAt e emailConfirmedAt da Supabase Auth
+  - `createInviteUser` (adminProcedure): crea utente Supabase Auth via
+    `admin.createUser()` + record users + invia email invito via Resend
+  - `resendInvite` (adminProcedure): genera magic link + re-invia email
+  - `revokeUser` (adminProcedure): elimina utente Auth + record DB
+  - `dashboardStats` (retailerProcedure): KPI ordini, stock, valore inventario
+- Email template invito: HTML branded SoKeto (#2D5A27, #7AB648) con CTA
+  magic link, ruolo, nome retailer
+
+### Frontend (TASK 5)
+- `PartnerLayout.tsx`: layout sidebar dedicato portale partner
+  - Brand colors #2D5A27 (dark green), #7AB648 (light green)
+  - Menu: Dashboard, Catalogo*, Ordini*, Magazzino*, Documenti*, Profilo*
+  - (* = placeholder con toast "in arrivo")
+  - Footer con avatar, nome utente, nome retailer
+  - Redirect automatico se utente non-retailer accede a /partner-portal/*
+- `PartnerDashboard.tsx`: dashboard KPI cards
+  - 4 cards: ordini totali, ordini in attesa, stock attivo, valore inventario
+  - Empty state quando 0 ordini
+  - Sezione notifiche placeholder
+- `App.tsx`: routing condizionale role-based
+  - `/` → retailer redirect a `/partner-portal/dashboard`, admin → Home
+  - `PartnerGuard` wrapper per route /partner-portal/*
+- `RetailerDetail.tsx`: nuova tab "Utenti Portale"
+  - Form invito: email, nome (opz), ruolo (admin/user)
+  - Tabella utenti: nome, email, ruolo badge, stato (Attivo/Invitato), data
+  - Azioni: re-invia invito (solo se non ancora loggato), revoca con conferma
+
+### Note
+- Test pre-esistenti che falliscono (auth.logout, retailer-details, routers):
+  mancano env vars Supabase in locale — non causati da M6.1
+- Test fattureincloud-sync: 8/8 passed
+
+---
+
+## 2026-05-13 — Stato pre-M6.1
 
 - **M5.5 completato**: product_supplier_codes mapping, dialog Nuovo Prodotto
   refactored (codici fornitore, primo lotto, combobox producer), DDT match
   via codice fornitore prioritario, sezione codici fornitore su dettaglio
   prodotto, UX improvements (Salva e crea nuovo, auto-redirect).
-- Migration 0009 da applicare manualmente.
+- Migration 0009 applicata manualmente.
 - M5.4 Edge Function fix completati (3 iterazioni: config syntax,
   jose cross-realm CryptoKey, nullable batch/expiry).
 
