@@ -20,8 +20,10 @@ import {
   retailers,
   products,
   productBatches,
+  inventoryByBatch,
+  locations,
 } from "../drizzle/schema";
-import { eq, desc, and, gte, lte, sql, inArray } from "drizzle-orm";
+import { eq, desc, and, gte, lte, sql, inArray, asc, gt } from "drizzle-orm";
 import { calculateOrderPricing, type PricingItemInput } from "./pricing";
 import { createFicProforma } from "./fic-integration";
 
@@ -223,6 +225,78 @@ export const ordersRouter = router({
       // Calcola pricing
       const pricing = await calculateOrderPricing(input.retailerId, input.items);
 
+      // --- Auto-assegnazione FEFO lotti ---
+      // Trova magazzino centrale
+      const [warehouse] = await db
+        .select({ id: locations.id })
+        .from(locations)
+        .where(eq(locations.type, "central_warehouse"))
+        .limit(1);
+
+      // Per ogni item, alloca lotti FEFO dal magazzino centrale
+      type BatchAllocation = {
+        productId: string;
+        batchId: string;
+        quantity: number; // in confezioni
+        batchNumber: string;
+        expirationDate: string;
+      };
+      const allAllocations: (typeof pricing.items[0] & { allocations: BatchAllocation[] })[] = [];
+      const fefoWarnings: string[] = [];
+
+      for (const pi of pricing.items) {
+        const allocations: BatchAllocation[] = [];
+        let remaining = pi.quantity; // in confezioni
+
+        if (warehouse) {
+          // Query lotti disponibili FEFO per questo prodotto nel magazzino centrale
+          const availableBatches = await db
+            .select({
+              batchId: productBatches.id,
+              batchNumber: productBatches.batchNumber,
+              expirationDate: productBatches.expirationDate,
+              centralStock: inventoryByBatch.quantity,
+            })
+            .from(productBatches)
+            .innerJoin(
+              inventoryByBatch,
+              and(
+                eq(inventoryByBatch.batchId, productBatches.id),
+                eq(inventoryByBatch.locationId, warehouse.id),
+              ),
+            )
+            .where(
+              and(
+                eq(productBatches.productId, pi.productId),
+                gt(inventoryByBatch.quantity, 0),
+              ),
+            )
+            .orderBy(asc(productBatches.expirationDate));
+
+          // Greedy FEFO allocation
+          for (const batch of availableBatches) {
+            if (remaining <= 0) break;
+            const allocQty = Math.min(remaining, batch.centralStock);
+            allocations.push({
+              productId: pi.productId,
+              batchId: batch.batchId,
+              quantity: allocQty,
+              batchNumber: batch.batchNumber,
+              expirationDate: batch.expirationDate,
+            });
+            remaining -= allocQty;
+          }
+        }
+
+        if (remaining > 0) {
+          fefoWarnings.push(
+            `${pi.productSku}: stock insufficiente per ${remaining} conf. su ${pi.quantity} richieste — ${remaining} senza lotto`,
+          );
+        }
+
+        allAllocations.push({ ...pi, allocations });
+      }
+
       // Crea ordine in transazione
       const result = await db.transaction(async (tx) => {
         // Insert order
@@ -241,22 +315,88 @@ export const ordersRouter = router({
           })
           .returning();
 
-        // Insert items con snapshot
-        const itemValues = pricing.items.map((pi) => ({
-          orderId: order.id,
-          productId: pi.productId,
-          quantity: pi.quantity,
-          unitPriceBase: pi.unitPriceBase,
-          discountPercent: pi.discountPercent,
-          unitPriceFinal: pi.unitPriceFinal,
-          vatRate: pi.vatRate,
-          lineTotalNet: pi.lineTotalNet,
-          lineTotalGross: pi.lineTotalGross,
-          productSku: pi.productSku,
-          productName: pi.productName,
-        }));
+        // Insert items con snapshot + batch FEFO
+        const itemValues: Array<{
+          orderId: string;
+          productId: string;
+          quantity: number;
+          unitPriceBase: string;
+          discountPercent: string;
+          unitPriceFinal: string;
+          vatRate: string;
+          lineTotalNet: string;
+          lineTotalGross: string;
+          productSku: string;
+          productName: string;
+          batchId: string | null;
+        }> = [];
 
-        await tx.insert(orderItems).values(itemValues);
+        for (const pi of allAllocations) {
+          if (pi.allocations.length === 0) {
+            // Nessun lotto disponibile — item senza batch
+            itemValues.push({
+              orderId: order.id,
+              productId: pi.productId,
+              quantity: pi.quantity,
+              unitPriceBase: pi.unitPriceBase,
+              discountPercent: pi.discountPercent,
+              unitPriceFinal: pi.unitPriceFinal,
+              vatRate: pi.vatRate,
+              lineTotalNet: pi.lineTotalNet,
+              lineTotalGross: pi.lineTotalGross,
+              productSku: pi.productSku,
+              productName: pi.productName,
+              batchId: null,
+            });
+          } else {
+            // Split item per lotto (ricalcola lineTotals proporzionalmente)
+            for (const alloc of pi.allocations) {
+              const ratio = alloc.quantity / pi.quantity;
+              const lineNet = (parseFloat(pi.lineTotalNet) * ratio).toFixed(2);
+              const lineGross = (parseFloat(pi.lineTotalGross) * ratio).toFixed(2);
+              itemValues.push({
+                orderId: order.id,
+                productId: pi.productId,
+                quantity: alloc.quantity,
+                unitPriceBase: pi.unitPriceBase,
+                discountPercent: pi.discountPercent,
+                unitPriceFinal: pi.unitPriceFinal,
+                vatRate: pi.vatRate,
+                lineTotalNet: lineNet,
+                lineTotalGross: lineGross,
+                productSku: pi.productSku,
+                productName: pi.productName,
+                batchId: alloc.batchId,
+              });
+            }
+            // Se c'è un residuo senza lotto (stock insufficiente)
+            const allocatedTotal = pi.allocations.reduce((s, a) => s + a.quantity, 0);
+            const unallocated = pi.quantity - allocatedTotal;
+            if (unallocated > 0) {
+              const ratio = unallocated / pi.quantity;
+              const lineNet = (parseFloat(pi.lineTotalNet) * ratio).toFixed(2);
+              const lineGross = (parseFloat(pi.lineTotalGross) * ratio).toFixed(2);
+              itemValues.push({
+                orderId: order.id,
+                productId: pi.productId,
+                quantity: unallocated,
+                unitPriceBase: pi.unitPriceBase,
+                discountPercent: pi.discountPercent,
+                unitPriceFinal: pi.unitPriceFinal,
+                vatRate: pi.vatRate,
+                lineTotalNet: lineNet,
+                lineTotalGross: lineGross,
+                productSku: pi.productSku,
+                productName: pi.productName,
+                batchId: null,
+              });
+            }
+          }
+        }
+
+        if (itemValues.length > 0) {
+          await tx.insert(orderItems).values(itemValues);
+        }
 
         return order;
       });
@@ -265,7 +405,7 @@ export const ordersRouter = router({
         id: result.id,
         orderNumber: result.orderNumber,
         totalGross: pricing.totalGross,
-        warnings: pricing.warnings,
+        warnings: [...pricing.warnings, ...fefoWarnings],
       };
     }),
 
@@ -536,6 +676,7 @@ export const ordersRouter = router({
           ficProformaId: orders.ficProformaId,
           orderNumber: orders.orderNumber,
           notesInternal: orders.notesInternal,
+          totalGross: orders.totalGross,
         })
         .from(orders)
         .where(eq(orders.id, input.orderId))
@@ -586,6 +727,7 @@ export const ordersRouter = router({
         ficClientId: retailer.ficClientId,
         date: new Date().toISOString().split("T")[0],
         orderNumber: order.orderNumber ?? undefined,
+        totalGross: order.totalGross ? parseFloat(order.totalGross) : undefined,
         notesInternal: `Ordine ${order.orderNumber}${order.notesInternal ? ` — ${order.notesInternal}` : ""}`,
         items: ficItems,
       });

@@ -300,7 +300,18 @@ export default function OrderNew() {
   // Crea ordine
   const createOrder = trpc.orders.create.useMutation({
     onSuccess: (data) => {
-      toast.success(`Ordine ${data.orderNumber} creato con successo`);
+      if (data.warnings && data.warnings.length > 0) {
+        toast.success(`Ordine ${data.orderNumber} creato con successo`, {
+          description: `Lotti FEFO auto-assegnati. ${data.warnings.length} avviso/i stock.`,
+          duration: 6000,
+        });
+        // Mostra warnings individuali
+        for (const w of data.warnings) {
+          toast.warning(w, { duration: 8000 });
+        }
+      } else {
+        toast.success(`Ordine ${data.orderNumber} creato con successo — lotti FEFO assegnati`);
+      }
       utils.orders.list.invalidate();
       setLocation(`/orders/${data.id}`);
     },

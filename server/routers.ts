@@ -690,6 +690,7 @@ export const appRouter = router({
         const payload = {
           ficClientId: retailer.ficClientId,
           date: new Date().toISOString().slice(0, 10),
+          totalGross: parseFloat(pricingResult.total),
           notesInternal: `Generato da TRANSFER ${movement.id}${batchSuffix}`,
           items: pricingResult.items.map((it) => ({
             code: it.productSku,

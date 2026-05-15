@@ -265,6 +265,8 @@ export default function OrderDetail() {
 
   // Conteggio items senza lotto assegnato
   const unassignedCount = order.items.filter((it) => !it.batchId).length;
+  const totalItems = order.items.length;
+  const assignedCount = totalItems - unassignedCount;
 
   return (
     <DashboardLayout>
@@ -386,8 +388,24 @@ export default function OrderDetail() {
           <div className="lg:col-span-2 space-y-6">
             {/* Items */}
             <Card>
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle className="text-base">Righe ordine</CardTitle>
+                {totalItems > 0 && (
+                  <div className="flex items-center gap-2">
+                    {assignedCount > 0 && (
+                      <Badge variant="outline" className="text-xs gap-1 text-emerald-500 border-emerald-500/30">
+                        <Check className="h-3 w-3" />
+                        {assignedCount}/{totalItems} con lotto
+                      </Badge>
+                    )}
+                    {unassignedCount > 0 && canEditBatches && (
+                      <Badge variant="outline" className="text-xs gap-1 text-amber-500 border-amber-500/30">
+                        <AlertTriangle className="h-3 w-3" />
+                        {unassignedCount} senza lotto
+                      </Badge>
+                    )}
+                  </div>
+                )}
               </CardHeader>
               <CardContent className="p-0">
                 <div className="overflow-x-auto">
