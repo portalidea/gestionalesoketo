@@ -530,7 +530,35 @@ export async function createFicProforma(input: {
   const body = {
     data: {
       type: "proforma",
-      entity: { id: input.ficClientId },
+      entity: await (async () => {
+        // Fetch entity completa dalla cache FiC clients
+        try {
+          const { clients } = await getFicClients();
+          const ficClient = clients.find((c) => c.id === input.ficClientId);
+          if (ficClient) {
+            console.log(`[fic:createProforma] entity from cache: ${ficClient.name} (id=${ficClient.id})`);
+            return {
+              id: ficClient.id,
+              name: ficClient.name,
+              vat_number: ficClient.vat_number ?? "",
+              tax_code: ficClient.tax_code ?? "",
+              address_street: ficClient.address_street ?? "",
+              address_postal_code: ficClient.address_postal_code ?? "",
+              address_city: ficClient.address_city ?? "",
+              address_province: ficClient.address_province ?? "",
+              country: ficClient.country ?? "Italia",
+              country_iso: ficClient.country_iso ?? "IT",
+              email: ficClient.email ?? "",
+              type: ficClient.type ?? "company",
+            };
+          }
+        } catch (e) {
+          console.warn("[fic:createProforma] Failed to fetch FiC client from cache, falling back to id-only", e);
+        }
+        // Fallback: solo id (FiC potrebbe risolverlo se il cliente esiste)
+        console.warn(`[fic:createProforma] entity fallback id-only: ${input.ficClientId}`);
+        return { id: input.ficClientId };
+      })(),
       date: input.date,
       currency: { id: "EUR" },
       payment_method: { id: paymentMethodId },
