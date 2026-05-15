@@ -144,6 +144,9 @@ export const products = pgTable("products", {
   // M3: aliquota IVA italiana applicata al prodotto. CHECK enforced lato DB
   // su valori 4/5/10/22. Default 10% (alimentari), 22% per birre/bevande.
   vatRate: numeric("vatRate", { precision: 5, scale: 2 }).default("10.00").notNull(),
+  // M5.8: confezioni vendita
+  piecesPerUnit: integer("piecesPerUnit").default(1).notNull(),
+  sellableUnitLabel: varchar("sellableUnitLabel", { length: 50 }).default("PZ").notNull(),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
