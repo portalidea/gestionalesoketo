@@ -1,9 +1,10 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
-import { Route, Switch } from "wouter";
+import { Route, Switch, Redirect } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { useAuth } from "./_core/hooks/useAuth";
 import Alerts from "./pages/Alerts";
 import AuthCallback from "./pages/AuthCallback";
 import Home from "./pages/Home";
@@ -22,13 +23,59 @@ import Team from "./pages/Team";
 import Warehouse from "./pages/Warehouse";
 import DdtImports from "./pages/DdtImports";
 import DdtImportDetail from "./pages/DdtImportDetail";
+import PartnerDashboard from "./pages/PartnerDashboard";
+
+/**
+ * M6.1: Redirect root "/" basato sul ruolo utente.
+ * retailer_admin / retailer_user → /partner-portal/dashboard
+ * admin / operator / viewer → Home (dashboard admin)
+ */
+function RootRedirect() {
+  const { user, loading } = useAuth();
+
+  if (loading) return null;
+
+  if (
+    user &&
+    (user.role === "retailer_admin" || user.role === "retailer_user")
+  ) {
+    return <Redirect to="/partner-portal/dashboard" />;
+  }
+
+  return <Home />;
+}
+
+/**
+ * M6.1: Guard per le route /partner-portal/*.
+ * Se l'utente non è retailer, redirect a /.
+ */
+function PartnerGuard({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
+
+  if (loading || !user) return null;
+
+  if (user.role !== "retailer_admin" && user.role !== "retailer_user") {
+    return <Redirect to="/" />;
+  }
+
+  return <>{children}</>;
+}
 
 function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
       <Route path="/auth/callback" component={AuthCallback} />
-      <Route path="/" component={Home} />
+
+      {/* M6.1: Partner Portal routes */}
+      <Route path="/partner-portal/dashboard">
+        <PartnerGuard>
+          <PartnerDashboard />
+        </PartnerGuard>
+      </Route>
+
+      {/* Admin/Operator routes */}
+      <Route path="/" component={RootRedirect} />
       <Route path="/producers" component={Producers} />
       <Route path="/producers/:id" component={ProducerDetail} />
       <Route path="/products" component={Products} />

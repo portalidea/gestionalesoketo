@@ -76,9 +76,14 @@ import {
   TrendingUp,
   Truck,
   User,
+  UserPlus,
+  UserX,
   XCircle,
+  Shield,
+  Copy,
+  Send,
 } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useState, useMemo, type FormEvent } from "react";
 import { toast } from "sonner";
 import { useLocation, useRoute } from "wouter";
 
@@ -662,6 +667,9 @@ export default function RetailerDetail() {
             <TabsTrigger value="movements">
               Movimenti ({recentMovements.length})
             </TabsTrigger>
+            <TabsTrigger value="portal-users">
+              Utenti Portale
+            </TabsTrigger>
           </TabsList>
 
           {/* ====================== TAB INVENTARIO ====================== */}
@@ -934,6 +942,11 @@ export default function RetailerDetail() {
               </Card>
             )}
           </TabsContent>
+
+          {/* ====================== TAB UTENTI PORTALE (M6.1) ====================== */}
+          <TabsContent value="portal-users" className="space-y-4">
+            <PortalUsersCard retailerId={retailerId} />
+          </TabsContent>
         </Tabs>
       </div>
 
@@ -1014,5 +1027,248 @@ export default function RetailerDetail() {
         </DialogContent>
       </Dialog>
     </DashboardLayout>
+  );
+}
+
+// ====================== COMPONENTE UTENTI PORTALE (M6.1) ======================
+function PortalUsersCard({ retailerId }: { retailerId: string }) {
+  const utils = trpc.useUtils();
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
+  const [inviteRole, setInviteRole] = useState<"retailer_admin" | "retailer_user">("retailer_user");
+  const [showInviteForm, setShowInviteForm] = useState(false);
+
+  const usersQuery = trpc.retailerPortal.listUsers.useQuery({ retailerId });
+  const inviteMutation = trpc.retailerPortal.createInviteUser.useMutation({
+    onSuccess: () => {
+      toast.success("Invito inviato", { description: `Email inviata a ${inviteEmail}` });
+      setInviteEmail("");
+      setInviteName("");
+      setShowInviteForm(false);
+      utils.retailerPortal.listUsers.invalidate({ retailerId });
+    },
+    onError: (err) => {
+      toast.error("Errore invito", { description: err.message });
+    },
+  });
+
+  const resendMutation = trpc.retailerPortal.resendInvite.useMutation({
+    onSuccess: () => {
+      toast.success("Email re-inviata");
+    },
+    onError: (err) => {
+      toast.error("Errore re-invio", { description: err.message });
+    },
+  });
+
+  const revokeMutation = trpc.retailerPortal.revokeUser.useMutation({
+    onSuccess: () => {
+      toast.success("Utente revocato");
+      utils.retailerPortal.listUsers.invalidate({ retailerId });
+    },
+    onError: (err) => {
+      toast.error("Errore revoca", { description: err.message });
+    },
+  });
+
+  const users = usersQuery.data ?? [];
+
+  const handleInvite = (e: FormEvent) => {
+    e.preventDefault();
+    if (!inviteEmail.trim()) return;
+    inviteMutation.mutate({
+      retailerId,
+      email: inviteEmail.trim(),
+      name: inviteName.trim() || undefined,
+      role: inviteRole,
+    });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5 text-primary" />
+              Utenti Portale Partner
+            </CardTitle>
+            <CardDescription>
+              Gestisci gli utenti che possono accedere al portale partner di questo rivenditore.
+            </CardDescription>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => setShowInviteForm(!showInviteForm)}
+            variant={showInviteForm ? "outline" : "default"}
+          >
+            <UserPlus className="h-4 w-4 mr-2" />
+            {showInviteForm ? "Annulla" : "Invita utente"}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Form invito */}
+        {showInviteForm && (
+          <form onSubmit={handleInvite} className="p-4 rounded-lg border border-dashed space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="invite-email">Email *</Label>
+                <Input
+                  id="invite-email"
+                  type="email"
+                  placeholder="utente@esempio.it"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="invite-name">Nome (opzionale)</Label>
+                <Input
+                  id="invite-name"
+                  placeholder="Mario Rossi"
+                  value={inviteName}
+                  onChange={(e) => setInviteName(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="invite-role">Ruolo</Label>
+                <Select
+                  value={inviteRole}
+                  onValueChange={(v) => setInviteRole(v as "retailer_admin" | "retailer_user")}
+                >
+                  <SelectTrigger id="invite-role">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="retailer_admin">Admin portale</SelectItem>
+                    <SelectItem value="retailer_user">Utente portale</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button type="submit" size="sm" disabled={inviteMutation.isPending}>
+                {inviteMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4 mr-2" />
+                )}
+                Invia invito
+              </Button>
+            </div>
+          </form>
+        )}
+
+        {/* Tabella utenti */}
+        {usersQuery.isLoading ? (
+          <div className="flex justify-center py-8">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : users.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center">
+            <User className="h-10 w-10 text-muted-foreground/30 mb-3" />
+            <p className="text-sm text-muted-foreground">
+              Nessun utente portale associato. Usa "Invita utente" per aggiungere il primo.
+            </p>
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Utente</TableHead>
+                <TableHead>Ruolo</TableHead>
+                <TableHead>Stato</TableHead>
+                <TableHead>Creato</TableHead>
+                <TableHead className="text-right">Azioni</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {users.map((u) => (
+                <TableRow key={u.id}>
+                  <TableCell>
+                    <div>
+                      <p className="font-medium">{u.name || "-"}</p>
+                      <p className="text-xs text-muted-foreground">{u.email}</p>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={u.role === "retailer_admin" ? "default" : "secondary"}>
+                      {u.role === "retailer_admin" ? "Admin" : "Utente"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      variant="outline"
+                      className={u.lastSignInAt ? "border-green-500/30 text-green-600" : "border-yellow-500/30 text-yellow-600"}
+                    >
+                      {u.lastSignInAt ? "Attivo" : "Invitato"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {format(new Date(u.createdAt), "dd MMM yyyy", { locale: it })}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      {!u.lastSignInAt && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8"
+                              disabled={resendMutation.isPending}
+                              onClick={() => resendMutation.mutate({ userId: u.id })}
+                            >
+                              <Send className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Re-invia invito</TooltipContent>
+                        </Tooltip>
+                      )}
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8 text-destructive hover:text-destructive"
+                          >
+                            <UserX className="h-3.5 w-3.5" />
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Revocare accesso?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              L'utente <strong>{u.name || u.email}</strong> non potrà più accedere
+                              al portale partner. L'account Supabase Auth verrà eliminato.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Annulla</AlertDialogCancel>
+                            <AlertDialogAction
+                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              onClick={() => revokeMutation.mutate({ userId: u.id })}
+                            >
+                              {revokeMutation.isPending ? (
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              ) : (
+                                <UserX className="h-4 w-4 mr-2" />
+                              )}
+                              Revoca
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
   );
 }
