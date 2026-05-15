@@ -31,6 +31,7 @@ import {
   Package,
   PanelLeft,
   Plug,
+  ShoppingCart,
   Store,
   Tag,
   Users,
@@ -48,6 +49,7 @@ const baseMenuItems = [
   { icon: ArrowLeftRight, label: "Movimenti", path: "/movements" },
   { icon: FileText, label: "DDT Import", path: "/ddt-imports" },
   { icon: Store, label: "Rivenditori", path: "/retailers" },
+  { icon: ShoppingCart, label: "Ordini", path: "/orders" },
   { icon: AlertTriangle, label: "Alert", path: "/alerts" },
   { icon: BarChart3, label: "Reportistica", path: "/reports" },
 ];
