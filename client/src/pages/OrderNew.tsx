@@ -244,7 +244,7 @@ export default function OrderNew() {
                   </div>
                   {previewItem && (
                     <span className="text-sm font-mono font-medium">
-                      € {previewItem.lineTotalGross}
+                      € {previewItem.lineTotalNet}
                     </span>
                   )}
                 </div>
