@@ -528,7 +528,8 @@ export async function createFicProforma(input: {
   totalGross?: number; // totale lordo per payments_list
   items: Array<{
     code?: string; // SKU (opzionale — non visibile al cliente)
-    description: string;
+    name: string; // nome prodotto (grassetto su PDF FiC)
+    description: string; // lotto + scadenza (testo normale su PDF FiC)
     qty: number;
     unitPriceFinal: string; // 2 decimali
     vatRate: string; // es. "10.00" / "22.00"
@@ -544,14 +545,15 @@ export async function createFicProforma(input: {
 
   const paymentMethodId = findPaymentMethodId(paymentMethods, "Bonifico");
 
-  // Mappa items con vat.id corretto
+  // Mappa items con vat.id corretto — name (grassetto) + description (normale) su PDF FiC
   const items_list = input.items.map((it) => {
     const vatRateNum = parseFloat(it.vatRate);
     const vatId = findVatTypeId(vatTypes, vatRateNum);
     return {
       product_id: 0, // no link a prodotto FiC
       ...(it.code ? { code: it.code } : {}), // code opzionale
-      name: it.description,
+      name: it.name,               // ← grassetto su PDF
+      description: it.description, // ← testo normale sotto (lotto + scadenza)
       qty: it.qty,
       net_price: parseFloat(it.unitPriceFinal),
       vat: { id: vatId },

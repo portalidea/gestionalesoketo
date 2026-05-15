@@ -695,7 +695,8 @@ export const appRouter = router({
           notesInternal: `Generato da TRANSFER ${movement.id}${batchSuffix}`,
           items: pricingResult.items.map((it) => ({
             code: it.productSku,
-            description: `${it.productName}${batchSuffix}`,
+            name: it.productName,
+            description: batchSuffix ? batchSuffix.trim() : "",
             qty: it.qty,
             unitPriceFinal: it.unitPriceFinal,
             vatRate: it.vatRate,

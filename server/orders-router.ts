@@ -727,24 +727,18 @@ export const ordersRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Ordine senza righe" });
       }
 
-      // Crea proforma su FiC — name multi-riga, no code
+      // Crea proforma su FiC — name (grassetto) + description (lotto/scad, normale)
       const ficItems = items.map((it) => {
-        const lines: string[] = [it.productName];
-        if (it.productDescription?.trim()) {
-          lines.push(it.productDescription.trim());
-        }
+        let description = "";
         if (it.batchId && it.batchNumber) {
           const expDate = it.expirationDate
             ? new Date(it.expirationDate).toLocaleDateString("it-IT")
-            : null;
-          lines.push(
-            expDate
-              ? `Lotto: ${it.batchNumber} - Scadenza: ${expDate}`
-              : `Lotto: ${it.batchNumber}`,
-          );
+            : "N/D";
+          description = `Lotto: ${it.batchNumber} - Scadenza: ${expDate}`;
         }
         return {
-          description: lines.join("\n"),
+          name: it.productName,       // ← solo nome prodotto (grassetto su FiC)
+          description,                 // ← lotto + scadenza (testo normale su FiC)
           qty: it.quantity,
           unitPriceFinal: it.unitPriceFinal,
           vatRate: it.vatRate,
@@ -848,24 +842,18 @@ export const ordersRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Ordine senza righe" });
       }
 
-      // Crea proforma su FiC — name multi-riga, no code
+      // Crea proforma su FiC — name (grassetto) + description (lotto/scad, normale)
       const ficItems = items.map((it) => {
-        const lines: string[] = [it.productName];
-        if (it.productDescription?.trim()) {
-          lines.push(it.productDescription.trim());
-        }
+        let description = "";
         if (it.batchId && it.batchNumber) {
           const expDate = it.expirationDate
             ? new Date(it.expirationDate).toLocaleDateString("it-IT")
-            : null;
-          lines.push(
-            expDate
-              ? `Lotto: ${it.batchNumber} - Scadenza: ${expDate}`
-              : `Lotto: ${it.batchNumber}`,
-          );
+            : "N/D";
+          description = `Lotto: ${it.batchNumber} - Scadenza: ${expDate}`;
         }
         return {
-          description: lines.join("\n"),
+          name: it.productName,       // ← solo nome prodotto (grassetto su FiC)
+          description,                 // ← lotto + scadenza (testo normale su FiC)
           qty: it.quantity,
           unitPriceFinal: it.unitPriceFinal,
           vatRate: it.vatRate,
