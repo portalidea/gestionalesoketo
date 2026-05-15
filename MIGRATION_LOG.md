@@ -33,6 +33,20 @@ Roadmap M6 (portale retailer self-service): `MIGRATION_PLAN_M6.md`.
 
 ## 2026-05-15 — M5.8 — piecesPerUnit / sellableUnitLabel
 
+### ⚠️ BUG PRODUZIONE (risolto)
+
+Codice pushato PRIMA che migration 0011 fosse applicata su Supabase.
+`products.getById` faceva SELECT su colonne inesistenti → errore
+"Prodotto inesistente" su tutti i `/products/:id`.
+
+**Root cause:** workflow errato — push simultaneo di codice + migration
+senza attendere conferma applicazione schema.
+
+**Fix:** migration applicata manualmente via SQL Editor.
+
+**Lezione:** aggiunta regola "Migration-First Deploy" a CLAUDE.md.
+Ordine corretto: 1) prepara SQL, 2) utente applica, 3) conferma, 4) push codice.
+
 ### Migration 0011
 ```sql
 ALTER TABLE "products" ADD COLUMN "piecesPerUnit" integer DEFAULT 1 NOT NULL;

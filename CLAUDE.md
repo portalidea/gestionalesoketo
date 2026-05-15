@@ -144,6 +144,28 @@ Production alias: `gestionale.soketo.it` (CNAME via Cloudflare → Vercel).
 
 ---
 
+## ⚠️ REGOLA CRITICA: Migration-First Deploy
+
+**MAI pushare codice che usa nuove colonne/tabelle senza prima
+confermare che la migration sia stata applicata su Supabase.**
+
+Ordine corretto:
+1. Preparare file migration SQL (`drizzle/NNNN_*.sql`)
+2. Notificare utente con il SQL integrale → utente applica via SQL Editor
+3. **Attendere conferma esplicita** dall'utente che la migration è OK
+4. SOLO DOPO conferma, pushare il codice che usa le nuove colonne
+
+Motivazione: Vercel auto-deploya su push a `main`. Se il codice
+usa colonne che non esistono ancora in DB, il sito va in errore
+immediatamente in produzione (es. bug M5.8 del 2026-05-15).
+
+Eccezione: se le nuove colonne hanno DEFAULT e il codice le usa
+solo in INSERT (non SELECT/WHERE), il push può essere simultaneo
+perché i SELECT esistenti non si rompono. Ma per sicurezza,
+preferire sempre l'ordine migration-first.
+
+---
+
 ## Environment variables (Vercel production)
 
 | Var | Scope | Note |
