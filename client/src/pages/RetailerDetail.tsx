@@ -157,6 +157,7 @@ export default function RetailerDetail() {
   const [writeOffQty, setWriteOffQty] = useState("");
   const [writeOffNotes, setWriteOffNotes] = useState("");
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState("inventory");
 
   const writeOffMutation = trpc.stockMovements.expiryWriteOff.useMutation({
     onSuccess: async () => {
@@ -661,7 +662,7 @@ export default function RetailerDetail() {
         </Card>
 
         {/* Tabs: Inventario e Movimenti */}
-        <Tabs defaultValue="inventory" className="space-y-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList>
             <TabsTrigger value="inventory">Inventario</TabsTrigger>
             <TabsTrigger value="movements">
@@ -945,7 +946,7 @@ export default function RetailerDetail() {
 
           {/* ====================== TAB UTENTI PORTALE (M6.1) ====================== */}
           <TabsContent value="portal-users" className="space-y-4">
-            <PortalUsersCard retailerId={retailerId} />
+            <PortalUsersCard retailerId={retailerId} isActive={activeTab === "portal-users"} />
           </TabsContent>
         </Tabs>
       </div>
@@ -1031,14 +1032,20 @@ export default function RetailerDetail() {
 }
 
 // ====================== COMPONENTE UTENTI PORTALE (M6.1) ======================
-function PortalUsersCard({ retailerId }: { retailerId: string }) {
+function PortalUsersCard({ retailerId, isActive }: { retailerId: string; isActive: boolean }) {
   const utils = trpc.useUtils();
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
   const [inviteRole, setInviteRole] = useState<"retailer_admin" | "retailer_user">("retailer_user");
   const [showInviteForm, setShowInviteForm] = useState(false);
 
-  const usersQuery = trpc.retailerPortal.listUsers.useQuery({ retailerId });
+  // Lazy loading: query attiva solo quando il tab "Utenti Portale" è visibile.
+  // Evita che listUsers (che chiama Supabase Auth per ogni utente) blocchi
+  // il batch httpBatchLink all'apertura della pagina.
+  const usersQuery = trpc.retailerPortal.listUsers.useQuery(
+    { retailerId },
+    { enabled: isActive },
+  );
   const inviteMutation = trpc.retailerPortal.createInviteUser.useMutation({
     onSuccess: () => {
       toast.success("Invito inviato", { description: `Email inviata a ${inviteEmail}` });

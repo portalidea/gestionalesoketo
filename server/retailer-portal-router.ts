@@ -97,26 +97,62 @@ export const retailerPortalRouter = router({
 
   /**
    * Lista utenti associati a un retailer.
+   *
+   * BUGFIX 2026-05-15: aggiunto timeout 5s per chiamata Supabase Auth
+   * per evitare che una singola getUserById lenta blocchi l'intero
+   * batch httpBatchLink (causa del timeout 60s su /retailers/:id).
    */
   listUsers: adminProcedure
     .input(z.object({ retailerId: uuid }))
     .query(async ({ input }) => {
+      const tTotal = Date.now();
       const portalUsers = await db.getUsersByRetailerId(input.retailerId);
 
-      // Arricchisci con last_sign_in_at da Supabase Auth
+      // Arricchisci con last_sign_in_at da Supabase Auth.
+      // Ogni chiamata ha timeout 5s via Promise.race + fallback graceful.
+      const SUPABASE_AUTH_TIMEOUT_MS = 5_000;
       const enriched = await Promise.all(
         portalUsers.map(async (u) => {
+          const tUser = Date.now();
           try {
-            const { data } = await supabaseAdmin.auth.admin.getUserById(u.id);
+            const authPromise = supabaseAdmin.auth.admin.getUserById(u.id);
+            const timeoutPromise = new Promise<never>((_, reject) =>
+              setTimeout(
+                () => reject(new Error(`Timeout ${SUPABASE_AUTH_TIMEOUT_MS}ms`)),
+                SUPABASE_AUTH_TIMEOUT_MS,
+              ),
+            );
+            const { data } = await Promise.race([authPromise, timeoutPromise]);
+            const ms = Date.now() - tUser;
+            if (ms > 500) {
+              console.warn(
+                `[retailerPortal.listUsers] Supabase Auth slow for user ${u.id}: ${ms}ms`,
+              );
+            }
             return {
               ...u,
               lastSignInAt: data?.user?.last_sign_in_at ?? null,
               emailConfirmedAt: data?.user?.email_confirmed_at ?? null,
+              authStatus: "ok" as const,
             };
-          } catch {
-            return { ...u, lastSignInAt: null, emailConfirmedAt: null };
+          } catch (err) {
+            const ms = Date.now() - tUser;
+            console.warn(
+              `[retailerPortal.listUsers] Supabase Auth unreachable for user ${u.id} after ${ms}ms: ${(err as Error).message}`,
+            );
+            return {
+              ...u,
+              lastSignInAt: null,
+              emailConfirmedAt: null,
+              authStatus: "unknown" as const,
+            };
           }
         }),
+      );
+
+      const totalMs = Date.now() - tTotal;
+      console.log(
+        `[retailerPortal.listUsers] total=${totalMs}ms users=${portalUsers.length}`,
       );
 
       return enriched;
