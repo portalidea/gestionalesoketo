@@ -3416,3 +3416,58 @@ Creata una **Edge Function separata** (`api/ddt-extract.ts`) con `export const r
 - `feat(ui): M6.2.A — Orders list + OrderNew + OrderDetail pages`
 - `feat(ui): M6.2.A — sidebar Ordini link`
 - `docs: M6.2.A — MIGRATION_LOG update`
+
+---
+
+## 2026-05-15 — BUGFIX: /retailers/:id timeout 60s post-M6.x
+
+### Sintomo
+Vercel Runtime Timeout Error 60s su /retailers/:id. Tutte le procedure
+tRPC (getDetails 1.6s, ficIntegration.getStatus 658ms, etc.) completano
+in tempi normali, ma la response non viene mai inviata.
+
+### Root cause
+`retailerPortal.listUsers` (aggiunta in M6.1) chiama
+`supabaseAdmin.auth.admin.getUserById(u.id)` per ogni utente portale
+associato al retailer. Se Supabase Auth API è lenta o unreachable,
+la procedura blocca indefinitamente. Essendo tutte le useQuery raggruppate
+in un singolo batch `httpBatchLink`, una procedura lenta blocca l'intera
+response HTTP → timeout Vercel 60s.
+
+### Diagnosi
+6 procedure tRPC chiamate all'apertura di /retailers/:id:
+1. retailers.getDetails (1621ms OK)
+2. retailers.dependentsCount (OK)
+3. pricingPackages.list (OK)
+4. ficIntegration.getStatus (658ms OK)
+5. ficClients.list (condizionale, OK)
+6. **retailerPortal.listUsers** (NESSUN TIMING, NESSUN TIMEOUT)
+
+### Fix applicati
+
+**Fix 1 — Backend timeout + fallback** (`server/retailer-portal-router.ts`):
+- Promise.race con timeout 5s per ogni chiamata getUserById
+- Fallback graceful: lastSignInAt=null, authStatus='unknown'
+- Log warning per chiamate >500ms o fallite
+- console.log timing totale procedura
+
+**Fix 2 — Frontend lazy loading** (`client/src/pages/RetailerDetail.tsx`):
+- Tabs convertito da uncontrolled a controlled (useState activeTab)
+- PortalUsersCard riceve prop isActive, query enabled solo quando
+  tab "Utenti Portale" è selezionato
+- listUsers NON è più nel batch iniziale di /retailers/:id
+
+**Fix 3 — httpBatchLink analysis**:
+- splitBatchLink valutato ma NON implementato
+- I fix 1+2 risolvono completamente: lazy loading rimuove listUsers
+  dal batch iniziale, timeout 5s garantisce max blocking anche su click tab
+
+### Pattern per future procedure con chiamate esterne
+1. Timeout con Promise.race (max 5-10s)
+2. Fallback graceful (non crashare la procedura)
+3. Logging con soglia (>500ms warning)
+4. Lazy loading se non critica per il first render
+
+### Commit
+- `fix(retailers): listUsers timeout fallback + lazy loading`
+- `docs: MIGRATION_LOG — bugfix listUsers blocking batch`
