@@ -527,7 +527,7 @@ export async function createFicProforma(input: {
   orderNumber?: string;
   totalGross?: number; // totale lordo per payments_list
   items: Array<{
-    code: string; // SKU
+    code?: string; // SKU (opzionale — non visibile al cliente)
     description: string;
     qty: number;
     unitPriceFinal: string; // 2 decimali
@@ -550,7 +550,7 @@ export async function createFicProforma(input: {
     const vatId = findVatTypeId(vatTypes, vatRateNum);
     return {
       product_id: 0, // no link a prodotto FiC
-      code: it.code,
+      ...(it.code ? { code: it.code } : {}), // code opzionale
       name: it.description,
       qty: it.qty,
       net_price: parseFloat(it.unitPriceFinal),
@@ -558,12 +558,10 @@ export async function createFicProforma(input: {
       not_taxable: false,
     };
   });
-
   // Calcola totalGross se non fornito (somma lineTotalGross)
-  const totalGross = input.totalGross ?? items_list.reduce((sum, it) => {
-    // Approssimazione: net_price * qty * (1 + vatRate/100)
-    const vatRate = parseFloat(input.items.find((i) => i.code === it.code)?.vatRate ?? "0");
-    return sum + it.net_price * it.qty * (1 + vatRate / 100);
+  const totalGross = input.totalGross ?? input.items.reduce((sum, it) => {
+    const vatRate = parseFloat(it.vatRate);
+    return sum + parseFloat(it.unitPriceFinal) * it.qty * (1 + vatRate / 100);
   }, 0);
 
   // payments_list: singola rata = totale lordo documento

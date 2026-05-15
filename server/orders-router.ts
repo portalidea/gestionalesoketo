@@ -704,24 +704,52 @@ export const ordersRouter = router({
         });
       }
 
-      // Carica items
+      // Carica items con product description e batch info
       const items = await db
-        .select()
+        .select({
+          id: orderItems.id,
+          productSku: orderItems.productSku,
+          productName: orderItems.productName,
+          quantity: orderItems.quantity,
+          unitPriceFinal: orderItems.unitPriceFinal,
+          vatRate: orderItems.vatRate,
+          batchId: orderItems.batchId,
+          productDescription: products.description,
+          batchNumber: productBatches.batchNumber,
+          expirationDate: productBatches.expirationDate,
+        })
         .from(orderItems)
+        .leftJoin(products, eq(orderItems.productId, products.id))
+        .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
         .where(eq(orderItems.orderId, input.orderId));
 
       if (items.length === 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Ordine senza righe" });
       }
 
-      // Crea proforma su FiC
-      const ficItems = items.map((it) => ({
-        code: it.productSku,
-        description: `${it.productSku} — ${it.productName}`,
-        qty: it.quantity,
-        unitPriceFinal: it.unitPriceFinal,
-        vatRate: it.vatRate,
-      }));
+      // Crea proforma su FiC — name multi-riga, no code
+      const ficItems = items.map((it) => {
+        const lines: string[] = [it.productName];
+        if (it.productDescription?.trim()) {
+          lines.push(it.productDescription.trim());
+        }
+        if (it.batchId && it.batchNumber) {
+          const expDate = it.expirationDate
+            ? new Date(it.expirationDate).toLocaleDateString("it-IT")
+            : null;
+          lines.push(
+            expDate
+              ? `Lotto: ${it.batchNumber} - Scadenza: ${expDate}`
+              : `Lotto: ${it.batchNumber}`,
+          );
+        }
+        return {
+          description: lines.join("\n"),
+          qty: it.quantity,
+          unitPriceFinal: it.unitPriceFinal,
+          vatRate: it.vatRate,
+        };
+      });
 
       const proforma = await createFicProforma({
         ficClientId: retailer.ficClientId,
