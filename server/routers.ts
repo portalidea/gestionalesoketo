@@ -20,6 +20,7 @@ import {
 } from "./fic-integration";
 import { ddtImportsRouter } from "./ddt-imports-router";
 import { retailerPortalRouter } from "./retailer-portal-router";
+import { ordersRouter } from "./orders-router";
 
 const uuid = z.string().uuid();
 const userRoleSchema = z.enum(["admin", "operator", "viewer"]);
@@ -1181,6 +1182,9 @@ export const appRouter = router({
 
   // ============= DDT IMPORTS (Phase B M5) =============
   ddtImports: ddtImportsRouter,
+
+  // ============= ORDERS (Phase B M6.2.A) =============
+  orders: ordersRouter,
 
   // ============= RETAILER PORTAL (Phase B M6.1) =============
   retailerPortal: retailerPortalRouter,

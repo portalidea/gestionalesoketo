@@ -558,7 +558,7 @@ export const orders = pgTable(
   "orders",
   {
     id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-    orderNumber: varchar("orderNumber", { length: 50 }).notNull().unique(),
+    orderNumber: varchar("orderNumber", { length: 50 }).notNull().unique().default(sql`'ORD-' || EXTRACT(YEAR FROM CURRENT_DATE)::text || '-' || LPAD(nextval('public.orders_number_seq')::text, 4, '0')`),
     retailerId: uuid("retailerId")
       .notNull()
       .references(() => retailers.id, { onDelete: "restrict" }),
