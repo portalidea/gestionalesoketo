@@ -1097,6 +1097,8 @@ export async function getWarehouseStockOverview() {
       productCategory: products.category,
       productUnit: products.unit,
       productUnitPrice: products.unitPrice,
+      piecesPerUnit: products.piecesPerUnit,
+      sellableUnitLabel: products.sellableUnitLabel,
       batchId: productBatches.id,
       batchNumber: productBatches.batchNumber,
       expirationDate: productBatches.expirationDate,
@@ -1121,6 +1123,8 @@ export async function getWarehouseStockOverview() {
       productCategory: string | null;
       productUnit: string | null;
       productUnitPrice: string | null;
+      piecesPerUnit: number | null;
+      sellableUnitLabel: string | null;
       totalStock: number;
       activeBatchCount: number;
       nearestExpiration: string | null;
@@ -1145,6 +1149,8 @@ export async function getWarehouseStockOverview() {
         productCategory: r.productCategory,
         productUnit: r.productUnit,
         productUnitPrice: r.productUnitPrice,
+        piecesPerUnit: r.piecesPerUnit,
+        sellableUnitLabel: r.sellableUnitLabel,
         totalStock: 0,
         activeBatchCount: 0,
         nearestExpiration: null,

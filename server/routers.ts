@@ -330,6 +330,8 @@ export const appRouter = router({
           expiryWarningDays: z.number().optional(),
           imageUrl: z.string().optional(),
           vatRate: vatRateSchema.optional(),
+          piecesPerUnit: z.number().min(1).optional(),
+          sellableUnitLabel: z.string().optional(),
         }),
       )
       .mutation(async ({ input }) => {
@@ -356,6 +358,8 @@ export const appRouter = router({
           expiryWarningDays: z.number().optional(),
           imageUrl: z.string().optional(),
           vatRate: vatRateSchema.optional(),
+          piecesPerUnit: z.number().min(1).optional(),
+          sellableUnitLabel: z.string().optional(),
         }),
       )
       .mutation(async ({ input }) => {
@@ -389,6 +393,8 @@ export const appRouter = router({
           expiryWarningDays: z.number().optional(),
           vatRate: vatRateSchema.optional(),
           imageUrl: z.string().optional(),
+          piecesPerUnit: z.number().min(1).optional(),
+          sellableUnitLabel: z.string().optional(),
           supplierCodes: z
             .array(
               z.object({
