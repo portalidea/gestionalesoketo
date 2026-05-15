@@ -22,6 +22,7 @@ import { ddtImportsRouter } from "./ddt-imports-router";
 import { retailerPortalRouter } from "./retailer-portal-router";
 import { ordersRouter } from "./orders-router";
 
+
 const uuid = z.string().uuid();
 const userRoleSchema = z.enum(["admin", "operator", "viewer"]);
 const vatRateSchema = z.enum(["4.00", "5.00", "10.00", "22.00"]);
@@ -850,7 +851,10 @@ export const appRouter = router({
   // ============= ALERTS =============
   alerts: router({
     getActive: protectedProcedure.query(async () => {
-      return await db.getActiveAlerts();
+      console.time("[alerts.getActive]");
+      const result = await db.getActiveAlerts();
+      console.timeEnd("[alerts.getActive]");
+      return result;
     }),
 
     getByRetailer: protectedProcedure
@@ -889,15 +893,25 @@ export const appRouter = router({
   }),
 
   // ============= DASHBOARD STATS =============
+  // Cache TTL 2 min implementata in db.ts per mantenere i tipi tRPC
   dashboard: router({
     getStats: protectedProcedure.query(async () => {
-      return await db.getDashboardStats();
+      console.time("[dashboard.getStats]");
+      const result = await db.getDashboardStats();
+      console.timeEnd("[dashboard.getStats]");
+      return result;
     }),
     getStockAlerts: protectedProcedure.query(async () => {
-      return await db.getProductsUnderThreshold(20);
+      console.time("[dashboard.getStockAlerts]");
+      const result = await db.getProductsUnderThreshold(20);
+      console.timeEnd("[dashboard.getStockAlerts]");
+      return result;
     }),
     getExpiringBatches: protectedProcedure.query(async () => {
-      return await db.getExpiringBatches(20);
+      console.time("[dashboard.getExpiringBatches]");
+      const result = await db.getExpiringBatches(20);
+      console.timeEnd("[dashboard.getExpiringBatches]");
+      return result;
     }),
   }),
 

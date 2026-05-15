@@ -1510,12 +1510,32 @@ const EMPTY_DASHBOARD_STATS = {
  *
  * 4 query parallele per mantenere la perf cold ~200-300ms.
  */
-export async function getDashboardStats() {
+// In-memory cache per query aggregate dashboard (TTL 2 min)
+const _dashboardCache = new Map<string, { data: unknown; expiresAt: number }>();
+function cachedDashboard<T>(key: string, ttlMs: number, fetcher: () => Promise<T>): Promise<T> {
+  const cached = _dashboardCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    console.log(`[dashboardCache] HIT ${key}`);
+    return Promise.resolve(cached.data as T);
+  }
+  console.log(`[dashboardCache] MISS ${key}`);
+  return fetcher().then((data) => {
+    _dashboardCache.set(key, { data, expiresAt: Date.now() + ttlMs });
+    return data;
+  });
+}
+const CACHE_TTL = 2 * 60 * 1000; // 2 min
+
+export function getDashboardStats() {
+  return cachedDashboard("stats", CACHE_TTL, _getDashboardStatsImpl);
+}
+async function _getDashboardStatsImpl() {
   const db = await getDb();
   if (!db) return EMPTY_DASHBOARD_STATS;
 
   try {
-    const [retailerCountRows, productCountRows, alertCountRows, batchInventoryRows] =
+    console.time("[getDashboardStats] counts");
+    const [retailerCountRows, productCountRows, alertCountRows] =
       await Promise.all([
         db.select({ c: sql<number>`count(*)::int` }).from(retailers),
         db.select({ c: sql<number>`count(*)::int` }).from(products),
@@ -1523,63 +1543,56 @@ export async function getDashboardStats() {
           .select({ c: sql<number>`count(*)::int` })
           .from(alerts)
           .where(eq(alerts.status, "ACTIVE")),
-        db
-          .select({
-            locationId: inventoryByBatch.locationId,
-            productId: productBatches.productId,
-            quantity: inventoryByBatch.quantity,
-            expirationDate: productBatches.expirationDate,
-            unitPrice: products.unitPrice,
-            minStockThreshold: products.minStockThreshold,
-            locationType: locations.type,
-          })
-          .from(inventoryByBatch)
-          .innerJoin(productBatches, eq(inventoryByBatch.batchId, productBatches.id))
-          .innerJoin(products, eq(productBatches.productId, products.id))
-          .innerJoin(locations, eq(inventoryByBatch.locationId, locations.id))
-          .where(eq(locations.type, "retailer")),
       ]);
+    console.timeEnd("[getDashboardStats] counts");
 
-    let totalInventoryValue = 0;
-    let expiringItems = 0;
-    const now = Date.now();
+    // Singola query aggregata SQL per inventoryValue, lowStock, expiring
+    // Evita fetch di tutte le righe inventoryByBatch + loop JS
+    console.time("[getDashboardStats] inventory-aggregate");
+    const aggRows = await db.execute(sql`
+      SELECT
+        COALESCE(SUM(ibb."quantity" * p."unitPrice"::numeric), 0)::text AS "totalValue",
+        COUNT(DISTINCT CASE
+          WHEN pb."expirationDate" IS NOT NULL
+            AND (pb."expirationDate"::date - CURRENT_DATE) BETWEEN 1 AND 30
+            AND ibb."quantity" > 0
+          THEN pb."id"
+        END)::int AS "expiringItems"
+      FROM "inventoryByBatch" ibb
+      INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
+      INNER JOIN "products" p ON p."id" = pb."productId"
+      INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'retailer'
+    `);
+    console.timeEnd("[getDashboardStats] inventory-aggregate");
 
-    // Aggrega per (location, product) per low stock
-    const stockByPair = new Map<string, { qty: number; threshold: number }>();
+    console.time("[getDashboardStats] low-stock");
+    const lowStockRows = await db.execute(sql`
+      SELECT COUNT(*)::int AS "cnt"
+      FROM (
+        SELECT ibb."locationId", pb."productId",
+          SUM(ibb."quantity") AS total_qty,
+          MAX(p."minStockThreshold") AS threshold
+        FROM "inventoryByBatch" ibb
+        INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
+        INNER JOIN "products" p ON p."id" = pb."productId"
+        INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'retailer'
+        WHERE p."minStockThreshold" IS NOT NULL AND p."minStockThreshold" > 0
+        GROUP BY ibb."locationId", pb."productId"
+        HAVING SUM(ibb."quantity") < MAX(p."minStockThreshold")
+      ) sub
+    `);
+    console.timeEnd("[getDashboardStats] low-stock");
 
-    for (const item of batchInventoryRows) {
-      const price = item.unitPrice ? parseFloat(item.unitPrice) : NaN;
-      if (!Number.isNaN(price)) {
-        totalInventoryValue += price * item.quantity;
-      }
-      if (item.expirationDate) {
-        const days = Math.floor(
-          (new Date(item.expirationDate).getTime() - now) / 86_400_000,
-        );
-        if (days > 0 && days <= 30 && item.quantity > 0) expiringItems++;
-      }
-      const key = `${item.locationId}::${item.productId}`;
-      const cur = stockByPair.get(key);
-      const threshold = item.minStockThreshold ?? 10;
-      if (cur) {
-        cur.qty += item.quantity;
-      } else {
-        stockByPair.set(key, { qty: item.quantity, threshold });
-      }
-    }
-
-    let lowStockItems = 0;
-    for (const v of Array.from(stockByPair.values())) {
-      if (v.qty < v.threshold) lowStockItems++;
-    }
+    const agg = (aggRows as unknown as Array<{ totalValue: string; expiringItems: number }>)[0];
+    const lowStock = (lowStockRows as unknown as Array<{ cnt: number }>)[0];
 
     return {
       totalRetailers: retailerCountRows[0]?.c ?? 0,
       totalProducts: productCountRows[0]?.c ?? 0,
       activeAlerts: alertCountRows[0]?.c ?? 0,
-      totalInventoryValue: totalInventoryValue.toFixed(2),
-      lowStockItems,
-      expiringItems,
+      totalInventoryValue: parseFloat(agg?.totalValue ?? "0").toFixed(2),
+      lowStockItems: lowStock?.cnt ?? 0,
+      expiringItems: agg?.expiringItems ?? 0,
     };
   } catch (error) {
     console.error("[dashboard] getStats failed:", error);
@@ -2034,7 +2047,10 @@ export async function getRetailerDashboardStats(retailerId: string) {
  * Dashboard: prodotti con stock totale (magazzino centrale) sotto soglia minima.
  * Ritorna solo prodotti con minStockThreshold > 0 e stock < soglia.
  */
-export async function getProductsUnderThreshold(limit = 20) {
+export function getProductsUnderThreshold(limit = 20) {
+  return cachedDashboard(`stockAlerts:${limit}`, CACHE_TTL, () => _getProductsUnderThresholdImpl(limit));
+}
+async function _getProductsUnderThresholdImpl(limit = 20) {
   const db = await getDb();
   if (!db) return [];
 
@@ -2071,7 +2087,10 @@ export async function getProductsUnderThreshold(limit = 20) {
  * Dashboard: lotti con scadenza imminente (entro expiryWarningDays del prodotto).
  * Ritorna solo lotti con stock > 0 nel magazzino centrale.
  */
-export async function getExpiringBatches(limit = 20) {
+export function getExpiringBatches(limit = 20) {
+  return cachedDashboard(`expiringBatches:${limit}`, CACHE_TTL, () => _getExpiringBatchesImpl(limit));
+}
+async function _getExpiringBatchesImpl(limit = 20) {
   const db = await getDb();
   if (!db) return [];
 
