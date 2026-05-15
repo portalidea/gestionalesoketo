@@ -29,7 +29,10 @@ import {
  * `location_type` aggiunto in 0003: distingue tra il magazzino centrale
  * SoKeto (singleton) e le location per-retailer.
  */
-export const userRoleEnum = pgEnum("user_role", ["admin", "operator", "viewer"]);
+export const userRoleEnum = pgEnum("user_role", ["admin", "operator", "viewer", "retailer_admin", "retailer_user"]);
+export const orderStatusEnum = pgEnum("order_status", [
+  "pending", "paid", "transferring", "shipped", "delivered", "cancelled",
+]);
 export const stockMovementTypeEnum = pgEnum("stock_movement_type", [
   "IN",
   "OUT",
@@ -76,6 +79,7 @@ export const users = pgTable("users", {
   email: varchar("email", { length: 320 }).notNull().unique(),
   name: text("name"),
   role: userRoleEnum("role").default("operator").notNull(),
+  retailerId: uuid("retailerId").references(() => retailers.id, { onDelete: "cascade" }),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -542,3 +546,89 @@ export const ddtImportItems = pgTable(
 
 export type DdtImportItem = typeof ddtImportItems.$inferSelect;
 export type InsertDdtImportItem = typeof ddtImportItems.$inferInsert;
+
+/**
+ * Orders — ordini retailer (M6.1).
+ * State machine: pending → paid → transferring → shipped → delivered ∪ cancelled.
+ */
+export const orders = pgTable(
+  "orders",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    orderNumber: varchar("orderNumber", { length: 50 }).notNull().unique(),
+    retailerId: uuid("retailerId")
+      .notNull()
+      .references(() => retailers.id, { onDelete: "restrict" }),
+    status: orderStatusEnum("status").default("pending").notNull(),
+    subtotalNet: numeric("subtotalNet", { precision: 10, scale: 2 }).default("0").notNull(),
+    vatAmount: numeric("vatAmount", { precision: 10, scale: 2 }).default("0").notNull(),
+    totalGross: numeric("totalGross", { precision: 10, scale: 2 }).default("0").notNull(),
+    discountPercent: numeric("discountPercent", { precision: 5, scale: 2 }).default("0").notNull(),
+    notes: text("notes"),
+    notesInternal: text("notesInternal"),
+    ficProformaId: integer("ficProformaId"),
+    ficProformaNumber: varchar("ficProformaNumber", { length: 50 }),
+    paidAt: timestamp("paidAt", { withTimezone: true }),
+    transferringAt: timestamp("transferringAt", { withTimezone: true }),
+    shippedAt: timestamp("shippedAt", { withTimezone: true }),
+    deliveredAt: timestamp("deliveredAt", { withTimezone: true }),
+    cancelledAt: timestamp("cancelledAt", { withTimezone: true }),
+    createdBy: uuid("createdBy")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("orders_retailerId_idx").on(t.retailerId),
+    index("orders_status_idx")
+      .on(t.status)
+      .where(sql`${t.status} IN ('pending', 'paid', 'transferring')`),
+    index("orders_createdAt_desc_idx").on(t.createdAt),
+    index("orders_status_createdAt_idx").on(t.status, t.createdAt),
+  ],
+);
+
+export type Order = typeof orders.$inferSelect;
+export type InsertOrder = typeof orders.$inferInsert;
+
+/**
+ * Order items — righe ordine (M6.1).
+ * Snapshot di prezzo al momento dell'ordine per immutabilità.
+ */
+export const orderItems = pgTable(
+  "orderItems",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    orderId: uuid("orderId")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    productId: uuid("productId")
+      .notNull()
+      .references(() => products.id, { onDelete: "restrict" }),
+    batchId: uuid("batchId").references(() => productBatches.id, {
+      onDelete: "set null",
+    }),
+    quantity: integer("quantity").notNull(),
+    unitPriceBase: numeric("unitPriceBase", { precision: 10, scale: 2 }).notNull(),
+    discountPercent: numeric("discountPercent", { precision: 5, scale: 2 }).notNull(),
+    unitPriceFinal: numeric("unitPriceFinal", { precision: 10, scale: 2 }).notNull(),
+    vatRate: numeric("vatRate", { precision: 5, scale: 2 }).notNull(),
+    lineTotalNet: numeric("lineTotalNet", { precision: 10, scale: 2 }).notNull(),
+    lineTotalGross: numeric("lineTotalGross", { precision: 10, scale: 2 }).notNull(),
+    productSku: varchar("productSku", { length: 100 }).notNull(),
+    productName: varchar("productName", { length: 255 }).notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("orderItems_orderId_idx").on(t.orderId),
+    index("orderItems_productId_idx").on(t.productId),
+    index("orderItems_batchId_idx")
+      .on(t.batchId)
+      .where(sql`${t.batchId} IS NOT NULL`),
+    check("orderItems_quantity_positive", sql`${t.quantity} > 0`),
+  ],
+);
+
+export type OrderItem = typeof orderItems.$inferSelect;
+export type InsertOrderItem = typeof orderItems.$inferInsert;
