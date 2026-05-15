@@ -575,7 +575,8 @@ export const ordersRouter = router({
 
       // Crea proforma su FiC
       const ficItems = items.map((it) => ({
-        description: `${it.productSku} — ${it.productName} (x${it.quantity})`,
+        code: it.productSku,
+        description: `${it.productSku} — ${it.productName}`,
         qty: it.quantity,
         unitPriceFinal: it.unitPriceFinal,
         vatRate: it.vatRate,
@@ -584,6 +585,7 @@ export const ordersRouter = router({
       const proforma = await createFicProforma({
         ficClientId: retailer.ficClientId,
         date: new Date().toISOString().split("T")[0],
+        orderNumber: order.orderNumber ?? undefined,
         notesInternal: `Ordine ${order.orderNumber}${order.notesInternal ? ` — ${order.notesInternal}` : ""}`,
         items: ficItems,
       });

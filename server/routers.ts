@@ -692,6 +692,7 @@ export const appRouter = router({
           date: new Date().toISOString().slice(0, 10),
           notesInternal: `Generato da TRANSFER ${movement.id}${batchSuffix}`,
           items: pricingResult.items.map((it) => ({
+            code: it.productSku,
             description: `${it.productName}${batchSuffix}`,
             qty: it.qty,
             unitPriceFinal: it.unitPriceFinal,

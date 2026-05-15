@@ -343,20 +343,77 @@ export async function refreshFicClients(): Promise<{
   return { clients, refreshedAt };
 }
 
+// ─── VAT Types cache in-memory ───────────────────────────────────────────
+
+export interface FicVatType {
+  id: number;
+  value: number; // es. 10, 22, 4
+  description: string;
+  is_disabled: boolean;
+}
+
+const vatTypesCache = new Map<number, { data: FicVatType[]; fetchedAt: number }>();
+const VAT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minuti
+
+/**
+ * Fetch vat_types da FiC per la company corrente, con cache in-memory 5 min.
+ */
+export async function getFicVatTypes(): Promise<FicVatType[]> {
+  const { accessToken, companyId } = await getValidFicAccessToken();
+
+  const cached = vatTypesCache.get(companyId);
+  if (cached && Date.now() - cached.fetchedAt < VAT_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  console.log(`[fic:vatTypes] Fetching vat_types for company ${companyId}...`);
+  try {
+    const r = await axios.get<{ data: FicVatType[] }>(
+      `${FIC_API_BASE}/c/${companyId}/info/vat_types`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    const types = (r.data?.data ?? []).filter((t) => !t.is_disabled);
+    vatTypesCache.set(companyId, { data: types, fetchedAt: Date.now() });
+    console.log(`[fic:vatTypes] Cached ${types.length} vat_types: ${types.map((t) => `${t.id}=${t.value}%`).join(", ")}`);
+    return types;
+  } catch (e: any) {
+    console.error("[fic:vatTypes] ERROR:", e?.response?.data ?? e?.message);
+    throw new Error(
+      `Impossibile leggere vat_types da FiC: ${e?.response?.data?.error?.message ?? e?.message}`,
+    );
+  }
+}
+
+/**
+ * Trova il vat_type FiC corrispondente a una aliquota IVA (es. 10, 22, 4).
+ * Throw se non trovato.
+ */
+function findVatTypeId(vatTypes: FicVatType[], vatRate: number): number {
+  const match = vatTypes.find((t) => t.value === vatRate);
+  if (!match) {
+    throw new Error(
+      `VAT rate ${vatRate}% non configurata su FiC. Configurala manualmente prima. Disponibili: ${vatTypes.map((t) => `${t.value}% (id=${t.id})`).join(", ")}`,
+    );
+  }
+  return match.id;
+}
+
 /**
  * Crea proforma su FiC dato payload retailer-side.
  *
  * Ritorna {id, number} su success, throw su qualsiasi errore (rete, 4xx,
  * 5xx). Il caller decide se enqueue per retry o fail hard.
  *
- * Payload semplificato per M3: solo campi essenziali. Estensioni future
- * (sconti riga aggiuntivi, codici IVA non standard) in M4+.
+ * M6.2.A FIX: usa vat.id (ID del vat_type FiC) invece di vat.value.
+ * FiC API richiede "data.items_list.0.vat.id field is required."
  */
 export async function createFicProforma(input: {
   ficClientId: number;
   date: string; // YYYY-MM-DD
   notesInternal: string;
+  orderNumber?: string;
   items: Array<{
+    code: string; // SKU
     description: string;
     qty: number;
     unitPriceFinal: string; // 2 decimali
@@ -365,24 +422,35 @@ export async function createFicProforma(input: {
 }): Promise<{ id: number; number: string }> {
   const { accessToken, companyId } = await getValidFicAccessToken();
 
-  // Mappa vatRate string → struttura FiC vat. FiC accetta `vat: { value: 10 }`
-  // su ogni riga. Per aliquote IT standard è sufficiente `value`.
-  const items_list = input.items.map((it) => ({
-    name: it.description,
-    qty: it.qty,
-    net_price: parseFloat(it.unitPriceFinal),
-    vat: { value: parseFloat(it.vatRate) },
-  }));
+  // Fetch vat_types (cached 5 min)
+  const vatTypes = await getFicVatTypes();
+
+  // Mappa items con vat.id corretto
+  const items_list = input.items.map((it) => {
+    const vatRateNum = parseFloat(it.vatRate);
+    const vatId = findVatTypeId(vatTypes, vatRateNum);
+    return {
+      product_id: 0, // no link a prodotto FiC
+      code: it.code,
+      name: it.description,
+      qty: it.qty,
+      net_price: parseFloat(it.unitPriceFinal),
+      vat: { id: vatId },
+      not_taxable: false,
+    };
+  });
 
   const body = {
     data: {
       type: "proforma",
       entity: { id: input.ficClientId },
       date: input.date,
+      currency: { id: "EUR" },
       payment_method: { name: "Bonifico" },
+      subject: input.orderNumber ? `Ordine ${input.orderNumber}` : "Proforma SoKeto",
+      visible_subject: input.orderNumber ? `Ordine ${input.orderNumber}` : "Proforma SoKeto",
       items_list,
       notes: input.notesInternal,
-      visible_subject: "Proforma SoKeto",
     },
   };
 
