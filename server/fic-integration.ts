@@ -386,6 +386,10 @@ export async function createFicProforma(input: {
     },
   };
 
+  // === DIAGNOSTIC LOGGING ===
+  console.log("[fic:createProforma] Payload →", JSON.stringify(body, null, 2));
+  console.log(`[fic:createProforma] URL → ${FIC_API_BASE}/c/${companyId}/issued_documents`);
+
   try {
     const r = await axios.post<{
       data: { id: number; number: string };
@@ -395,15 +399,27 @@ export async function createFicProforma(input: {
         "Content-Type": "application/json",
       },
     });
+    console.log("[fic:createProforma] Response OK →", JSON.stringify(r.data, null, 2));
     const out = r.data?.data;
     if (!out?.id) throw new Error("FiC non ha restituito proforma id");
     return { id: out.id, number: out.number ?? `${out.id}` };
   } catch (e: any) {
+    // Log completo della response di errore
+    console.error("[fic:createProforma] ERROR status →", e?.response?.status);
+    console.error("[fic:createProforma] ERROR data →", JSON.stringify(e?.response?.data, null, 2));
+    console.error("[fic:createProforma] ERROR headers →", JSON.stringify(e?.response?.headers, null, 2));
+
+    // Estrai messaggio più dettagliato possibile
+    const validationFields = e?.response?.data?.error?.validation_result?.fields;
+    const validationMsg = validationFields
+      ? validationFields.map((f: any) => `${f.field}: ${f.message}`).join("; ")
+      : null;
     const msg =
+      validationMsg ??
       e?.response?.data?.error?.message ??
-      e?.response?.data?.error?.validation_result?.fields?.[0]?.message ??
+      e?.response?.data?.message ??
       e?.message ??
       "errore sconosciuto";
-    throw new Error(`FiC API: ${msg}`);
+    throw new Error(`FiC API (${e?.response?.status ?? "??"}): ${msg}`);
   }
 }
