@@ -33,6 +33,11 @@ import {
   proformaQueue,
   ProformaQueue,
   InsertProformaQueue,
+  // Phase B M6.1
+  orders,
+  Order,
+  orderItems,
+  OrderItem,
 } from "../drizzle/schema";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -1936,3 +1941,85 @@ export async function setStockMovementProforma(
     .where(eq(stockMovements.id, movementId));
 }
 
+
+// ============= M6.1 — RETAILER PORTAL =============
+
+/**
+ * Lista utenti associati a un retailer (per admin card utenti portale).
+ */
+export async function getUsersByRetailerId(retailerId: string) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(users)
+    .where(eq(users.retailerId, retailerId))
+    .orderBy(users.email);
+}
+
+/**
+ * Crea utente retailer in public.users (dopo Supabase Auth invite).
+ */
+export async function createRetailerUser(data: {
+  id: string;
+  email: string;
+  name: string | null;
+  role: "retailer_admin" | "retailer_user";
+  retailerId: string;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db
+    .insert(users)
+    .values({
+      id: data.id,
+      email: data.email,
+      name: data.name,
+      role: data.role,
+      retailerId: data.retailerId,
+    })
+    .returning();
+  return row;
+}
+
+/**
+ * Dashboard stats per il portale retailer.
+ */
+export async function getRetailerDashboardStats(retailerId: string) {
+  const db = await getDb();
+  if (!db) return { totalOrders: 0, pendingOrders: 0, activeStock: 0, inventoryValue: "0.00" };
+
+  const [orderStats] = await db
+    .select({
+      totalOrders: sql<number>`count(*)::int`,
+      pendingOrders: sql<number>`count(*) FILTER (WHERE ${orders.status} = 'pending')::int`,
+    })
+    .from(orders)
+    .where(eq(orders.retailerId, retailerId));
+
+  const [stockStats] = await db
+    .select({
+      activeStock: sql<number>`COALESCE(SUM(ibb."quantity"), 0)::int`,
+      inventoryValue: sql<string>`COALESCE(
+        SUM(ibb."quantity" * NULLIF(p."unitPrice", '')::numeric)::numeric(18,2),
+        0
+      )::text`,
+    })
+    .from(inventoryByBatch)
+    .innerJoin(locations, eq(inventoryByBatch.locationId, locations.id))
+    .innerJoin(productBatches, eq(inventoryByBatch.batchId, productBatches.id))
+    .innerJoin(products, eq(productBatches.productId, products.id))
+    .where(
+      and(
+        eq(locations.retailerId, retailerId),
+        sql`ibb."quantity" > 0`,
+      ),
+    );
+
+  return {
+    totalOrders: orderStats?.totalOrders ?? 0,
+    pendingOrders: orderStats?.pendingOrders ?? 0,
+    activeStock: stockStats?.activeStock ?? 0,
+    inventoryValue: stockStats?.inventoryValue ?? "0.00",
+  };
+}
