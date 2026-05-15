@@ -21,6 +21,9 @@ import {
 import { ddtImportsRouter } from "./ddt-imports-router";
 import { retailerPortalRouter } from "./retailer-portal-router";
 import { ordersRouter } from "./orders-router";
+import { catalogPortalRouter } from "./catalog-portal-router";
+import { retailerCheckoutRouter } from "./retailer-checkout-router";
+import { retailerOrdersRouter } from "./retailer-orders-router";
 
 
 const uuid = z.string().uuid();
@@ -1211,6 +1214,11 @@ export const appRouter = router({
 
   // ============= RETAILER PORTAL (Phase B M6.1) =============
   retailerPortal: retailerPortalRouter,
+
+  // ============= M6.2.B — PORTALE RETAILER SELF-SERVICE =============
+  catalogPortal: catalogPortalRouter,
+  retailerCheckout: retailerCheckoutRouter,
+  retailerOrders: retailerOrdersRouter,
 });
 
 export type AppRouter = typeof appRouter;

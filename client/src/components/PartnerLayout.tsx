@@ -43,10 +43,10 @@ import { toast } from "sonner";
 
 const partnerMenuItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/partner-portal/dashboard" },
-  { icon: Package, label: "Catalogo", path: "/partner-portal/catalogo", placeholder: true },
-  { icon: ShoppingCart, label: "Ordini", path: "/partner-portal/ordini", placeholder: true },
+  { icon: Package, label: "Catalogo", path: "/partner-portal/catalog" },
+  { icon: ShoppingCart, label: "Carrello", path: "/partner-portal/cart" },
+  { icon: FileText, label: "Ordini", path: "/partner-portal/orders" },
   { icon: Warehouse, label: "Magazzino", path: "/partner-portal/magazzino", placeholder: true },
-  { icon: FileText, label: "Documenti", path: "/partner-portal/documenti", placeholder: true },
   { icon: User, label: "Profilo", path: "/partner-portal/profilo", placeholder: true },
 ];
 

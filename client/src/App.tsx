@@ -4,6 +4,7 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch, Redirect } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { CartProvider } from "./contexts/CartContext";
 import { useAuth } from "./_core/hooks/useAuth";
 import Alerts from "./pages/Alerts";
 import AuthCallback from "./pages/AuthCallback";
@@ -27,6 +28,13 @@ import Orders from "./pages/Orders";
 import OrderNew from "./pages/OrderNew";
 import OrderDetail from "./pages/OrderDetail";
 import PartnerDashboard from "./pages/PartnerDashboard";
+import PartnerCatalog from "./pages/PartnerCatalog";
+import PartnerCart from "./pages/PartnerCart";
+import PartnerCheckout from "./pages/PartnerCheckout";
+import PartnerOrders from "./pages/PartnerOrders";
+import PartnerOrderDetail from "./pages/PartnerOrderDetail";
+import PartnerOrderEdit from "./pages/PartnerOrderEdit";
+import PartnerProductDetail from "./pages/PartnerProductDetail";
 
 /**
  * M6.1: Redirect root "/" basato sul ruolo utente.
@@ -70,10 +78,45 @@ function Router() {
       <Route path="/login" component={Login} />
       <Route path="/auth/callback" component={AuthCallback} />
 
-      {/* M6.1: Partner Portal routes */}
+      {/* M6.2.B: Partner Portal routes */}
       <Route path="/partner-portal/dashboard">
         <PartnerGuard>
           <PartnerDashboard />
+        </PartnerGuard>
+      </Route>
+      <Route path="/partner-portal/catalog">
+        <PartnerGuard>
+          <PartnerCatalog />
+        </PartnerGuard>
+      </Route>
+      <Route path="/partner-portal/catalog/:id">
+        <PartnerGuard>
+          <PartnerProductDetail />
+        </PartnerGuard>
+      </Route>
+      <Route path="/partner-portal/cart">
+        <PartnerGuard>
+          <PartnerCart />
+        </PartnerGuard>
+      </Route>
+      <Route path="/partner-portal/checkout">
+        <PartnerGuard>
+          <PartnerCheckout />
+        </PartnerGuard>
+      </Route>
+      <Route path="/partner-portal/orders">
+        <PartnerGuard>
+          <PartnerOrders />
+        </PartnerGuard>
+      </Route>
+      <Route path="/partner-portal/orders/:id/edit">
+        <PartnerGuard>
+          <PartnerOrderEdit />
+        </PartnerGuard>
+      </Route>
+      <Route path="/partner-portal/orders/:id">
+        <PartnerGuard>
+          <PartnerOrderDetail />
         </PartnerGuard>
       </Route>
 
@@ -107,10 +150,12 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
-        <TooltipProvider>
-          <Toaster />
-          <Router />
-        </TooltipProvider>
+        <CartProvider>
+          <TooltipProvider>
+            <Toaster />
+            <Router />
+          </TooltipProvider>
+        </CartProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );
