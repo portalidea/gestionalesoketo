@@ -72,6 +72,8 @@ type FormState = {
   supplierName: string;
   unitPrice: string;
   unit: string;
+  piecesPerUnit: number;
+  sellableUnitLabel: string;
   minStockThreshold: number;
   expiryWarningDays: number;
   isLowCarb: boolean;
@@ -88,6 +90,8 @@ const EMPTY_FORM: FormState = {
   supplierName: "",
   unitPrice: "",
   unit: "",
+  piecesPerUnit: 1,
+  sellableUnitLabel: "PZ",
   minStockThreshold: 10,
   expiryWarningDays: 30,
   isLowCarb: true,
@@ -313,6 +317,8 @@ export default function ProductDetail() {
         supplierName: product.supplierName ?? "",
         unitPrice: product.unitPrice ?? "",
         unit: product.unit ?? "",
+        piecesPerUnit: product.piecesPerUnit ?? 1,
+        sellableUnitLabel: product.sellableUnitLabel ?? "PZ",
         minStockThreshold: product.minStockThreshold ?? 10,
         expiryWarningDays: product.expiryWarningDays ?? 30,
         isLowCarb: product.isLowCarb === 1,
@@ -352,6 +358,8 @@ export default function ProductDetail() {
       supplierName: form.supplierName || undefined,
       unitPrice: form.unitPrice || undefined,
       unit: form.unit || undefined,
+      piecesPerUnit: form.piecesPerUnit,
+      sellableUnitLabel: form.sellableUnitLabel || "PZ",
       minStockThreshold: form.minStockThreshold,
       expiryWarningDays: form.expiryWarningDays,
       isLowCarb: form.isLowCarb ? 1 : 0,
@@ -661,6 +669,39 @@ export default function ProductDetail() {
                   />
                 </div>
               </div>
+              {/* M5.8: Confezioni vendita */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="piecesPerUnit">Pezzi per confezione</Label>
+                  <Input
+                    id="piecesPerUnit"
+                    type="number"
+                    min={1}
+                    value={form.piecesPerUnit}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        piecesPerUnit: Math.max(1, parseInt(e.target.value) || 1),
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Quanti pezzi vendibili contiene 1 confezione DDT
+                  </p>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="sellableUnitLabel">Etichetta unità vendita</Label>
+                  <Input
+                    id="sellableUnitLabel"
+                    placeholder="es. PZ, CONF, BUSTA"
+                    value={form.sellableUnitLabel}
+                    onChange={(e) => setForm({ ...form, sellableUnitLabel: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Come si chiama l'unità vendibile al dettaglio
+                  </p>
+                </div>
+              </div>
               <div className="grid gap-2">
                 <Label htmlFor="supplierName">Fornitore</Label>
                 <Input
@@ -766,6 +807,36 @@ export default function ProductDetail() {
         <SupplierCodesSection productId={productId} producers={producers ?? []} />
 
         {/* Sezione Lotti — separata visivamente dal form anagrafica */}
+        {/* M5.8: Riepilogo stock con pezzi vendibili */}
+        {product && (() => {
+          const ppu = product.piecesPerUnit ?? 1;
+          const label = product.sellableUnitLabel ?? "PZ";
+          const totalConf = batches?.reduce((sum, b) => sum + (b.centralStock ?? 0), 0) ?? 0;
+          const totalPezzi = totalConf * ppu;
+          return ppu > 1 ? (
+            <div className="mt-8 grid grid-cols-3 gap-4">
+              <Card className="border-border bg-card">
+                <CardHeader className="pb-2">
+                  <CardDescription>Stock confezioni</CardDescription>
+                  <CardTitle className="text-2xl">{totalConf} <span className="text-sm font-normal text-muted-foreground">{product.unit ?? "conf"}</span></CardTitle>
+                </CardHeader>
+              </Card>
+              <Card className="border-border bg-card">
+                <CardHeader className="pb-2">
+                  <CardDescription>Pezzi vendibili</CardDescription>
+                  <CardTitle className="text-2xl">{totalPezzi} <span className="text-sm font-normal text-muted-foreground">{label}</span></CardTitle>
+                </CardHeader>
+              </Card>
+              <Card className="border-border bg-card">
+                <CardHeader className="pb-2">
+                  <CardDescription>Pezzi per confezione</CardDescription>
+                  <CardTitle className="text-2xl">{ppu} <span className="text-sm font-normal text-muted-foreground">{label}/{product.unit ?? "conf"}</span></CardTitle>
+                </CardHeader>
+              </Card>
+            </div>
+          ) : null;
+        })()}
+
         <div className="mt-12">
           <Card className="border-border bg-card">
             <CardHeader>

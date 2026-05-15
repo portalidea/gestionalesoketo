@@ -410,7 +410,8 @@ export default function Warehouse() {
                     <TableHead className="w-10"></TableHead>
                     <TableHead>Prodotto</TableHead>
                     <TableHead>SKU</TableHead>
-                    <TableHead className="text-right">Stock</TableHead>
+                    <TableHead className="text-right">Stock (conf.)</TableHead>
+                    <TableHead className="text-right">Pezzi vendibili</TableHead>
                     <TableHead className="text-right">Lotti attivi</TableHead>
                     <TableHead>Scadenza più vicina</TableHead>
                     <TableHead className="w-32 text-right">Azioni</TableHead>
@@ -475,6 +476,18 @@ export default function Warehouse() {
                               </span>
                             )}
                           </TableCell>
+                          <TableCell className="text-right font-semibold">
+                            {(p.piecesPerUnit ?? 1) > 1 ? (
+                              <>
+                                {p.totalStock * (p.piecesPerUnit ?? 1)}
+                                <span className="text-muted-foreground ml-1 font-normal">
+                                  {p.sellableUnitLabel ?? "PZ"}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </TableCell>
                           <TableCell className="text-right">
                             {p.activeBatchCount}
                           </TableCell>
@@ -502,7 +515,7 @@ export default function Warehouse() {
                         {isExpanded && (
                           <TableRow key={`${p.productId}-detail`}>
                             <TableCell></TableCell>
-                            <TableCell colSpan={6} className="bg-accent/20 py-4">
+                            <TableCell colSpan={7} className="bg-accent/20 py-4">
                               <Table>
                                 <TableHeader>
                                   <TableRow>

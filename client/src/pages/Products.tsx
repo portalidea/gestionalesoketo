@@ -67,6 +67,8 @@ type FormData = {
   producerId: string;
   unitPrice: string;
   unit: string;
+  piecesPerUnit: number;
+  sellableUnitLabel: string;
   minStockThreshold: number;
   expiryWarningDays: number;
   vatRate: "4.00" | "5.00" | "10.00" | "22.00";
@@ -83,6 +85,8 @@ const EMPTY_FORM: FormData = {
   producerId: NO_PRODUCER_VALUE,
   unitPrice: "",
   unit: "",
+  piecesPerUnit: 1,
+  sellableUnitLabel: "PZ",
   minStockThreshold: 10,
   expiryWarningDays: 30,
   vatRate: "10.00",
@@ -168,6 +172,8 @@ export default function Products() {
       supplierName: producerName || undefined,
       unitPrice: formData.unitPrice || undefined,
       unit: formData.unit || undefined,
+      piecesPerUnit: formData.piecesPerUnit,
+      sellableUnitLabel: formData.sellableUnitLabel || "PZ",
       minStockThreshold: formData.minStockThreshold,
       expiryWarningDays: formData.expiryWarningDays,
       vatRate: formData.vatRate,
@@ -496,6 +502,40 @@ export default function Products() {
                         value={formData.unit}
                         onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
                       />
+                    </div>
+                  </div>
+
+                  {/* M5.8: Confezioni vendita */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="piecesPerUnit">Pezzi per confezione</Label>
+                      <Input
+                        id="piecesPerUnit"
+                        type="number"
+                        min={1}
+                        value={formData.piecesPerUnit}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            piecesPerUnit: Math.max(1, parseInt(e.target.value) || 1),
+                          })
+                        }
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Quanti pezzi vendibili contiene 1 confezione DDT. Es. 4 per "4x30g"
+                      </p>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="sellableUnitLabel">Etichetta unità vendita</Label>
+                      <Input
+                        id="sellableUnitLabel"
+                        placeholder="es. PZ, CONF, BUSTA"
+                        value={formData.sellableUnitLabel}
+                        onChange={(e) => setFormData({ ...formData, sellableUnitLabel: e.target.value })}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Come si chiama l'unità vendibile al dettaglio
+                      </p>
                     </div>
                   </div>
 
