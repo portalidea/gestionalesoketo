@@ -1,6 +1,7 @@
 /**
- * M6.2.B — PartnerOrderDetail
+ * M6.2.B Parte B — PartnerOrderDetail
  * Dettaglio ordine retailer: items con lotti, timeline stato, proforma, azioni (modifica/cancella).
+ * Usa retailerSelfService.orderDetail + cancelOrder.
  */
 import PartnerLayout from "@/components/PartnerLayout";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +32,7 @@ import {
   CheckCircle2,
   Circle,
   Clock,
+  CreditCard,
   Edit,
   FileText,
   Loader2,
@@ -42,20 +44,24 @@ import { useLocation, useParams } from "wouter";
 import { toast } from "sonner";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  pending: { label: "In attesa", color: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/30" },
+  pending: { label: "In attesa pagamento", color: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/30" },
   paid: { label: "Pagato", color: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/30" },
+  approved_for_shipping: { label: "Approvato per spedizione", color: "bg-cyan-500/10 text-cyan-700 dark:text-cyan-400 border-cyan-500/30" },
   transferring: { label: "In preparazione", color: "bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/30" },
   shipped: { label: "Spedito", color: "bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 border-indigo-500/30" },
   delivered: { label: "Consegnato", color: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/30" },
+  paid_on_delivery: { label: "Pagato alla consegna", color: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30" },
   cancelled: { label: "Cancellato", color: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/30" },
 };
 
 const TIMELINE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   pending: Clock,
-  paid: CheckCircle2,
+  paid: CreditCard,
+  approved_for_shipping: CheckCircle2,
   transferring: Package,
   shipped: Truck,
   delivered: CheckCircle2,
+  paid_on_delivery: CreditCard,
   cancelled: XCircle,
 };
 
@@ -64,25 +70,26 @@ export default function PartnerOrderDetail() {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
 
-  const orderQuery = trpc.retailerOrders.getById.useQuery(
-    { id: id! },
+  const orderQuery = trpc.retailerSelfService.ordersGetById.useQuery(
+    { orderId: id! },
     { enabled: Boolean(id) },
   );
 
-  const cancelMutation = trpc.retailerOrders.cancel.useMutation({
+  const cancelMutation = trpc.retailerSelfService.ordersCancel.useMutation({
     onSuccess: () => {
       toast.success("Ordine cancellato");
-      utils.retailerOrders.getById.invalidate({ id: id! });
-      utils.retailerOrders.list.invalidate();
+      utils.retailerSelfService.ordersGetById.invalidate({ orderId: id! });
+      utils.retailerSelfService.ordersList.invalidate();
     },
     onError: (err) => {
       toast.error("Errore cancellazione", { description: err.message });
     },
   });
 
-  const data = orderQuery.data;
-  const order = data?.order;
-  const isPending = order?.status === "pending";
+  const orderData = orderQuery.data;
+  const order = orderData?.order;
+  const canModify = orderData?.canModify ?? false;
+  const canCancel = orderData?.canCancel ?? false;
 
   if (orderQuery.isLoading) {
     return (
@@ -94,7 +101,7 @@ export default function PartnerOrderDetail() {
     );
   }
 
-  if (!order) {
+  if (!order || !orderData) {
     return (
       <PartnerLayout>
         <div className="text-center py-16">
@@ -112,34 +119,8 @@ export default function PartnerOrderDetail() {
   }
 
   const statusInfo = STATUS_LABELS[order.status] ?? { label: order.status, color: "" };
-
-  // Raggruppa items per prodotto (somma qty se stesso productId)
-  const groupedItems = data!.items.reduce(
-    (acc, item) => {
-      const key = item.productId;
-      if (!acc[key]) {
-        acc[key] = {
-          ...item,
-          batches: item.batchNumber
-            ? [{ batchNumber: item.batchNumber, expirationDate: item.expirationDate, quantity: item.quantity }]
-            : [],
-          totalQty: item.quantity,
-        };
-      } else {
-        acc[key].totalQty += item.quantity;
-        if (item.batchNumber) {
-          acc[key].batches.push({
-            batchNumber: item.batchNumber,
-            expirationDate: item.expirationDate,
-            quantity: item.quantity,
-          });
-        }
-      }
-      return acc;
-    },
-    {} as Record<string, any>,
-  );
-  const displayItems = Object.values(groupedItems);
+  const items = orderData.items ?? [];
+  const statusHistory = orderData.statusHistory ?? [];
 
   return (
     <PartnerLayout>
@@ -163,89 +144,103 @@ export default function PartnerOrderDetail() {
               </Badge>
             </div>
           </div>
-          {isPending && (
+          {(canModify || canCancel) && (
             <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setLocation(`/partner-portal/orders/${id}/edit`)}
-              >
-                <Edit className="h-4 w-4 mr-1" />
-                Modifica
-              </Button>
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button variant="destructive" size="sm">
-                    <XCircle className="h-4 w-4 mr-1" />
-                    Cancella
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Cancellare l'ordine?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      L'ordine #{order.orderNumber} verrà cancellato. Questa azione non è reversibile.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Annulla</AlertDialogCancel>
-                    <AlertDialogAction
-                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                      onClick={() => cancelMutation.mutate({ id: id! })}
-                    >
-                      Conferma cancellazione
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
+              {canModify && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setLocation(`/partner-portal/orders/${id}/edit`)}
+                >
+                  <Edit className="h-4 w-4 mr-1" />
+                  Modifica
+                </Button>
+              )}
+              {canCancel && (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="destructive" size="sm">
+                      <XCircle className="h-4 w-4 mr-1" />
+                      Cancella
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Cancellare l'ordine?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        L'ordine #{order.orderNumber} verrà cancellato. Questa azione non è reversibile.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Annulla</AlertDialogCancel>
+                      <AlertDialogAction
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        onClick={() => cancelMutation.mutate({ orderId: id! })}
+                      >
+                        Conferma cancellazione
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              )}
             </div>
           )}
         </div>
 
+        {/* Cancelled reason */}
+        {order.status === "cancelled" && order.cancelledReason && (
+          <div className="bg-destructive/5 border border-destructive/20 rounded-lg p-4">
+            <p className="text-sm text-destructive font-medium">Motivo cancellazione:</p>
+            <p className="text-sm text-muted-foreground mt-1">{order.cancelledReason}</p>
+          </div>
+        )}
+
         {/* Timeline */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Stato ordine</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2 flex-wrap">
-              {data!.timeline.map((step, i) => {
-                const Icon = TIMELINE_ICONS[step.status] ?? Circle;
-                const isActive = step.date != null;
-                const isCurrent = step.status === order.status;
-                return (
-                  <div key={step.status} className="flex items-center gap-2">
-                    {i > 0 && (
-                      <div
-                        className={`h-px w-6 ${isActive ? "bg-[#7AB648]" : "bg-border"}`}
-                      />
-                    )}
-                    <div
-                      className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium ${
-                        isCurrent
-                          ? "bg-[#7AB648]/10 text-[#7AB648] border border-[#7AB648]/30"
-                          : isActive
-                            ? "text-muted-foreground"
-                            : "text-muted-foreground/40"
-                      }`}
-                    >
-                      <Icon className="h-3.5 w-3.5" />
-                      <span>{step.label}</span>
-                      {step.date && (
-                        <span className="text-[10px] opacity-70 ml-1">
-                          {new Date(step.date).toLocaleDateString("it-IT", {
-                            day: "2-digit",
-                            month: "short",
-                          })}
-                        </span>
+        {statusHistory.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Stato ordine</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2 flex-wrap">
+                {statusHistory.map((step: any, i: number) => {
+                  const Icon = TIMELINE_ICONS[step.status] ?? Circle;
+                  const isActive = step.timestamp != null;
+                  const isCurrent = step.status === order.status;
+                  return (
+                    <div key={step.status} className="flex items-center gap-2">
+                      {i > 0 && (
+                        <div
+                          className={`h-px w-6 ${isActive ? "bg-[#7AB648]" : "bg-border"}`}
+                        />
                       )}
+                      <div
+                        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium ${
+                          isCurrent
+                            ? "bg-[#7AB648]/10 text-[#7AB648] border border-[#7AB648]/30"
+                            : isActive
+                              ? "text-muted-foreground"
+                              : "text-muted-foreground/40"
+                        }`}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
+                        <span>{STATUS_LABELS[step.status]?.label ?? step.status}</span>
+                        {step.timestamp && (
+                          <span className="text-[10px] opacity-70 ml-1">
+                            {new Date(step.timestamp).toLocaleDateString("it-IT", {
+                              day: "2-digit",
+                              month: "short",
+                            })}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Items */}
         <Card>
@@ -263,30 +258,28 @@ export default function PartnerOrderDetail() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {displayItems.map((item: any) => (
-                  <TableRow key={item.productId}>
+                {items.map((item: any, idx: number) => (
+                  <TableRow key={idx}>
                     <TableCell>
                       <div>
                         <p className="font-medium text-sm">{item.productName}</p>
                         <p className="text-xs text-muted-foreground">{item.productSku}</p>
-                        {item.batches.length > 0 && (
-                          <div className="mt-1 space-y-0.5">
-                            {item.batches.map((b: any, i: number) => (
-                              <p key={i} className="text-xs text-muted-foreground">
-                                Lotto {b.batchNumber} — Scad:{" "}
-                                {new Date(b.expirationDate).toLocaleDateString("it-IT")} ({b.quantity} pz)
-                              </p>
-                            ))}
-                          </div>
+                        {item.batchNumber && (
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            Lotto {item.batchNumber}
+                            {item.expirationDate && (
+                              <> — Scad: {new Date(item.expirationDate).toLocaleDateString("it-IT")}</>
+                            )}
+                          </p>
                         )}
                       </div>
                     </TableCell>
-                    <TableCell className="text-center">{item.totalQty}</TableCell>
+                    <TableCell className="text-center">{item.quantity}</TableCell>
                     <TableCell className="text-right text-sm">
-                      &euro;{item.unitPriceFinal}
+                      &euro;{parseFloat(item.unitPriceFinal).toFixed(2)}
                     </TableCell>
                     <TableCell className="text-right font-medium text-sm">
-                      &euro;{(parseFloat(item.unitPriceFinal) * item.totalQty).toFixed(2)}
+                      &euro;{(parseFloat(item.unitPriceFinal) * item.quantity).toFixed(2)}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -304,7 +297,7 @@ export default function PartnerOrderDetail() {
             <CardContent className="space-y-2">
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Subtotale netto</span>
-                <span>&euro;{order.subtotalNet}</span>
+                <span>&euro;{parseFloat(order.subtotalNet).toFixed(2)}</span>
               </div>
               {parseFloat(order.discountPercent ?? "0") > 0 && (
                 <div className="flex justify-between text-sm text-[#7AB648]">
@@ -314,36 +307,62 @@ export default function PartnerOrderDetail() {
               )}
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">IVA</span>
-                <span>&euro;{order.vatAmount}</span>
+                <span>&euro;{parseFloat(order.vatAmount).toFixed(2)}</span>
               </div>
               <div className="border-t pt-2 flex justify-between text-lg font-bold">
                 <span>Totale</span>
                 <span className="text-[#2D5A27] dark:text-[#7AB648]">
-                  &euro;{order.totalGross}
+                  &euro;{parseFloat(order.totalGross).toFixed(2)}
                 </span>
               </div>
             </CardContent>
           </Card>
 
-          {order.ficProformaNumber && (
+          {order.ficProformaNumber && order.ficProformaNumber !== null && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
                   <FileText className="h-4 w-4 text-[#7AB648]" />
-                  Proforma
+                  Documenti
                 </CardTitle>
               </CardHeader>
-              <CardContent>
-                <p className="text-sm">
-                  Proforma n. <strong>{order.ficProformaNumber}</strong>
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Generata automaticamente su Fatture in Cloud.
-                </p>
+              <CardContent className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <FileText className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm">
+                    Proforma n. <strong>{order.ficProformaNumber}</strong>
+                  </span>
+                </div>
+                {order.ficInvoiceNumber && (
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-[#7AB648]" />
+                    <span className="text-sm">
+                      Fattura n. <strong>{order.ficInvoiceNumber}</strong>
+                    </span>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
         </div>
+
+        {/* Payment info for advance_transfer pending */}
+        {order.status === "pending" && order.paymentTerms === "advance_transfer" && (
+          <Card className="border-[#2D5A27]/20">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-[#2D5A27] dark:text-[#7AB648]">
+                Dati per il bonifico
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm space-y-1">
+              <p><span className="text-muted-foreground">Intestatario:</span> SoKeto S.r.l.</p>
+              <p><span className="text-muted-foreground">IBAN:</span> <span className="font-mono">IT60X0542811101000000123456</span></p>
+              <p><span className="text-muted-foreground">BIC:</span> BPLOIT2L</p>
+              <p><span className="text-muted-foreground">Causale:</span> Ordine {order.orderNumber}</p>
+              <p><span className="text-muted-foreground">Importo:</span> <strong>&euro;{parseFloat(order.totalGross).toFixed(2)}</strong></p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Note */}
         {order.notes && (

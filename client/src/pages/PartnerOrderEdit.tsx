@@ -1,12 +1,11 @@
 /**
- * M6.2.B — PartnerOrderEdit
+ * M6.2.B Parte B — PartnerOrderEdit
  * Modifica ordine pending: aggiorna quantità, aggiungi/rimuovi items, ricalcola totali.
+ * Usa retailerSelfService.modifyOrder + retailerSelfService.cartPreview.
  */
 import PartnerLayout from "@/components/PartnerLayout";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Table,
@@ -42,8 +41,8 @@ export default function PartnerOrderEdit() {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
 
-  const orderQuery = trpc.retailerOrders.getById.useQuery(
-    { id: id! },
+  const orderQuery = trpc.retailerSelfService.ordersGetById.useQuery(
+    { orderId: id! },
     { enabled: Boolean(id) },
   );
 
@@ -54,12 +53,11 @@ export default function PartnerOrderEdit() {
   // Inizializza items dall'ordine
   useEffect(() => {
     if (orderQuery.data && !initialized) {
-      const order = orderQuery.data.order;
-      const items = orderQuery.data.items;
+      const orderData = orderQuery.data;
 
       // Raggruppa per productId (somma qty)
-      const grouped = items.reduce(
-        (acc, item) => {
+      const grouped = (orderData.items ?? []).reduce(
+        (acc: Record<string, EditItem>, item: any) => {
           if (!acc[item.productId]) {
             acc[item.productId] = {
               productId: item.productId,
@@ -77,30 +75,35 @@ export default function PartnerOrderEdit() {
       );
 
       setEditItems(Object.values(grouped));
-      setNotes(order.notes ?? "");
+      setNotes(orderData.order.notes ?? "");
       setInitialized(true);
     }
   }, [orderQuery.data, initialized]);
 
-  // Preview totali
+  // Preview totali live
   const previewInput = useMemo(
     () => editItems.filter((i) => i.quantity > 0).map((i) => ({ productId: i.productId, quantity: i.quantity })),
     [editItems],
   );
 
-  const previewQuery = trpc.retailerCheckout.preview.useQuery(
-    { items: previewInput },
-    { enabled: previewInput.length > 0 },
-  );
+  const previewMutation = trpc.retailerSelfService.cartPreview.useMutation();
 
-  const updateMutation = trpc.retailerOrders.updateItems.useMutation({
+  // Trigger preview when items change
+  useEffect(() => {
+    if (previewInput.length > 0) {
+      previewMutation.mutate({ items: previewInput });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(previewInput)]);
+
+  const modifyMutation = trpc.retailerSelfService.ordersModifyItems.useMutation({
     onSuccess: () => {
       toast.success("Ordine aggiornato con successo");
-      utils.retailerOrders.getById.invalidate({ id: id! });
-      utils.retailerOrders.list.invalidate();
+      utils.retailerSelfService.ordersGetById.invalidate({ orderId: id! });
+      utils.retailerSelfService.ordersList.invalidate();
       setLocation(`/partner-portal/orders/${id}`);
     },
-    onError: (err) => {
+    onError: (err: any) => {
       toast.error("Errore aggiornamento", { description: err.message });
     },
   });
@@ -121,15 +124,16 @@ export default function PartnerOrderEdit() {
       toast.error("L'ordine deve contenere almeno un prodotto");
       return;
     }
-    updateMutation.mutate({
-      id: id!,
+    modifyMutation.mutate({
+      orderId: id!,
       items: validItems.map((i) => ({ productId: i.productId, quantity: i.quantity })),
-      notes: notes || undefined,
+      // notes non supportato in ordersModifyItems
     });
   };
 
-  const order = orderQuery.data?.order;
-  const pricing = previewQuery.data;
+  const orderData2 = orderQuery.data;
+  const order = orderData2?.order;
+  const pricing = previewMutation.data;
 
   if (orderQuery.isLoading) {
     return (
@@ -141,7 +145,7 @@ export default function PartnerOrderEdit() {
     );
   }
 
-  if (!order || order.status !== "pending") {
+  if (!order || order.status !== "pending" || !orderData2) {
     return (
       <PartnerLayout>
         <div className="text-center py-16">
@@ -269,34 +273,34 @@ export default function PartnerOrderEdit() {
         {/* Totali aggiornati */}
         <Card>
           <CardContent className="p-6 space-y-3">
-            {previewQuery.isLoading ? (
+              {previewMutation.isPending ? (
               <div className="flex items-center gap-2 py-2">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 <span className="text-sm text-muted-foreground">Ricalcolo totali...</span>
               </div>
             ) : pricing ? (
               <>
-                {pricing.warnings && pricing.warnings.length > 0 && (
+                {pricing.warnings && (pricing.warnings as any[]).length > 0 && (
                   <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-3">
-                    {pricing.warnings.map((w: string, i: number) => (
+                    {(pricing.warnings as any[]).map((w: any, i: number) => (
                       <p key={i} className="text-xs text-yellow-700 dark:text-yellow-400">
-                        {w}
+                        {typeof w === 'string' ? w : w.message}
                       </p>
                     ))}
                   </div>
                 )}
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Subtotale netto</span>
-                  <span>&euro;{pricing.subtotalNet}</span>
+                  <span>&euro;{parseFloat(pricing.subtotalNet).toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">IVA</span>
-                  <span>&euro;{pricing.vatAmount}</span>
+                  <span>&euro;{parseFloat(pricing.vatAmount).toFixed(2)}</span>
                 </div>
                 <div className="border-t pt-2 flex justify-between text-lg font-bold">
                   <span>Totale</span>
                   <span className="text-[#2D5A27] dark:text-[#7AB648]">
-                    &euro;{pricing.totalGross}
+                    &euro;{parseFloat(pricing.totalGross).toFixed(2)}
                   </span>
                 </div>
               </>
@@ -313,9 +317,9 @@ export default function PartnerOrderEdit() {
               <Button
                 className="flex-1 bg-[#2D5A27] hover:bg-[#2D5A27]/90 text-white"
                 onClick={handleSave}
-                disabled={updateMutation.isPending || editItems.filter((i) => i.quantity > 0).length === 0}
+                disabled={modifyMutation.isPending || editItems.filter((i) => i.quantity > 0).length === 0}
               >
-                {updateMutation.isPending ? (
+                {modifyMutation.isPending ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     Salvataggio...
