@@ -107,6 +107,7 @@ export const retailerPortalRouter = router({
     .query(async ({ input }) => {
       const tTotal = Date.now();
       const portalUsers = await db.getUsersByRetailerId(input.retailerId);
+      console.log(`[retailerPortal.listUsers] retailerId=${input.retailerId} found=${portalUsers.length} users`, portalUsers.map(u => ({ id: u.id, email: u.email, role: u.role, retailerId: u.retailerId })));
 
       // Arricchisci con last_sign_in_at da Supabase Auth.
       // Ogni chiamata ha timeout 5s via Promise.race + fallback graceful.
@@ -172,6 +173,8 @@ export const retailerPortalRouter = router({
       }),
     )
     .mutation(async ({ input }) => {
+      console.log('[invite] step 1: validating input', { email: input.email, retailerId: input.retailerId, role: input.role });
+
       // 1. Verifica retailer esiste
       const retailer = await db.getRetailerById(input.retailerId);
       if (!retailer) {
@@ -181,99 +184,145 @@ export const retailerPortalRouter = router({
         });
       }
 
-      // 2. Check email non già usata
+      // 2. Idempotenza: check email già usata con messaggio specifico
       const existingUsers = await db.getAllUsers();
       const emailTaken = existingUsers.find(
         (u) => u.email.toLowerCase() === input.email.toLowerCase(),
       );
       if (emailTaken) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: `L'email ${input.email} è già associata a un utente.`,
-        });
-      }
-
-      // 3. Crea utente in Supabase Auth con invito
-      const { data: authData, error: authError } =
-        await supabaseAdmin.auth.admin.inviteUserByEmail(input.email, {
-          data: {
-            retailer_id: input.retailerId,
-            role: input.role,
-            name: input.name || null,
-          },
-        });
-
-      if (authError || !authData.user) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: `Errore creazione utente Supabase: ${authError?.message ?? "unknown"}`,
-        });
-      }
-
-      // 4. Crea riga in public.users con retailerId
-      // Il trigger handle_new_user potrebbe aver già creato la riga con role default.
-      // Facciamo upsert: se esiste, aggiorniamo role e retailerId.
-      try {
-        await db.createRetailerUser({
-          id: authData.user.id,
-          email: input.email,
-          name: input.name || null,
-          role: input.role,
-          retailerId: input.retailerId,
-        });
-      } catch (e: unknown) {
-        // Se il trigger ha già creato la riga, aggiorniamo
-        const err = e as { code?: string };
-        if (err.code === "23505") {
-          // unique violation — riga già esiste dal trigger
-          const dbInstance = await db.getDb();
-          if (dbInstance) {
-            const { users: usersTable } = await import("../drizzle/schema");
-            const { eq } = await import("drizzle-orm");
-            await dbInstance
-              .update(usersTable)
-              .set({
-                role: input.role,
-                retailerId: input.retailerId,
-                name: input.name || null,
-                updatedAt: new Date(),
-              })
-              .where(eq(usersTable.id, authData.user.id));
-          }
+        if (emailTaken.retailerId === input.retailerId) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `Utente già invitato per questo rivenditore. Usa "Rinvia invito" per inviare nuovamente il link.`,
+          });
         } else {
-          throw e;
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `Email già associata ad altro rivenditore.`,
+          });
         }
       }
 
-      // 5. Genera magic link per l'email di invito
-      const { data: linkData, error: linkError } =
-        await supabaseAdmin.auth.admin.generateLink({
-          type: "magiclink",
-          email: input.email,
-        });
+      // 3. Crea utente in Supabase Auth con invito
+      let authUserId: string | null = null;
+      try {
+        console.log('[invite] step 2: creating supabase auth user');
+        const { data: authData, error: authError } =
+          await supabaseAdmin.auth.admin.inviteUserByEmail(input.email, {
+            data: {
+              retailer_id: input.retailerId,
+              role: input.role,
+              name: input.name || null,
+            },
+          });
 
-      let magicLink = "";
-      if (!linkError && linkData?.properties?.action_link) {
-        magicLink = linkData.properties.action_link;
-      }
+        if (authError || !authData.user) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Errore nella creazione dell'account. Riprova più tardi.",
+          });
+        }
+        authUserId = authData.user.id;
+        console.log('[invite] step 3: auth user created', { authUserId });
 
-      // 6. Invia email di invito
-      if (magicLink) {
-        await sendEmail({
-          to: input.email,
-          subject: `Invito al portale ${retailer.name} — SoKeto`,
-          html: buildInviteEmailHtml({
-            retailerName: retailer.name,
-            magicLink,
+        // 4. Crea riga in public.users con retailerId
+        try {
+          await db.createRetailerUser({
+            id: authUserId,
+            email: input.email,
+            name: input.name || null,
             role: input.role,
-          }),
+            retailerId: input.retailerId,
+          });
+          console.log('[invite] step 4: users row inserted', { userId: authUserId });
+        } catch (e: unknown) {
+          const err = e as { code?: string };
+          if (err.code === "23505") {
+            // unique violation — riga già esiste dal trigger, aggiorniamo
+            const dbInstance = await db.getDb();
+            if (dbInstance) {
+              const { users: usersTable } = await import("../drizzle/schema");
+              const { eq } = await import("drizzle-orm");
+              await dbInstance
+                .update(usersTable)
+                .set({
+                  role: input.role,
+                  retailerId: input.retailerId,
+                  name: input.name || null,
+                  updatedAt: new Date(),
+                })
+                .where(eq(usersTable.id, authUserId));
+              console.log('[invite] step 4b: users row updated (trigger had created it)');
+            }
+          } else {
+            throw e;
+          }
+        }
+
+        // 5. Genera magic link per l'email di invito
+        console.log('[invite] step 5: generating magic link');
+        const { data: linkData, error: linkError } =
+          await supabaseAdmin.auth.admin.generateLink({
+            type: "magiclink",
+            email: input.email,
+          });
+
+        let magicLink = "";
+        if (!linkError && linkData?.properties?.action_link) {
+          magicLink = linkData.properties.action_link;
+        }
+
+        // 6. Invia email di invito
+        if (magicLink) {
+          console.log('[invite] step 6: sending invite email');
+          await sendEmail({
+            to: input.email,
+            subject: `Invito al portale ${retailer.name} — SoKeto`,
+            html: buildInviteEmailHtml({
+              retailerName: retailer.name,
+              magicLink,
+              role: input.role,
+            }),
+          });
+        }
+
+        console.log('[invite] step 7: returning result');
+        return {
+          userId: authUserId,
+          email: input.email,
+          status: "invited" as const,
+          magicLinkSent: Boolean(magicLink),
+        };
+      } catch (error: unknown) {
+        // Rollback: se l'errore è avvenuto dopo la creazione auth user, cleanup
+        if (authUserId) {
+          console.error('[invite] rollback: deleting auth user', { authUserId });
+          try {
+            await supabaseAdmin.auth.admin.deleteUser(authUserId);
+          } catch (rollbackErr) {
+            console.error('[invite] rollback failed for auth user', rollbackErr);
+          }
+          try {
+            const dbInstance = await db.getDb();
+            if (dbInstance) {
+              const { users: usersTable } = await import("../drizzle/schema");
+              const { eq } = await import("drizzle-orm");
+              await dbInstance.delete(usersTable).where(eq(usersTable.id, authUserId));
+            }
+          } catch (rollbackErr) {
+            console.error('[invite] rollback failed for users row', rollbackErr);
+          }
+        }
+        // Re-throw as TRPCError (no SQL leak)
+        if (error instanceof TRPCError) {
+          throw error;
+        }
+        console.error('[invite] unexpected error', error);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Errore durante l'invito. Riprova più tardi.",
         });
       }
-
-      return {
-        userId: authData.user.id,
-        magicLinkSent: Boolean(magicLink),
-      };
     }),
 
   /**

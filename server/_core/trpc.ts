@@ -108,3 +108,31 @@ const requireRetailer = t.middleware(async (opts) => {
 });
 
 export const retailerProcedure = t.procedure.use(requireRetailer);
+
+/**
+ * M6.1.1: Per procedure accessibili solo allo staff interno (admin, operator, viewer).
+ * Blocca retailer_admin e retailer_user.
+ */
+const requireStaff = t.middleware(async (opts) => {
+  const { ctx, next } = opts;
+
+  if (!ctx.user) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
+  }
+  const staffRoles = ["admin", "operator", "viewer"];
+  if (!staffRoles.includes(ctx.user.role)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Accesso riservato allo staff interno.",
+    });
+  }
+
+  return next({
+    ctx: {
+      ...ctx,
+      user: ctx.user,
+    },
+  });
+});
+
+export const staffProcedure = t.procedure.use(requireStaff);

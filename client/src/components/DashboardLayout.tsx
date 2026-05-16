@@ -38,7 +38,7 @@ import {
   Warehouse,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Redirect } from "wouter";
 import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 
 const baseMenuItems = [
@@ -82,6 +82,11 @@ export default function DashboardLayout({
 
   if (loading || !user) {
     return <DashboardLayoutSkeleton />;
+  }
+
+  // M6.1.1: Retailer users must not see admin dashboard
+  if (user.role === "retailer_admin" || user.role === "retailer_user") {
+    return <Redirect to="/partner-portal/dashboard" />;
   }
 
   return (

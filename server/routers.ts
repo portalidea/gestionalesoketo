@@ -4,6 +4,7 @@ import { systemRouter } from "./_core/systemRouter";
 import {
   adminProcedure,
   protectedProcedure,
+  staffProcedure,
   publicProcedure,
   router,
   writerProcedure,
@@ -103,11 +104,11 @@ export const appRouter = router({
 
   // ============= RETAILERS =============
   retailers: router({
-    list: protectedProcedure.query(async () => {
+    list: staffProcedure.query(async () => {
       return await db.getAllRetailers();
     }),
 
-    getById: protectedProcedure
+    getById: staffProcedure
       .input(z.object({ id: uuid }))
       .query(async ({ input }) => {
         return await db.getRetailerById(input.id);
@@ -124,7 +125,7 @@ export const appRouter = router({
      *     `lowStockCount` aggregato per (location, product) confrontato
      *     con `minStockThreshold` di `products`.
      */
-    getDetails: protectedProcedure
+    getDetails: staffProcedure
       .input(z.object({ id: uuid }))
       .query(async ({ input }) => {
         // M3.0.8 perf timing: timestamp ogni step. Log solo se total >500ms.
@@ -244,7 +245,7 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    dependentsCount: protectedProcedure
+    dependentsCount: staffProcedure
       .input(z.object({ id: uuid }))
       .query(async ({ input }) => {
         const t = Date.now();
@@ -300,17 +301,17 @@ export const appRouter = router({
 
   // ============= PRODUCTS =============
   products: router({
-    list: protectedProcedure.query(async () => {
+    list: staffProcedure.query(async () => {
       return await db.getAllProducts();
     }),
 
-    getById: protectedProcedure
+    getById: staffProcedure
       .input(z.object({ id: uuid }))
       .query(async ({ input }) => {
         return await db.getProductById(input.id);
       }),
 
-    getBySku: protectedProcedure
+    getBySku: staffProcedure
       .input(z.object({ sku: z.string() }))
       .query(async ({ input }) => {
         return await db.getProductBySku(input.sku);
@@ -455,7 +456,7 @@ export const appRouter = router({
       }),
 
     // M5.5: CRUD codici fornitore
-    getSupplierCodes: protectedProcedure
+    getSupplierCodes: staffProcedure
       .input(z.object({ productId: uuid }))
       .query(async ({ input }) => {
         return await db.getSupplierCodesByProduct(input.productId);
@@ -483,11 +484,11 @@ export const appRouter = router({
 
   // ============= PRODUCERS (Phase B M1) =============
   producers: router({
-    list: protectedProcedure.query(async () => {
+    list: staffProcedure.query(async () => {
       return await db.getAllProducers();
     }),
 
-    getById: protectedProcedure
+    getById: staffProcedure
       .input(z.object({ id: uuid }))
       .query(async ({ input }) => {
         return await db.getProducerById(input.id);
@@ -545,7 +546,7 @@ export const appRouter = router({
 
   // ============= PRODUCT BATCHES (Phase B M1) =============
   productBatches: router({
-    listByProduct: protectedProcedure
+    listByProduct: staffProcedure
       .input(z.object({ productId: uuid }))
       .query(async ({ input }) => {
         return await db.getBatchesByProduct(input.productId);
@@ -598,7 +599,7 @@ export const appRouter = router({
      * presente per estensioni future (es. preferenze per coppia
      * prodotto-retailer).
      */
-    suggestForTransfer: protectedProcedure
+    suggestForTransfer: staffProcedure
       .input(z.object({ productId: uuid, retailerId: uuid }))
       .query(async ({ input }) => {
         return await db.getBatchesAvailableForTransfer(input.productId);
@@ -751,7 +752,7 @@ export const appRouter = router({
         });
       }),
 
-    listByRetailer: protectedProcedure
+    listByRetailer: staffProcedure
       .input(z.object({ retailerId: uuid, limit: z.number().int().optional() }))
       .query(async ({ input }) => {
         return await db.getStockMovementsByRetailer(
@@ -760,7 +761,7 @@ export const appRouter = router({
         );
       }),
 
-    listByLocation: protectedProcedure
+    listByLocation: staffProcedure
       .input(z.object({ locationId: uuid, limit: z.number().int().optional() }))
       .query(async ({ input }) => {
         return await db.getStockMovementsByLocationId(
@@ -773,7 +774,7 @@ export const appRouter = router({
      * Phase B M2.5: lista globale movimenti con filtri + paginazione.
      * Usata dalla pagina /movements.
      */
-    listAll: protectedProcedure
+    listAll: staffProcedure
       .input(
         z.object({
           type: z
@@ -815,15 +816,15 @@ export const appRouter = router({
 
   // ============= LOCATIONS (Phase B M1) =============
   locations: router({
-    list: protectedProcedure.query(async () => {
+    list: staffProcedure.query(async () => {
       return await db.getAllLocations();
     }),
 
-    getCentralWarehouse: protectedProcedure.query(async () => {
+    getCentralWarehouse: staffProcedure.query(async () => {
       return (await db.getCentralWarehouseLocation()) ?? null;
     }),
 
-    getByRetailer: protectedProcedure
+    getByRetailer: staffProcedure
       .input(z.object({ retailerId: uuid }))
       .query(async ({ input }) => {
         return (await db.getRetailerLocation(input.retailerId)) ?? null;
@@ -832,13 +833,13 @@ export const appRouter = router({
 
   // ============= INVENTORY BY BATCH (Phase B M1) =============
   inventoryByBatch: router({
-    listByLocation: protectedProcedure
+    listByLocation: staffProcedure
       .input(z.object({ locationId: uuid }))
       .query(async ({ input }) => {
         return await db.getInventoryByLocationId(input.locationId);
       }),
 
-    listByRetailer: protectedProcedure
+    listByRetailer: staffProcedure
       .input(z.object({ retailerId: uuid }))
       .query(async ({ input }) => {
         return await db.getInventoryByBatchByRetailer(input.retailerId);
@@ -847,21 +848,21 @@ export const appRouter = router({
 
   // ============= WAREHOUSE OVERVIEW (Phase B M1) =============
   warehouse: router({
-    getStockOverview: protectedProcedure.query(async () => {
+    getStockOverview: staffProcedure.query(async () => {
       return await db.getWarehouseStockOverview();
     }),
   }),
 
   // ============= ALERTS =============
   alerts: router({
-    getActive: protectedProcedure.query(async () => {
+    getActive: staffProcedure.query(async () => {
       console.time("[alerts.getActive]");
       const result = await db.getActiveAlerts();
       console.timeEnd("[alerts.getActive]");
       return result;
     }),
 
-    getByRetailer: protectedProcedure
+    getByRetailer: staffProcedure
       .input(z.object({ retailerId: uuid }))
       .query(async ({ input }) => {
         return await db.getAlertsByRetailer(input.retailerId);
@@ -899,19 +900,19 @@ export const appRouter = router({
   // ============= DASHBOARD STATS =============
   // Cache TTL 2 min implementata in db.ts per mantenere i tipi tRPC
   dashboard: router({
-    getStats: protectedProcedure.query(async () => {
+    getStats: staffProcedure.query(async () => {
       console.time("[dashboard.getStats]");
       const result = await db.getDashboardStats();
       console.timeEnd("[dashboard.getStats]");
       return result;
     }),
-    getStockAlerts: protectedProcedure.query(async () => {
+    getStockAlerts: staffProcedure.query(async () => {
       console.time("[dashboard.getStockAlerts]");
       const result = await db.getProductsUnderThreshold(20);
       console.timeEnd("[dashboard.getStockAlerts]");
       return result;
     }),
-    getExpiringBatches: protectedProcedure.query(async () => {
+    getExpiringBatches: staffProcedure.query(async () => {
       console.time("[dashboard.getExpiringBatches]");
       const result = await db.getExpiringBatches(20);
       console.timeEnd("[dashboard.getExpiringBatches]");
@@ -921,7 +922,7 @@ export const appRouter = router({
 
   // ============= PRICING PACKAGES (Phase B M3) =============
   pricingPackages: router({
-    list: protectedProcedure.query(async () => {
+    list: staffProcedure.query(async () => {
       const t = Date.now();
       const r = await db.getAllPricingPackages();
       const ms = Date.now() - t;
@@ -978,7 +979,7 @@ export const appRouter = router({
 
   // ============= PRICING CALCULATION (Phase B M3) =============
   pricing: router({
-    calculateForRetailer: protectedProcedure
+    calculateForRetailer: staffProcedure
       .input(
         z.object({
           retailerId: uuid,
@@ -1006,7 +1007,7 @@ export const appRouter = router({
 
   // ============= FIC INTEGRATION (Phase B M3) =============
   ficIntegration: router({
-    getStatus: protectedProcedure.query(async () => {
+    getStatus: staffProcedure.query(async () => {
       const t = Date.now();
       const r = await getFicStatus();
       const ms = Date.now() - t;
@@ -1035,7 +1036,7 @@ export const appRouter = router({
 
   // ============= FIC CLIENTS CACHE (Phase B M3) =============
   ficClients: router({
-    list: protectedProcedure.query(async () => {
+    list: staffProcedure.query(async () => {
       const t = Date.now();
       try {
         const r = await getFicClients(false);
@@ -1064,7 +1065,7 @@ export const appRouter = router({
 
   // ============= PROFORMA QUEUE (Phase B M3) =============
   proformaQueue: router({
-    list: protectedProcedure
+    list: staffProcedure
       .input(
         z
           .object({
@@ -1076,7 +1077,7 @@ export const appRouter = router({
         return await db.getProformaQueueList({ status: input?.status });
       }),
 
-    getByMovement: protectedProcedure
+    getByMovement: staffProcedure
       .input(z.object({ movementId: uuid }))
       .query(async ({ input }) => {
         return (await db.getProformaQueueByMovement(input.movementId)) ?? null;
@@ -1199,7 +1200,7 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    getLogs: protectedProcedure
+    getLogs: staffProcedure
       .input(z.object({ retailerId: uuid, limit: z.number().optional() }))
       .query(async ({ input }) => {
         return await db.getSyncLogsByRetailer(input.retailerId, input.limit || 20);

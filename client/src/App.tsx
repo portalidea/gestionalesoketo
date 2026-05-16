@@ -5,6 +5,7 @@ import { Route, Switch, Redirect } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { CartProvider } from "./contexts/CartContext";
+import RequireRole from "./components/auth/RequireRole";
 import { useAuth } from "./_core/hooks/useAuth";
 import Alerts from "./pages/Alerts";
 import AuthCallback from "./pages/AuthCallback";
@@ -36,8 +37,11 @@ import PartnerOrderDetail from "./pages/PartnerOrderDetail";
 import PartnerOrderEdit from "./pages/PartnerOrderEdit";
 import PartnerProductDetail from "./pages/PartnerProductDetail";
 
+const ADMIN_ROLES = ["admin", "operator", "viewer"];
+const RETAILER_ROLES = ["retailer_admin", "retailer_user"];
+
 /**
- * M6.1: Redirect root "/" basato sul ruolo utente.
+ * M6.1.1: Redirect root "/" basato sul ruolo utente.
  * retailer_admin / retailer_user → /partner-portal/dashboard
  * admin / operator / viewer → Home (dashboard admin)
  */
@@ -56,90 +60,114 @@ function RootRedirect() {
   return <Home />;
 }
 
-/**
- * M6.1: Guard per le route /partner-portal/*.
- * Se l'utente non è retailer, redirect a /.
- */
-function PartnerGuard({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
-
-  if (loading || !user) return null;
-
-  if (user.role !== "retailer_admin" && user.role !== "retailer_user") {
-    return <Redirect to="/" />;
-  }
-
-  return <>{children}</>;
-}
-
 function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
       <Route path="/auth/callback" component={AuthCallback} />
 
-      {/* M6.2.B: Partner Portal routes */}
+      {/* ═══════════════════════════════════════════════════════════
+          Partner Portal routes — only retailer_admin / retailer_user
+         ═══════════════════════════════════════════════════════════ */}
       <Route path="/partner-portal/dashboard">
-        <PartnerGuard>
+        <RequireRole allowedRoles={RETAILER_ROLES}>
           <PartnerDashboard />
-        </PartnerGuard>
+        </RequireRole>
       </Route>
       <Route path="/partner-portal/catalog">
-        <PartnerGuard>
+        <RequireRole allowedRoles={RETAILER_ROLES}>
           <PartnerCatalog />
-        </PartnerGuard>
+        </RequireRole>
       </Route>
       <Route path="/partner-portal/catalog/:id">
-        <PartnerGuard>
+        <RequireRole allowedRoles={RETAILER_ROLES}>
           <PartnerProductDetail />
-        </PartnerGuard>
+        </RequireRole>
       </Route>
       <Route path="/partner-portal/cart">
-        <PartnerGuard>
+        <RequireRole allowedRoles={RETAILER_ROLES}>
           <PartnerCart />
-        </PartnerGuard>
+        </RequireRole>
       </Route>
       <Route path="/partner-portal/checkout">
-        <PartnerGuard>
+        <RequireRole allowedRoles={RETAILER_ROLES}>
           <PartnerCheckout />
-        </PartnerGuard>
+        </RequireRole>
       </Route>
       <Route path="/partner-portal/orders">
-        <PartnerGuard>
+        <RequireRole allowedRoles={RETAILER_ROLES}>
           <PartnerOrders />
-        </PartnerGuard>
+        </RequireRole>
       </Route>
       <Route path="/partner-portal/orders/:id/edit">
-        <PartnerGuard>
+        <RequireRole allowedRoles={RETAILER_ROLES}>
           <PartnerOrderEdit />
-        </PartnerGuard>
+        </RequireRole>
       </Route>
       <Route path="/partner-portal/orders/:id">
-        <PartnerGuard>
+        <RequireRole allowedRoles={RETAILER_ROLES}>
           <PartnerOrderDetail />
-        </PartnerGuard>
+        </RequireRole>
       </Route>
 
-      {/* Admin/Operator routes */}
+      {/* ═══════════════════════════════════════════════════════════
+          Admin/Operator routes — only admin / operator / viewer
+         ═══════════════════════════════════════════════════════════ */}
       <Route path="/" component={RootRedirect} />
-      <Route path="/producers" component={Producers} />
-      <Route path="/producers/:id" component={ProducerDetail} />
-      <Route path="/products" component={Products} />
-      <Route path="/products/:id" component={ProductDetail} />
-      <Route path="/warehouse" component={Warehouse} />
-      <Route path="/movements" component={Movements} />
-      <Route path="/ddt-imports" component={DdtImports} />
-      <Route path="/ddt-imports/:id" component={DdtImportDetail} />
-      <Route path="/retailers" component={Retailers} />
-      <Route path="/retailers/:id" component={RetailerDetail} />
-      <Route path="/orders" component={Orders} />
-      <Route path="/orders/new" component={OrderNew} />
-      <Route path="/orders/:id" component={OrderDetail} />
-      <Route path="/alerts" component={Alerts} />
-      <Route path="/reports" component={Reports} />
-      <Route path="/settings/team" component={Team} />
-      <Route path="/settings/packages" component={Packages} />
-      <Route path="/settings/integrations" component={Integrations} />
+      <Route path="/producers">
+        <RequireRole allowedRoles={ADMIN_ROLES}><Producers /></RequireRole>
+      </Route>
+      <Route path="/producers/:id">
+        <RequireRole allowedRoles={ADMIN_ROLES}><ProducerDetail /></RequireRole>
+      </Route>
+      <Route path="/products">
+        <RequireRole allowedRoles={ADMIN_ROLES}><Products /></RequireRole>
+      </Route>
+      <Route path="/products/:id">
+        <RequireRole allowedRoles={ADMIN_ROLES}><ProductDetail /></RequireRole>
+      </Route>
+      <Route path="/warehouse">
+        <RequireRole allowedRoles={ADMIN_ROLES}><Warehouse /></RequireRole>
+      </Route>
+      <Route path="/movements">
+        <RequireRole allowedRoles={ADMIN_ROLES}><Movements /></RequireRole>
+      </Route>
+      <Route path="/ddt-imports">
+        <RequireRole allowedRoles={ADMIN_ROLES}><DdtImports /></RequireRole>
+      </Route>
+      <Route path="/ddt-imports/:id">
+        <RequireRole allowedRoles={ADMIN_ROLES}><DdtImportDetail /></RequireRole>
+      </Route>
+      <Route path="/retailers">
+        <RequireRole allowedRoles={ADMIN_ROLES}><Retailers /></RequireRole>
+      </Route>
+      <Route path="/retailers/:id">
+        <RequireRole allowedRoles={ADMIN_ROLES}><RetailerDetail /></RequireRole>
+      </Route>
+      <Route path="/orders">
+        <RequireRole allowedRoles={ADMIN_ROLES}><Orders /></RequireRole>
+      </Route>
+      <Route path="/orders/new">
+        <RequireRole allowedRoles={ADMIN_ROLES}><OrderNew /></RequireRole>
+      </Route>
+      <Route path="/orders/:id">
+        <RequireRole allowedRoles={ADMIN_ROLES}><OrderDetail /></RequireRole>
+      </Route>
+      <Route path="/alerts">
+        <RequireRole allowedRoles={ADMIN_ROLES}><Alerts /></RequireRole>
+      </Route>
+      <Route path="/reports">
+        <RequireRole allowedRoles={ADMIN_ROLES}><Reports /></RequireRole>
+      </Route>
+      <Route path="/settings/team">
+        <RequireRole allowedRoles={["admin"]}><Team /></RequireRole>
+      </Route>
+      <Route path="/settings/packages">
+        <RequireRole allowedRoles={["admin"]}><Packages /></RequireRole>
+      </Route>
+      <Route path="/settings/integrations">
+        <RequireRole allowedRoles={["admin"]}><Integrations /></RequireRole>
+      </Route>
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

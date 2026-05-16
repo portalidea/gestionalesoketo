@@ -5,7 +5,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { eq, desc, and, sql, inArray } from "drizzle-orm";
-import { router, writerProcedure, protectedProcedure } from "./_core/trpc";
+import { router, writerProcedure, staffProcedure } from "./_core/trpc";
 import { getDb } from "./db";
 import {
   ddtImports,
@@ -29,7 +29,7 @@ export const ddtImportsRouter = router({
   /**
    * Lista DDT imports con paginazione e filtri.
    */
-  list: protectedProcedure
+  list: staffProcedure
     .input(
       z.object({
         status: z.enum(["uploaded", "extracting", "review", "confirmed", "failed"]).optional(),
@@ -118,7 +118,7 @@ export const ddtImportsRouter = router({
   /**
    * Dettaglio singolo DDT import con tutti gli items.
    */
-  getById: protectedProcedure
+  getById: staffProcedure
     .input(z.object({ id: uuid }))
     .query(async ({ input }) => {
       const db = await getDb();
@@ -765,7 +765,7 @@ export const ddtImportsRouter = router({
   /**
    * Download PDF originale (signed URL temporanea).
    */
-  downloadPdf: protectedProcedure
+  downloadPdf: staffProcedure
     .input(z.object({ id: uuid }))
     .query(async ({ input }) => {
       const db = await getDb();

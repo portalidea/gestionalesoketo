@@ -12,7 +12,7 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { protectedProcedure, router } from "./_core/trpc";
+import { staffProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
 import {
   orders,
@@ -59,7 +59,7 @@ export const ordersRouter = router({
   /**
    * 1. Lista ordini con filtri
    */
-  list: protectedProcedure
+  list: staffProcedure
     .input(
       z.object({
         status: statusEnum.optional(),
@@ -127,7 +127,7 @@ export const ordersRouter = router({
   /**
    * 2. Dettaglio ordine con items
    */
-  getById: protectedProcedure
+  getById: staffProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const db = await getDb();
@@ -195,7 +195,7 @@ export const ordersRouter = router({
   /**
    * 3. Preview pricing (senza creare ordine)
    */
-  preview: protectedProcedure
+  preview: staffProcedure
     .input(
       z.object({
         retailerId: z.string().uuid(),
@@ -209,7 +209,7 @@ export const ordersRouter = router({
   /**
    * 4. Crea ordine con items (snapshot pricing)
    */
-  create: protectedProcedure
+  create: staffProcedure
     .input(
       z.object({
         retailerId: z.string().uuid(),
@@ -412,7 +412,7 @@ export const ordersRouter = router({
   /**
    * 5. Modifica items ordine pending
    */
-  updateItems: protectedProcedure
+  updateItems: staffProcedure
     .input(
       z.object({
         orderId: z.string().uuid(),
@@ -488,7 +488,7 @@ export const ordersRouter = router({
   /**
    * 6. Transizione status con validazione FSM
    */
-  updateStatus: protectedProcedure
+  updateStatus: staffProcedure
     .input(
       z.object({
         orderId: z.string().uuid(),
@@ -559,7 +559,7 @@ export const ordersRouter = router({
   /**
    * 8. Assegna/rimuovi lotto su un orderItem
    */
-  assignBatch: protectedProcedure
+  assignBatch: staffProcedure
     .input(
       z.object({
         orderItemId: z.string().uuid(),
@@ -639,7 +639,7 @@ export const ordersRouter = router({
   /**
    * 9. Lista lotti disponibili per un prodotto (per dropdown assegnazione)
    */
-  batchesForProduct: protectedProcedure
+  batchesForProduct: staffProcedure
     .input(z.object({ productId: z.string().uuid() }))
     .query(async ({ input }) => {
       const db = await getDb();
@@ -661,7 +661,7 @@ export const ordersRouter = router({
   /**
    * 10. Genera proforma FiC e salva riferimento
    */
-  generateProforma: protectedProcedure
+  generateProforma: staffProcedure
     .input(z.object({ orderId: z.string().uuid() }))
     .mutation(async ({ input }) => {
       const db = await getDb();
@@ -773,7 +773,7 @@ export const ordersRouter = router({
   /**
    * 8. Rigenera proforma FiC (reset + ricrea)
    */
-  regenerateProforma: protectedProcedure
+  regenerateProforma: staffProcedure
     .input(z.object({ orderId: z.string().uuid() }))
     .mutation(async ({ input }) => {
       const db = await getDb();

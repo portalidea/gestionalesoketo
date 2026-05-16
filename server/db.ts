@@ -1,4 +1,4 @@
-import { eq, and, or, desc, gte, lte, ilike, sql, type SQL } from "drizzle-orm";
+import { eq, and, or, desc, gte, lte, ilike, inArray, sql, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -1972,7 +1972,12 @@ export async function getUsersByRetailerId(retailerId: string) {
   return db
     .select()
     .from(users)
-    .where(eq(users.retailerId, retailerId))
+    .where(
+      and(
+        eq(users.retailerId, retailerId),
+        inArray(users.role, ["retailer_admin", "retailer_user"]),
+      ),
+    )
     .orderBy(users.email);
 }
 
