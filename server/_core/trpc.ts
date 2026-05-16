@@ -162,3 +162,37 @@ const requireStaff = t.middleware(async (opts) => {
 });
 
 export const staffProcedure = t.procedure.use(withTimeout).use(requireStaff);
+
+/**
+ * M7-B: Per utenti affiliato (affiliate_admin o affiliate_user).
+ * Inietta ctx.affiliateId dal profilo utente.
+ */
+const requireAffiliate = t.middleware(async (opts) => {
+  const { ctx, next } = opts;
+
+  if (!ctx.user) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
+  }
+  if (ctx.user.role !== "affiliate_admin" && ctx.user.role !== "affiliate_user") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Accesso riservato agli utenti del portale affiliati.",
+    });
+  }
+  if (!ctx.user.affiliateId) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Utente affiliato senza affiliateId associato.",
+    });
+  }
+
+  return next({
+    ctx: {
+      ...ctx,
+      user: ctx.user,
+      affiliateId: ctx.user.affiliateId,
+    },
+  });
+});
+
+export const affiliateProcedure = t.procedure.use(withTimeout).use(requireAffiliate);

@@ -28,6 +28,7 @@ import { retailerCheckoutRouter } from "./retailer-checkout-router";
 import { retailerOrdersRouter } from "./retailer-orders-router";
 import { retailerSelfServiceRouter } from "./retailer-selfservice-router";
 import { affiliatesRouter } from "./affiliates-router";
+import { affiliatePortalRouter } from "./affiliate-portal-router";
 
 
 const uuid = z.string().uuid();
@@ -1294,6 +1295,9 @@ export const appRouter = router({
 
   // ============= M7-A — AFFILIATI =============
   affiliates: affiliatesRouter,
+
+  // ============= M7-B — PORTALE AFFILIATI =============
+  affiliatePortal: affiliatePortalRouter,
 });
 
 export type AppRouter = typeof appRouter;
