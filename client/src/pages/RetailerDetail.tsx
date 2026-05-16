@@ -83,7 +83,7 @@ import {
   Copy,
   Send,
 } from "lucide-react";
-import { useState, useMemo, type FormEvent } from "react";
+import { useState, useEffect, useMemo, type FormEvent } from "react";
 import { toast } from "sonner";
 import { useLocation, useRoute } from "wouter";
 
@@ -122,9 +122,22 @@ export default function RetailerDetail() {
 
   // ============== M3 commercial config ==============
   const { data: packages } = trpc.pricingPackages.list.useQuery();
-  const { data: ficStatus } = trpc.ficIntegration.getStatus.useQuery();
+  // M6.1.3 Fix 5: lazy load ficStatus — deferred dopo il primo render
+  // per non bloccare il batch iniziale (getDetails + dependentsCount)
+  const [shouldLoadFic, setShouldLoadFic] = useState(false);
+  useEffect(() => {
+    // Attiva FiC query dopo 500ms dal mount (fuori dal batch critico)
+    const timer = setTimeout(() => setShouldLoadFic(true), 500);
+    return () => clearTimeout(timer);
+  }, []);
+  const { data: ficStatus } = trpc.ficIntegration.getStatus.useQuery(undefined, {
+    enabled: shouldLoadFic,
+    staleTime: 60_000,
+    retry: 1,
+  });
   const { data: ficClientsData } = trpc.ficClients.list.useQuery(undefined, {
-    enabled: !!ficStatus?.connected,
+    enabled: shouldLoadFic && !!ficStatus?.connected,
+    staleTime: 60_000,
     retry: false,
   });
   const ficRefreshMut = trpc.ficClients.refresh.useMutation({

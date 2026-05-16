@@ -248,10 +248,11 @@ export const appRouter = router({
     dependentsCount: staffProcedure
       .input(z.object({ id: uuid }))
       .query(async ({ input }) => {
-        const t = Date.now();
+        const t0 = Date.now();
+        console.log('[dependentsCount] start', { retailerId: input.id });
         const r = await db.getRetailerDependentsCount(input.id);
-        const ms = Date.now() - t;
-        if (ms > 500) console.log(`[retailers.dependentsCount] ${ms}ms`);
+        const totalMs = Date.now() - t0;
+        console.log('[dependentsCount] DONE', { ...r, total_ms: totalMs });
         return r;
       }),
 
@@ -923,10 +924,11 @@ export const appRouter = router({
   // ============= PRICING PACKAGES (Phase B M3) =============
   pricingPackages: router({
     list: staffProcedure.query(async () => {
-      const t = Date.now();
+      const t0 = Date.now();
+      console.log('[pricingPackages.list] start');
       const r = await db.getAllPricingPackages();
-      const ms = Date.now() - t;
-      if (ms > 500) console.log(`[pricingPackages.list] ${ms}ms`);
+      const totalMs = Date.now() - t0;
+      console.log('[pricingPackages.list] DONE', { count: r.length, total_ms: totalMs });
       return r;
     }),
 

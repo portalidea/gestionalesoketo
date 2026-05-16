@@ -8,7 +8,35 @@ const t = initTRPC.context<TrpcContext>().create({
 });
 
 export const router = t.router;
-export const publicProcedure = t.procedure;
+
+/**
+ * M6.1.3: Timeout middleware globale (rete di sicurezza).
+ * Previene FUNCTION_INVOCATION_TIMEOUT (60s) su Vercel limitando
+ * ogni procedura a 8s. Se scatta, logga QUALE procedura ha sforato.
+ */
+const PROCEDURE_TIMEOUT_MS = 8_000;
+
+const withTimeout = t.middleware(async ({ next, path, type }) => {
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(
+      () =>
+        reject(
+          new TRPCError({
+            code: "TIMEOUT",
+            message: `Procedure ${path} (${type}) exceeded ${PROCEDURE_TIMEOUT_MS}ms`,
+          }),
+        ),
+      PROCEDURE_TIMEOUT_MS,
+    ),
+  );
+  return Promise.race([next(), timeoutPromise]);
+});
+
+// ═══════════════════════════════════════════════════════════
+// Base procedures — ALL include timeout middleware
+// ═══════════════════════════════════════════════════════════
+
+export const publicProcedure = t.procedure.use(withTimeout);
 
 const requireUser = t.middleware(async (opts) => {
   const { ctx, next } = opts;
@@ -26,11 +54,9 @@ const requireUser = t.middleware(async (opts) => {
 });
 
 /**
- * Disponibile a qualsiasi utente autenticato (admin/operator/viewer).
- * Le mutation che modificano dati sono comunque vincolate dalle policy RLS
- * lato Supabase per accessi diretti dal client (futuri scenari).
+ * Disponibile a qualsiasi utente autenticato (admin/operator/viewer/retailer).
  */
-export const protectedProcedure = t.procedure.use(requireUser);
+export const protectedProcedure = t.procedure.use(withTimeout).use(requireUser);
 
 const requireWriter = t.middleware(async (opts) => {
   const { ctx, next } = opts;
@@ -53,27 +79,27 @@ const requireWriter = t.middleware(async (opts) => {
 /**
  * Per mutazioni che richiedono ruolo admin o operator (esclude viewer).
  */
-export const writerProcedure = t.procedure.use(requireWriter);
+export const writerProcedure = t.procedure.use(withTimeout).use(requireWriter);
 
-export const adminProcedure = t.procedure.use(
-  t.middleware(async (opts) => {
-    const { ctx, next } = opts;
+const requireAdmin = t.middleware(async (opts) => {
+  const { ctx, next } = opts;
 
-    if (!ctx.user) {
-      throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
-    }
-    if (ctx.user.role !== "admin") {
-      throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
-    }
+  if (!ctx.user) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
+  }
+  if (ctx.user.role !== "admin") {
+    throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
+  }
 
-    return next({
-      ctx: {
-        ...ctx,
-        user: ctx.user,
-      },
-    });
-  }),
-);
+  return next({
+    ctx: {
+      ...ctx,
+      user: ctx.user,
+    },
+  });
+});
+
+export const adminProcedure = t.procedure.use(withTimeout).use(requireAdmin);
 
 /**
  * M6.1: Per utenti retailer (retailer_admin o retailer_user).
@@ -107,7 +133,7 @@ const requireRetailer = t.middleware(async (opts) => {
   });
 });
 
-export const retailerProcedure = t.procedure.use(requireRetailer);
+export const retailerProcedure = t.procedure.use(withTimeout).use(requireRetailer);
 
 /**
  * M6.1.1: Per procedure accessibili solo allo staff interno (admin, operator, viewer).
@@ -135,4 +161,4 @@ const requireStaff = t.middleware(async (opts) => {
   });
 });
 
-export const staffProcedure = t.procedure.use(requireStaff);
+export const staffProcedure = t.procedure.use(withTimeout).use(requireStaff);
