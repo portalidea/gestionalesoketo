@@ -57,6 +57,8 @@ export default function AuthVerify() {
         setTimeout(() => {
           if (role.startsWith("retailer_")) {
             setLocation("/partner-portal/dashboard");
+          } else if (role.startsWith("affiliate_")) {
+            setLocation("/affiliate-portal/dashboard");
           } else {
             setLocation("/");
           }
