@@ -31,7 +31,10 @@ import {
  */
 export const userRoleEnum = pgEnum("user_role", ["admin", "operator", "viewer", "retailer_admin", "retailer_user"]);
 export const orderStatusEnum = pgEnum("order_status", [
-  "pending", "paid", "transferring", "shipped", "delivered", "cancelled",
+  "pending", "paid", "approved_for_shipping", "transferring", "shipped", "delivered", "paid_on_delivery", "cancelled",
+]);
+export const paymentTermsEnum = pgEnum("payment_terms_enum", [
+  "advance_transfer", "on_delivery", "credit_card", "manual",
 ]);
 export const stockMovementTypeEnum = pgEnum("stock_movement_type", [
   "IN",
@@ -114,12 +117,13 @@ export const retailers = pgTable("retailers", {
   }),
   // M3: ID cliente in anagrafica FiC single-tenant (NULL = blocca generazione proforma)
   ficClientId: integer("ficClientId"),
+  // M6.2.B: condizioni di pagamento default per il retailer
+  paymentTerms: paymentTermsEnum("paymentTerms").default("advance_transfer").notNull(),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
-
 export type Retailer = typeof retailers.$inferSelect;
-export type InsertRetailer = typeof retailers.$inferInsert;
+export type InsertRetailer = typeof retailers.$inferInsert;;
 
 /**
  * Products — anagrafica centralizzata prodotti SoKeto.
@@ -571,11 +575,16 @@ export const orders = pgTable(
     notesInternal: text("notesInternal"),
     ficProformaId: integer("ficProformaId"),
     ficProformaNumber: varchar("ficProformaNumber", { length: 50 }),
+    ficInvoiceId: integer("ficInvoiceId"),
+    ficInvoiceNumber: varchar("ficInvoiceNumber", { length: 50 }),
+    paymentTerms: paymentTermsEnum("paymentTerms").default("advance_transfer").notNull(),
     paidAt: timestamp("paidAt", { withTimezone: true }),
+    approvedForShippingAt: timestamp("approvedForShippingAt", { withTimezone: true }),
     transferringAt: timestamp("transferringAt", { withTimezone: true }),
     shippedAt: timestamp("shippedAt", { withTimezone: true }),
     deliveredAt: timestamp("deliveredAt", { withTimezone: true }),
     cancelledAt: timestamp("cancelledAt", { withTimezone: true }),
+    cancelledReason: text("cancelledReason"),
     createdBy: uuid("createdBy")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),

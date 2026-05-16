@@ -26,6 +26,8 @@ import {
 import { eq, desc, and, gte, lte, sql, inArray, asc, gt } from "drizzle-orm";
 import { calculateOrderPricing, type PricingItemInput } from "./pricing";
 import { createFicProforma } from "./fic-integration";
+import { transitionOrder, modifyPaidOrder, type OrderStatus } from "./services/orderStateMachine";
+import { getAvailableStock } from "./services/stockService";
 
 // --- Zod Schemas ---
 
@@ -37,19 +39,23 @@ const orderItemInput = z.object({
 const statusEnum = z.enum([
   "pending",
   "paid",
+  "approved_for_shipping",
   "transferring",
   "shipped",
   "delivered",
+  "paid_on_delivery",
   "cancelled",
 ]);
 
-// FSM: allowed transitions
+// FSM: allowed transitions (legacy — kept for reference, actual FSM in orderStateMachine.ts)
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
-  pending: ["paid", "cancelled"],
+  pending: ["paid", "approved_for_shipping", "cancelled"],
   paid: ["transferring", "cancelled"],
-  transferring: ["shipped", "cancelled"],
+  approved_for_shipping: ["transferring", "cancelled"],
+  transferring: ["shipped"],
   shipped: ["delivered"],
-  delivered: [],
+  delivered: ["paid_on_delivery"],
+  paid_on_delivery: [],
   cancelled: [],
 };
 
@@ -148,11 +154,16 @@ export const ordersRouter = router({
           notesInternal: orders.notesInternal,
           ficProformaId: orders.ficProformaId,
           ficProformaNumber: orders.ficProformaNumber,
+          ficInvoiceId: orders.ficInvoiceId,
+          ficInvoiceNumber: orders.ficInvoiceNumber,
+          paymentTerms: orders.paymentTerms,
           paidAt: orders.paidAt,
+          approvedForShippingAt: orders.approvedForShippingAt,
           transferringAt: orders.transferringAt,
           shippedAt: orders.shippedAt,
           deliveredAt: orders.deliveredAt,
           cancelledAt: orders.cancelledAt,
+          cancelledReason: orders.cancelledReason,
           createdBy: orders.createdBy,
           createdAt: orders.createdAt,
           updatedAt: orders.updatedAt,
@@ -883,5 +894,140 @@ export const ordersRouter = router({
         ficProformaId: proforma.id,
         ficProformaNumber: proforma.number,
       };
+    }),
+
+  // ===== M6.2.B — New admin procedures via state machine =====
+
+  /**
+   * 9. Confirm payment (pending → paid)
+   * For advance_transfer / credit_card / manual payment terms.
+   */
+  confirmPayment: staffProcedure
+    .input(z.object({ orderId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      return transitionOrder({
+        orderId: input.orderId,
+        toStatus: "paid",
+        actorUserId: ctx.user.id,
+      });
+    }),
+
+  /**
+   * 10. Approve for shipping (pending → approved_for_shipping)
+   * For on_delivery payment terms.
+   */
+  approveForShipping: staffProcedure
+    .input(z.object({ orderId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      return transitionOrder({
+        orderId: input.orderId,
+        toStatus: "approved_for_shipping",
+        actorUserId: ctx.user.id,
+      });
+    }),
+
+  /**
+   * 11. Start transfer (paid/approved_for_shipping → transferring)
+   * Validates all items have batch assigned.
+   */
+  startTransfer: staffProcedure
+    .input(z.object({ orderId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      return transitionOrder({
+        orderId: input.orderId,
+        toStatus: "transferring",
+        actorUserId: ctx.user.id,
+      });
+    }),
+
+  /**
+   * 12. Mark shipped (transferring → shipped)
+   */
+  markShipped: staffProcedure
+    .input(z.object({ orderId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      return transitionOrder({
+        orderId: input.orderId,
+        toStatus: "shipped",
+        actorUserId: ctx.user.id,
+      });
+    }),
+
+  /**
+   * 13. Mark delivered (shipped → delivered)
+   * Triggers proforma → invoice transform on FiC.
+   */
+  markDelivered: staffProcedure
+    .input(z.object({ orderId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      return transitionOrder({
+        orderId: input.orderId,
+        toStatus: "delivered",
+        actorUserId: ctx.user.id,
+      });
+    }),
+
+  /**
+   * 14. Confirm payment on delivery (delivered → paid_on_delivery)
+   */
+  confirmPaymentOnDelivery: staffProcedure
+    .input(z.object({ orderId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      return transitionOrder({
+        orderId: input.orderId,
+        toStatus: "paid_on_delivery",
+        actorUserId: ctx.user.id,
+      });
+    }),
+
+  /**
+   * 15. Cancel order (from pending/paid/approved_for_shipping)
+   * Deletes proforma from FiC if exists.
+   */
+  cancelOrder: staffProcedure
+    .input(z.object({
+      orderId: z.string().uuid(),
+      reason: z.string().optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      return transitionOrder({
+        orderId: input.orderId,
+        toStatus: "cancelled",
+        actorUserId: ctx.user.id,
+        reason: input.reason,
+      });
+    }),
+
+  /**
+   * 16. Modify order items (only for paid/approved_for_shipping)
+   * Updates quantities, recalculates totals, modifies proforma on FiC.
+   */
+  modifyOrderItems: staffProcedure
+    .input(z.object({
+      orderId: z.string().uuid(),
+      items: z.array(z.object({
+        orderItemId: z.string().uuid(),
+        quantity: z.number().int().positive(),
+      })).min(1),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      await modifyPaidOrder({
+        orderId: input.orderId,
+        actorUserId: ctx.user.id,
+        items: input.items,
+      });
+      return { success: true };
+    }),
+
+  /**
+   * 17. Get available stock for products (admin helper)
+   */
+  getAvailableStock: staffProcedure
+    .input(z.object({
+      productIds: z.array(z.string().uuid()).min(1).max(50),
+    }))
+    .query(async ({ input }) => {
+      const stockMap = await getAvailableStock(input.productIds);
+      return Array.from(stockMap.values());
     }),
 });

@@ -1,12 +1,14 @@
 /**
- * M6.2.A — OrderDetail page (Admin)
+ * M6.2.B — OrderDetail page (Admin)
  * Dettaglio ordine con:
- * - Header: orderNumber, retailer, status badge, totali
- * - Timeline status con bottoni transizione FSM
+ * - Header: orderNumber, retailer, status badge, paymentTerms, totali
+ * - Timeline status dinamica (basata su paymentTerms)
  * - Tabella items con snapshot prezzi + assegnazione lotti differita
- * - Bottone "Genera Proforma FiC" (se ficClientId presente)
+ * - Card Documenti FiC (proforma + invoice)
+ * - Card Azioni con state machine (nuove procedure)
  * - Note interne/esterne
  */
+import { useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { daysToExpiry, getExpiryColorClass, getExpiryLabel } from "@/lib/expiry-utils";
 import { Badge } from "@/components/ui/badge";
@@ -45,6 +47,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { format } from "date-fns";
 import { it } from "date-fns/locale";
@@ -58,6 +61,7 @@ import {
   FileText,
   Loader2,
   Package,
+  Receipt,
   ShoppingCart,
   RefreshCw,
   Truck,
@@ -77,41 +81,84 @@ const STATUS_CONFIG: Record<
 > = {
   pending: { label: "In attesa", variant: "outline", icon: Clock, color: "text-muted-foreground" },
   paid: { label: "Pagato", variant: "default", icon: CreditCard, color: "text-green-500" },
+  approved_for_shipping: { label: "Approvato per spedizione", variant: "default", icon: Check, color: "text-green-600" },
   transferring: { label: "In trasferimento", variant: "secondary", icon: Package, color: "text-blue-500" },
   shipped: { label: "Spedito", variant: "secondary", icon: Truck, color: "text-indigo-500" },
   delivered: { label: "Consegnato", variant: "default", icon: CheckCircle2, color: "text-emerald-500" },
+  paid_on_delivery: { label: "Pagato alla consegna", variant: "default", icon: CreditCard, color: "text-emerald-600" },
   cancelled: { label: "Annullato", variant: "destructive", icon: XCircle, color: "text-destructive" },
 };
 
-// FSM: transizioni consentite (mirror del backend)
-const ALLOWED_TRANSITIONS: Record<string, { status: string; label: string; variant: "default" | "destructive" | "outline" }[]> = {
-  pending: [
-    { status: "paid", label: "Segna come Pagato", variant: "default" },
-    { status: "cancelled", label: "Annulla", variant: "destructive" },
-  ],
-  paid: [
-    { status: "transferring", label: "Avvia Trasferimento", variant: "default" },
-    { status: "cancelled", label: "Annulla", variant: "destructive" },
-  ],
-  transferring: [
-    { status: "shipped", label: "Segna come Spedito", variant: "default" },
-    { status: "cancelled", label: "Annulla", variant: "destructive" },
-  ],
-  shipped: [
-    { status: "delivered", label: "Segna come Consegnato", variant: "default" },
-  ],
-  delivered: [],
-  cancelled: [],
+const PAYMENT_TERMS_LABELS: Record<string, string> = {
+  advance_transfer: "Bonifico anticipato",
+  on_delivery: "Pagamento alla consegna",
+  credit_card: "Carta di credito",
 };
 
-// Timeline steps
-const TIMELINE_STEPS = [
-  { key: "pending", label: "Creato", tsField: "createdAt" },
-  { key: "paid", label: "Pagato", tsField: "paidAt" },
-  { key: "transferring", label: "In trasferimento", tsField: "transferringAt" },
-  { key: "shipped", label: "Spedito", tsField: "shippedAt" },
-  { key: "delivered", label: "Consegnato", tsField: "deliveredAt" },
-];
+// FSM: transizioni consentite — context-aware (dipende da paymentTerms)
+function getAllowedTransitions(status: string, paymentTerms?: string | null): { status: string; label: string; variant: "default" | "destructive" | "outline"; mutation: string }[] {
+  switch (status) {
+    case "pending":
+      if (paymentTerms === "on_delivery") {
+        return [
+          { status: "approved_for_shipping", label: "Approva per Spedizione", variant: "default", mutation: "approveForShipping" },
+          { status: "cancelled", label: "Annulla Ordine", variant: "destructive", mutation: "cancelOrder" },
+        ];
+      }
+      return [
+        { status: "paid", label: "Conferma Pagamento", variant: "default", mutation: "confirmPayment" },
+        { status: "cancelled", label: "Annulla Ordine", variant: "destructive", mutation: "cancelOrder" },
+      ];
+    case "paid":
+      return [
+        { status: "transferring", label: "Avvia Trasferimento", variant: "default", mutation: "startTransfer" },
+        { status: "cancelled", label: "Annulla Ordine", variant: "destructive", mutation: "cancelOrder" },
+      ];
+    case "approved_for_shipping":
+      return [
+        { status: "transferring", label: "Avvia Trasferimento", variant: "default", mutation: "startTransfer" },
+        { status: "cancelled", label: "Annulla Ordine", variant: "destructive", mutation: "cancelOrder" },
+      ];
+    case "transferring":
+      return [
+        { status: "shipped", label: "Segna come Spedito", variant: "default", mutation: "markShipped" },
+      ];
+    case "shipped":
+      return [
+        { status: "delivered", label: "Segna come Consegnato", variant: "default", mutation: "markDelivered" },
+      ];
+    case "delivered":
+      if (paymentTerms === "on_delivery") {
+        return [
+          { status: "paid_on_delivery", label: "Conferma Pagamento alla Consegna", variant: "default", mutation: "confirmPaymentOnDelivery" },
+        ];
+      }
+      return [];
+    default:
+      return [];
+  }
+}
+
+// Timeline steps — dynamic based on payment terms
+function getTimelineSteps(paymentTerms?: string | null) {
+  const base: { key: string; label: string; tsField: string }[] = [
+    { key: "pending", label: "Creato", tsField: "createdAt" },
+  ];
+  if (paymentTerms === "on_delivery") {
+    base.push({ key: "approved_for_shipping", label: "Approvato", tsField: "approvedForShippingAt" });
+  } else {
+    base.push({ key: "paid", label: "Pagato", tsField: "paidAt" });
+  }
+  base.push(
+    { key: "transferring", label: "In trasferimento", tsField: "transferringAt" },
+    { key: "shipped", label: "Spedito", tsField: "shippedAt" },
+    { key: "delivered", label: "Consegnato", tsField: "deliveredAt" },
+  );
+  if (paymentTerms === "on_delivery") {
+    base.push({ key: "paid_on_delivery", label: "Pagato", tsField: "paidAt" });
+  }
+  return base;
+}
 
 const NO_BATCH = "__none__";
 
@@ -221,44 +268,75 @@ export default function OrderDetail() {
   const params = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
+  const [cancelReason, setCancelReason] = useState("");
 
   const orderQuery = trpc.orders.getById.useQuery(
     { id: params.id ?? "" },
     { enabled: !!params.id }
   );
 
-  const updateStatus = trpc.orders.updateStatus.useMutation({
-    onSuccess: (data) => {
-      toast.success(`Stato aggiornato a: ${STATUS_CONFIG[data.status]?.label ?? data.status}`);
-      utils.orders.getById.invalidate({ id: params.id ?? "" });
-      utils.orders.list.invalidate();
-    },
-    onError: (err) => {
-      toast.error(`Errore: ${err.message}`);
-    },
+  // State machine mutations
+  const confirmPayment = trpc.orders.confirmPayment.useMutation({
+    onSuccess: () => { toast.success("Pagamento confermato"); invalidateOrder(); },
+    onError: (err) => toast.error(err.message),
+  });
+  const approveForShipping = trpc.orders.approveForShipping.useMutation({
+    onSuccess: () => { toast.success("Ordine approvato per spedizione"); invalidateOrder(); },
+    onError: (err) => toast.error(err.message),
+  });
+  const startTransfer = trpc.orders.startTransfer.useMutation({
+    onSuccess: () => { toast.success("Trasferimento avviato"); invalidateOrder(); },
+    onError: (err) => toast.error(err.message),
+  });
+  const markShipped = trpc.orders.markShipped.useMutation({
+    onSuccess: () => { toast.success("Ordine spedito"); invalidateOrder(); },
+    onError: (err) => toast.error(err.message),
+  });
+  const markDelivered = trpc.orders.markDelivered.useMutation({
+    onSuccess: () => { toast.success("Ordine consegnato"); invalidateOrder(); },
+    onError: (err) => toast.error(err.message),
+  });
+  const confirmPaymentOnDelivery = trpc.orders.confirmPaymentOnDelivery.useMutation({
+    onSuccess: () => { toast.success("Pagamento alla consegna confermato"); invalidateOrder(); },
+    onError: (err) => toast.error(err.message),
+  });
+  const cancelOrder = trpc.orders.cancelOrder.useMutation({
+    onSuccess: () => { toast.success("Ordine annullato"); invalidateOrder(); },
+    onError: (err) => toast.error(err.message),
   });
 
   const generateProforma = trpc.orders.generateProforma.useMutation({
     onSuccess: (data) => {
       toast.success(`Proforma FiC generata: ${data.ficProformaNumber}`);
-      utils.orders.getById.invalidate({ id: params.id ?? "" });
-      utils.orders.list.invalidate();
+      invalidateOrder();
     },
-    onError: (err) => {
-      toast.error(`Errore generazione proforma: ${err.message}`);
-    },
+    onError: (err) => toast.error(`Errore generazione proforma: ${err.message}`),
   });
 
   const regenerateProforma = trpc.orders.regenerateProforma.useMutation({
     onSuccess: (data) => {
       toast.success(`Proforma rigenerata: ${data.ficProformaNumber}`);
-      utils.orders.getById.invalidate({ id: params.id ?? "" });
-      utils.orders.list.invalidate();
+      invalidateOrder();
     },
-    onError: (err) => {
-      toast.error(`Errore rigenerazione proforma: ${err.message}`);
-    },
+    onError: (err) => toast.error(`Errore rigenerazione proforma: ${err.message}`),
   });
+
+  function invalidateOrder() {
+    utils.orders.getById.invalidate({ id: params.id ?? "" });
+    utils.orders.list.invalidate();
+  }
+
+  const mutationMap: Record<string, any> = {
+    confirmPayment,
+    approveForShipping,
+    startTransfer,
+    markShipped,
+    markDelivered,
+    confirmPaymentOnDelivery,
+    cancelOrder,
+  };
+
+  const isAnyMutationPending = Object.values(mutationMap).some((m: any) => m.isPending);
 
   if (orderQuery.isLoading) {
     return (
@@ -287,20 +365,30 @@ export default function OrderDetail() {
   const order = orderQuery.data;
   const statusCfg = STATUS_CONFIG[order.status] ?? STATUS_CONFIG.pending;
   const StatusIcon = statusCfg.icon;
-  const transitions = ALLOWED_TRANSITIONS[order.status] ?? [];
+  const transitions = getAllowedTransitions(order.status, (order as any).paymentTerms);
   const isCancelled = order.status === "cancelled";
   const isDelivered = order.status === "delivered";
-  const canEditBatches = !isCancelled && !isDelivered;
+  const isPaidOnDelivery = order.status === "paid_on_delivery";
+  const canEditBatches = !isCancelled && !isDelivered && !isPaidOnDelivery;
 
-  // Determina quale step della timeline è attivo
+  // Timeline dinamica
+  const timelineSteps = getTimelineSteps((order as any).paymentTerms);
   const activeStepIndex = isCancelled
     ? -1
-    : TIMELINE_STEPS.findIndex((s) => s.key === order.status);
+    : timelineSteps.findIndex((s) => s.key === order.status);
 
   // Conteggio items senza lotto assegnato
   const unassignedCount = order.items.filter((it) => !it.batchId).length;
   const totalItems = order.items.length;
   const assignedCount = totalItems - unassignedCount;
+
+  function handleTransition(mutation: string, orderId: string) {
+    if (mutation === "cancelOrder") {
+      cancelOrder.mutate({ orderId, reason: cancelReason || undefined });
+    } else {
+      mutationMap[mutation]?.mutate({ orderId });
+    }
+  }
 
   return (
     <DashboardLayout>
@@ -319,6 +407,11 @@ export default function OrderDetail() {
                 <StatusIcon className="h-3 w-3" />
                 {statusCfg.label}
               </Badge>
+              {(order as any).paymentTerms && (
+                <Badge variant="outline" className="text-xs">
+                  {PAYMENT_TERMS_LABELS[(order as any).paymentTerms] ?? (order as any).paymentTerms}
+                </Badge>
+              )}
             </div>
             <p className="text-sm text-muted-foreground mt-1">
               {order.retailerName} — creato il{" "}
@@ -334,7 +427,7 @@ export default function OrderDetail() {
           <Card>
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">
-                {TIMELINE_STEPS.map((step, idx) => {
+                {timelineSteps.map((step, idx) => {
                   const isCompleted = idx <= activeStepIndex;
                   const isCurrent = idx === activeStepIndex;
                   const ts = (order as any)[step.tsField];
@@ -395,6 +488,11 @@ export default function OrderDetail() {
                     Annullato il {format(new Date(order.cancelledAt), "dd MMMM yyyy 'alle' HH:mm", { locale: it })}
                   </p>
                 )}
+                {(order as any).cancelledReason && (
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Motivo: {(order as any).cancelledReason}
+                  </p>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -448,10 +546,9 @@ export default function OrderDetail() {
                       <TableRow>
                         <TableHead>SKU</TableHead>
                         <TableHead>Prodotto</TableHead>
-                        <TableHead className="text-right">Qtà</TableHead>
-                        <TableHead className="text-right">Prezzo finale</TableHead>
-                        <TableHead className="text-right">IVA</TableHead>
-                        <TableHead className="text-right">Totale lordo</TableHead>
+                        <TableHead className="text-right">Qty</TableHead>
+                        <TableHead className="text-right">Prezzo unit.</TableHead>
+                        <TableHead className="text-right">Totale netto</TableHead>
                         <TableHead>Lotto</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -459,16 +556,18 @@ export default function OrderDetail() {
                       {order.items.map((item) => (
                         <TableRow key={item.id}>
                           <TableCell className="font-mono text-xs">{item.productSku}</TableCell>
-                          <TableCell className="text-sm">{item.productName}</TableCell>
-                          <TableCell className="text-right">{item.quantity}</TableCell>
+                          <TableCell className="font-medium text-sm">{item.productName}</TableCell>
+                          <TableCell className="text-right font-mono">{item.quantity}</TableCell>
                           <TableCell className="text-right font-mono text-sm">
                             € {parseFloat(item.unitPriceFinal).toFixed(2)}
+                            {parseFloat(item.discountPercent) > 0 && (
+                              <span className="text-xs text-muted-foreground line-through ml-1">
+                                € {parseFloat(item.unitPriceBase).toFixed(2)}
+                              </span>
+                            )}
                           </TableCell>
-                          <TableCell className="text-right text-sm text-muted-foreground">
-                            {parseFloat(item.vatRate).toFixed(0)}%
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-sm font-medium">
-                            € {parseFloat(item.lineTotalGross).toFixed(2)}
+                          <TableCell className="text-right font-mono text-sm">
+                            € {parseFloat(item.lineTotalNet).toFixed(2)}
                           </TableCell>
                           <TableCell>
                             <BatchSelector
@@ -491,10 +590,10 @@ export default function OrderDetail() {
                 <CardHeader>
                   <CardTitle className="text-base">Note</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-4">
+                <CardContent className="space-y-3">
                   {order.notes && (
                     <div>
-                      <p className="text-xs font-medium text-muted-foreground mb-1">Note ordine</p>
+                      <p className="text-xs font-medium text-muted-foreground mb-1">Note cliente</p>
                       <p className="text-sm whitespace-pre-wrap">{order.notes}</p>
                     </div>
                   )}
@@ -509,7 +608,7 @@ export default function OrderDetail() {
             )}
           </div>
 
-          {/* Colonna destra: riepilogo + azioni */}
+          {/* Colonna destra: riepilogo + documenti + azioni */}
           <div className="space-y-6">
             {/* Riepilogo totali */}
             <Card>
@@ -538,61 +637,38 @@ export default function OrderDetail() {
                     <span className="font-mono">€ {parseFloat(order.totalGross).toFixed(2)}</span>
                   </div>
                 </div>
-
-                {/* Proforma FiC */}
-                {order.ficProformaNumber && (
-                  <div className="mt-4 p-3 bg-muted/50 rounded-md">
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Proforma FiC</p>
-                    <p className="text-sm font-mono font-medium">{order.ficProformaNumber}</p>
-                  </div>
-                )}
               </CardContent>
             </Card>
 
-            {/* Azioni */}
+            {/* Documenti FiC */}
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Azioni</CardTitle>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <FileText className="h-4 w-4" />
+                  Documenti FiC
+                </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                {/* Transizioni status */}
-                {transitions.map((t) => (
-                  <Button
-                    key={t.status}
-                    variant={t.variant}
-                    className="w-full justify-start gap-2"
-                    disabled={updateStatus.isPending}
-                    onClick={() => {
-                      if (t.status === "cancelled") {
-                        if (!confirm("Sei sicuro di voler annullare questo ordine?")) return;
-                      }
-                      updateStatus.mutate({
-                        orderId: order.id,
-                        newStatus: t.status as any,
-                      });
-                    }}
-                  >
-                    {updateStatus.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : t.status === "cancelled" ? (
-                      <XCircle className="h-4 w-4" />
-                    ) : (
-                      <Check className="h-4 w-4" />
-                    )}
-                    {t.label}
-                  </Button>
-                ))}
-
-                {transitions.length === 0 && (
-                  <p className="text-sm text-muted-foreground text-center py-2">
-                    Nessuna azione disponibile
-                  </p>
+                {/* Proforma */}
+                {order.ficProformaNumber && (
+                  <div className="p-3 bg-muted/50 rounded-md">
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Proforma</p>
+                    <p className="text-sm font-mono font-medium">{order.ficProformaNumber}</p>
+                  </div>
                 )}
 
-                <Separator />
+                {/* Invoice */}
+                {(order as any).ficInvoiceNumber && (
+                  <div className="p-3 bg-green-500/5 border border-green-500/20 rounded-md">
+                    <p className="text-xs font-medium text-green-600 mb-1 flex items-center gap-1">
+                      <Receipt className="h-3 w-3" /> Fattura
+                    </p>
+                    <p className="text-sm font-mono font-medium">{(order as any).ficInvoiceNumber}</p>
+                  </div>
+                )}
 
-                {/* Genera proforma FiC */}
-                {!order.ficProformaId && (
+                {/* Azioni proforma */}
+                {!order.ficProformaId && !isCancelled && (
                   <Button
                     variant="outline"
                     className="w-full justify-start gap-2"
@@ -604,22 +680,22 @@ export default function OrderDetail() {
                     ) : (
                       <FileText className="h-4 w-4" />
                     )}
-                    Genera Proforma FiC
+                    Genera Proforma
                   </Button>
                 )}
 
-                {order.ficProformaId && (
+                {order.ficProformaId && !isCancelled && (
                   <div className="space-y-2">
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <CheckCircle2 className="h-4 w-4 text-green-500" />
-                      Proforma già generata
+                      Proforma generata
                     </div>
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
                         <Button
                           variant="outline"
                           size="sm"
-                          className="w-full justify-start gap-2 text-destructive border-destructive/30 hover:bg-destructive/10"
+                          className="w-full justify-start gap-2 text-muted-foreground"
                           disabled={regenerateProforma.isPending}
                         >
                           {regenerateProforma.isPending ? (
@@ -634,14 +710,12 @@ export default function OrderDetail() {
                         <AlertDialogHeader>
                           <AlertDialogTitle>Rigenera proforma?</AlertDialogTitle>
                           <AlertDialogDescription>
-                            Se la proforma precedente esiste ancora su FiC, verrà creata una duplicata.
-                            Assicurati di aver cancellato la proforma precedente dal pannello FiC prima di procedere.
+                            La proforma precedente verrà eliminata da FiC e ne verrà creata una nuova con i dati aggiornati.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
                           <AlertDialogCancel>Annulla</AlertDialogCancel>
                           <AlertDialogAction
-                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                             onClick={() => regenerateProforma.mutate({ orderId: order.id })}
                           >
                             Rigenera
@@ -650,6 +724,91 @@ export default function OrderDetail() {
                       </AlertDialogContent>
                     </AlertDialog>
                   </div>
+                )}
+
+                {!order.ficProformaId && !order.ficProformaNumber && !(order as any).ficInvoiceNumber && (
+                  <p className="text-sm text-muted-foreground text-center py-1">
+                    Nessun documento
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Azioni */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Azioni</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {/* Transizioni status via state machine */}
+                {transitions.map((t) => {
+                  if (t.mutation === "cancelOrder") {
+                    return (
+                      <AlertDialog key={t.status}>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            variant="destructive"
+                            className="w-full justify-start gap-2"
+                            disabled={isAnyMutationPending}
+                          >
+                            <XCircle className="h-4 w-4" />
+                            {t.label}
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Annullare l'ordine?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              L'ordine verrà annullato e la proforma eliminata da FiC (se presente).
+                              Questa azione non è reversibile.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <div className="px-6">
+                            <Input
+                              placeholder="Motivo annullamento (opzionale)"
+                              value={cancelReason}
+                              onChange={(e) => setCancelReason(e.target.value)}
+                            />
+                          </div>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel onClick={() => setCancelReason("")}>Indietro</AlertDialogCancel>
+                            <AlertDialogAction
+                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              onClick={() => {
+                                handleTransition("cancelOrder", order.id);
+                                setCancelReason("");
+                              }}
+                            >
+                              Conferma Annullamento
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    );
+                  }
+
+                  return (
+                    <Button
+                      key={t.status}
+                      variant={t.variant}
+                      className="w-full justify-start gap-2"
+                      disabled={isAnyMutationPending}
+                      onClick={() => handleTransition(t.mutation, order.id)}
+                    >
+                      {isAnyMutationPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Check className="h-4 w-4" />
+                      )}
+                      {t.label}
+                    </Button>
+                  );
+                })}
+
+                {transitions.length === 0 && (
+                  <p className="text-sm text-muted-foreground text-center py-2">
+                    Nessuna azione disponibile
+                  </p>
                 )}
               </CardContent>
             </Card>
