@@ -1982,7 +1982,9 @@ export async function getUsersByRetailerId(retailerId: string) {
 }
 
 /**
- * Crea utente retailer in public.users (dopo Supabase Auth invite).
+ * Crea/aggiorna utente retailer in public.users (dopo Supabase Auth invite).
+ * Usa UPSERT per gestire il conflitto con trigger `handle_new_user`
+ * che potrebbe aver già inserito la riga con role='operator'.
  */
 export async function createRetailerUser(data: {
   id: string;
@@ -2002,7 +2004,17 @@ export async function createRetailerUser(data: {
       role: data.role,
       retailerId: data.retailerId,
     })
+    .onConflictDoUpdate({
+      target: users.id,
+      set: {
+        name: data.name,
+        role: data.role,
+        retailerId: data.retailerId,
+        updatedAt: new Date(),
+      },
+    })
     .returning();
+  console.log('[invite] step 3b: upsert handled potential trigger conflict', { userId: data.id, role: row.role });
   return row;
 }
 

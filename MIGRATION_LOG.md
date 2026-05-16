@@ -3471,3 +3471,51 @@ response HTTP → timeout Vercel 60s.
 ### Commit
 - `fix(retailers): listUsers timeout fallback + lazy loading`
 - `docs: MIGRATION_LOG — bugfix listUsers blocking batch`
+
+---
+
+## 2026-05-16 — M6.1.2 — Fix conflict trigger `handle_new_user` vs invite mutation
+
+### Root Cause
+
+Il trigger `on_auth_user_created` su `auth.users` (funzione `handle_new_user`) inserisce automaticamente una riga in `public.users` con `role='operator'` a ogni signup/invite. La mutation `createInviteUser` faceva INSERT diretto che collideva sulla PK `users.id`, causando:
+- Errore SQL 23505 (unique violation)
+- Riga `public.users` con `role='operator'` (non `retailer_user`)
+- Utente invitato poteva loggare come operator e vedere UI admin
+
+### Fix Applicato
+
+`server/db.ts` → `createRetailerUser`:
+- Convertito da `INSERT` puro a `INSERT ... ON CONFLICT (id) DO UPDATE SET (name, role, retailerId, updatedAt)`
+- Il trigger crea la riga con role='operator', l'upsert la sovrascrive immediatamente con il role corretto
+
+`server/retailer-portal-router.ts` → `createInviteUser`:
+- Rimosso try/catch per 23505 (non più necessario con upsert)
+- Aggiunta verifica role post-upsert: se `upsertedUser.role !== input.role` → throw INTERNAL_SERVER_ERROR
+
+### Known Triggers (Supabase)
+
+| Trigger | Funzione | Tabella | Evento | Effetto |
+|---------|----------|---------|--------|---------|
+| `on_auth_user_created` | `handle_new_user` | `auth.users` | AFTER INSERT | INSERT `public.users` con `role='operator'`, `ON CONFLICT DO NOTHING` |
+
+### Implicazioni per sviluppo futuro
+
+Tutte le mutation che creano auth users (via `supabase.auth.admin.inviteUserByEmail`, `createUser`, ecc.) **DEVONO**:
+1. Usare UPSERT (non INSERT puro) su `public.users`
+2. Fare override esplicito del `role` nel `SET` dell'upsert
+3. Verificare il role restituito dal `.returning()` post-upsert
+4. Non assumere che la riga non esista ancora al momento dell'insert
+
+### Cleanup utenti corrotti
+
+Se un utente è stato creato prima di questo fix e ha `role='operator'` errato:
+```sql
+-- Identificare
+SELECT id, email, role, "retailerId" FROM public.users WHERE email = '<email>';
+-- Fix role
+UPDATE public.users SET role = 'retailer_user', "retailerId" = '<uuid>' WHERE email = '<email>';
+-- Oppure eliminare e re-invitare
+DELETE FROM public.users WHERE email = '<email>';
+-- Poi eliminare anche da Supabase Dashboard → Authentication → Users
+```

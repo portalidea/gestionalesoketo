@@ -225,38 +225,27 @@ export const retailerPortalRouter = router({
         authUserId = authData.user.id;
         console.log('[invite] step 3: auth user created', { authUserId });
 
-        // 4. Crea riga in public.users con retailerId
-        try {
-          await db.createRetailerUser({
-            id: authUserId,
-            email: input.email,
-            name: input.name || null,
-            role: input.role,
-            retailerId: input.retailerId,
+        // 4. Crea/aggiorna riga in public.users con retailerId (UPSERT — gestisce trigger conflict)
+        const upsertedUser = await db.createRetailerUser({
+          id: authUserId,
+          email: input.email,
+          name: input.name || null,
+          role: input.role,
+          retailerId: input.retailerId,
+        });
+        console.log('[invite] step 4: users row upserted', { userId: authUserId, role: upsertedUser.role });
+
+        // 4b. Verifica role post-upsert (safety check)
+        if (upsertedUser.role !== input.role) {
+          console.error('[invite] CRITICAL: role mismatch after upsert', {
+            expected: input.role,
+            actual: upsertedUser.role,
+            userId: authUserId,
           });
-          console.log('[invite] step 4: users row inserted', { userId: authUserId });
-        } catch (e: unknown) {
-          const err = e as { code?: string };
-          if (err.code === "23505") {
-            // unique violation — riga già esiste dal trigger, aggiorniamo
-            const dbInstance = await db.getDb();
-            if (dbInstance) {
-              const { users: usersTable } = await import("../drizzle/schema");
-              const { eq } = await import("drizzle-orm");
-              await dbInstance
-                .update(usersTable)
-                .set({
-                  role: input.role,
-                  retailerId: input.retailerId,
-                  name: input.name || null,
-                  updatedAt: new Date(),
-                })
-                .where(eq(usersTable.id, authUserId));
-              console.log('[invite] step 4b: users row updated (trigger had created it)');
-            }
-          } else {
-            throw e;
-          }
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Assegnazione ruolo fallita. Riprova o contatta il supporto.',
+          });
         }
 
         // 5. Genera magic link per l'email di invito
