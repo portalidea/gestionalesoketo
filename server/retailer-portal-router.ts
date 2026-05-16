@@ -12,6 +12,7 @@ import {
   router,
 } from "./_core/trpc";
 import { supabaseAdmin } from "./_core/supabase";
+import { ENV } from "./_core/env";
 import * as db from "./db";
 import { sendEmail } from "./email";
 
@@ -203,27 +204,50 @@ export const retailerPortalRouter = router({
         }
       }
 
-      // 3. Crea utente in Supabase Auth con invito
+      // 3. Crea utente in Supabase Auth (se non esiste)
       let authUserId: string | null = null;
       try {
         console.log('[invite] step 2: creating supabase auth user');
         const { data: authData, error: authError } =
-          await supabaseAdmin.auth.admin.inviteUserByEmail(input.email, {
-            data: {
+          await supabaseAdmin.auth.admin.createUser({
+            email: input.email,
+            email_confirm: false,
+            user_metadata: {
               retailer_id: input.retailerId,
               role: input.role,
               name: input.name || null,
             },
           });
 
-        if (authError || !authData.user) {
+        if (authError && !authError.message.includes('already')) {
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
             message: "Errore nella creazione dell'account. Riprova più tardi.",
           });
         }
-        authUserId = authData.user.id;
-        console.log('[invite] step 3: auth user created', { authUserId });
+        // Se utente già esiste in auth, recupera il suo ID
+        if (authError && authError.message.includes('already')) {
+          const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+          const existing = listData?.users?.find(
+            (u) => u.email?.toLowerCase() === input.email.toLowerCase(),
+          );
+          if (!existing) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Utente auth esistente ma non trovato. Contatta il supporto.",
+            });
+          }
+          authUserId = existing.id;
+        } else {
+          authUserId = authData?.user?.id ?? null;
+          if (!authUserId) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Errore nella creazione dell'account: ID non disponibile.",
+            });
+          }
+        }
+        console.log('[invite] step 3: auth user ready', { authUserId });
 
         // 4. Crea/aggiorna riga in public.users con retailerId (UPSERT — gestisce trigger conflict)
         const upsertedUser = await db.createRetailerUser({
@@ -248,28 +272,36 @@ export const retailerPortalRouter = router({
           });
         }
 
-        // 5. Genera magic link per l'email di invito
-        console.log('[invite] step 5: generating magic link');
+        // 5. M6.1.4: Genera magic link con URL custom (no supabase.co, no vercel.app)
+        console.log('[invite] step 5: generating custom magic link');
         const { data: linkData, error: linkError } =
           await supabaseAdmin.auth.admin.generateLink({
             type: "magiclink",
             email: input.email,
           });
 
-        let magicLink = "";
-        if (!linkError && linkData?.properties?.action_link) {
-          magicLink = linkData.properties.action_link;
+        let customMagicUrl = "";
+        if (!linkError && linkData?.properties?.hashed_token) {
+          const tokenHash = linkData.properties.hashed_token;
+          const baseUrl = ENV.publicAppUrl;
+          customMagicUrl = `${baseUrl}/auth/verify` +
+            `?token_hash=${encodeURIComponent(tokenHash)}` +
+            `&type=magiclink` +
+            `&email=${encodeURIComponent(input.email)}`;
+          console.log('[invite] step 5b: custom magic URL built', { baseUrl, hasToken: true });
+        } else {
+          console.warn('[invite] step 5b: generateLink failed, no magic link', linkError?.message);
         }
 
-        // 6. Invia email di invito
-        if (magicLink) {
-          console.log('[invite] step 6: sending invite email');
+        // 6. Invia email di invito con URL custom
+        if (customMagicUrl) {
+          console.log('[invite] step 6: sending invite email with custom URL');
           await sendEmail({
             to: input.email,
             subject: `Invito al portale ${retailer.name} — SoKeto`,
             html: buildInviteEmailHtml({
               retailerName: retailer.name,
-              magicLink,
+              magicLink: customMagicUrl,
               role: input.role,
             }),
           });
@@ -280,7 +312,7 @@ export const retailerPortalRouter = router({
           userId: authUserId,
           email: input.email,
           status: "invited" as const,
-          magicLinkSent: Boolean(magicLink),
+          magicLinkSent: Boolean(customMagicUrl),
         };
       } catch (error: unknown) {
         // Rollback: se l'errore è avvenuto dopo la creazione auth user, cleanup
@@ -336,25 +368,33 @@ export const retailerPortalRouter = router({
         });
       }
 
+      // M6.1.4: Genera magic link con URL custom (no supabase.co, no vercel.app)
       const { data: linkData, error: linkError } =
         await supabaseAdmin.auth.admin.generateLink({
           type: "magiclink",
           email: user.email,
         });
 
-      if (linkError || !linkData?.properties?.action_link) {
+      if (linkError || !linkData?.properties?.hashed_token) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: `Errore generazione link: ${linkError?.message ?? "unknown"}`,
+          message: `Errore generazione link: ${linkError?.message ?? "token non disponibile"}`,
         });
       }
+
+      const tokenHash = linkData.properties.hashed_token;
+      const baseUrl = ENV.publicAppUrl;
+      const customMagicUrl = `${baseUrl}/auth/verify` +
+        `?token_hash=${encodeURIComponent(tokenHash)}` +
+        `&type=magiclink` +
+        `&email=${encodeURIComponent(user.email)}`;
 
       await sendEmail({
         to: user.email,
         subject: `Invito al portale ${retailer.name} — SoKeto`,
         html: buildInviteEmailHtml({
           retailerName: retailer.name,
-          magicLink: linkData.properties.action_link,
+          magicLink: customMagicUrl,
           role: user.role,
         }),
       });

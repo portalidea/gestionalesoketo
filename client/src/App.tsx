@@ -9,6 +9,7 @@ import RequireRole from "./components/auth/RequireRole";
 import { useAuth } from "./_core/hooks/useAuth";
 import Alerts from "./pages/Alerts";
 import AuthCallback from "./pages/AuthCallback";
+import AuthVerify from "./pages/AuthVerify";
 import Home from "./pages/Home";
 import Integrations from "./pages/Integrations";
 import Login from "./pages/Login";
@@ -65,6 +66,7 @@ function Router() {
     <Switch>
       <Route path="/login" component={Login} />
       <Route path="/auth/callback" component={AuthCallback} />
+      <Route path="/auth/verify" component={AuthVerify} />
 
       {/* ═══════════════════════════════════════════════════════════
           Partner Portal routes — only retailer_admin / retailer_user

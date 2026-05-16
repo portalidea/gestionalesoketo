@@ -30,6 +30,8 @@ export const ENV = {
   ownerEmail: optional("OWNER_EMAIL"),
   anthropicApiKey: optional("ANTHROPIC_API_KEY"),
   resendApiKey: optional("RESEND_API_KEY"),
+  /** M6.1.4: URL pubblico dell'app (dominio custom, no vercel/supabase) */
+  publicAppUrl: optional("PUBLIC_APP_URL") ?? "https://gestionale.soketo.it",
   isProduction: process.env.NODE_ENV === "production",
   fattureInCloud: {
     clientId: optional("FATTUREINCLOUD_CLIENT_ID"),

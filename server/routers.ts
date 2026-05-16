@@ -10,6 +10,7 @@ import {
   writerProcedure,
 } from "./_core/trpc";
 import { supabaseAdmin } from "./_core/supabase";
+import { ENV } from "./_core/env";
 import * as db from "./db";
 import {
   createFicProforma,
@@ -62,19 +63,60 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ input }) => {
-        // Invio magic link via Supabase Admin API. Il trigger
-        // handle_new_user creerà la riga in public.users con role default;
-        // se è stato richiesto un role diverso, lo aggiorniamo subito dopo.
-        const { data, error } = await supabaseAdmin.auth.admin.inviteUserByEmail(
-          input.email,
-        );
-        if (error) {
-          throw new Error(`Failed to invite user: ${error.message}`);
+        // M6.1.4: createUser + generateLink + customMagicUrl (no supabase.co URL)
+        const { data: authData, error: authError } =
+          await supabaseAdmin.auth.admin.createUser({
+            email: input.email,
+            email_confirm: false,
+            user_metadata: { role: input.role },
+          });
+
+        let userId: string | null = null;
+        if (authError && authError.message.includes('already')) {
+          // Utente già esiste in auth, recupera ID
+          const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+          const existing = listData?.users?.find(
+            (u) => u.email?.toLowerCase() === input.email.toLowerCase(),
+          );
+          userId = existing?.id ?? null;
+        } else if (authError) {
+          throw new Error(`Failed to create user: ${authError.message}`);
+        } else {
+          userId = authData!.user.id;
         }
-        if (input.role !== "operator" && data.user) {
-          await db.updateUserRole(data.user.id, input.role);
+
+        // Aggiorna role se diverso da default trigger
+        if (input.role !== "operator" && userId) {
+          await db.updateUserRole(userId, input.role);
         }
-        return { success: true, userId: data.user?.id ?? null };
+
+        // Genera magic link con URL custom
+        const { data: linkData, error: linkError } =
+          await supabaseAdmin.auth.admin.generateLink({
+            type: "magiclink",
+            email: input.email,
+          });
+
+        if (!linkError && linkData?.properties?.hashed_token) {
+          const tokenHash = linkData.properties.hashed_token;
+          const baseUrl = ENV.publicAppUrl;
+          const customMagicUrl = `${baseUrl}/auth/verify` +
+            `?token_hash=${encodeURIComponent(tokenHash)}` +
+            `&type=magiclink` +
+            `&email=${encodeURIComponent(input.email)}`;
+
+          // Invia email invito staff
+          const { sendEmail } = await import("./email");
+          await sendEmail({
+            to: input.email,
+            subject: "Invito al gestionale SoKeto",
+            html: `<p>Sei stato invitato al gestionale SoKeto come <strong>${input.role}</strong>.</p>
+                   <p><a href="${customMagicUrl}" style="display:inline-block;background:#2D5A27;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;">Accedi al gestionale</a></p>
+                   <p style="color:#666;font-size:13px;">Se non hai richiesto questo invito, ignora questa email.</p>`,
+          });
+        }
+
+        return { success: true, userId };
       }),
 
     updateRole: adminProcedure
