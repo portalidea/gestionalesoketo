@@ -119,6 +119,9 @@ export const retailers = pgTable("retailers", {
   ficClientId: integer("ficClientId"),
   // M6.2.B: condizioni di pagamento default per il retailer
   paymentTerms: paymentTermsEnum("paymentTerms").default("advance_transfer").notNull(),
+  // M7-A: affiliato che ha portato questo retailer
+  affiliateId: uuid("affiliateId"),
+  affiliateAssignedAt: timestamp("affiliateAssignedAt", { withTimezone: true }),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -644,3 +647,78 @@ export const orderItems = pgTable(
 
 export type OrderItem = typeof orderItems.$inferSelect;
 export type InsertOrderItem = typeof orderItems.$inferInsert;
+
+// M7-A — Affiliates module
+export const affiliateStatusEnum = pgEnum("affiliate_status", ["active", "inactive"]);
+export const commissionStatusEnum = pgEnum("commission_status", ["pending", "paid", "voided"]);
+
+/**
+ * Affiliates — entità esterne che portano nuovi retailer a SoKeto.
+ * Commissione % su ogni ordine paid del retailer affiliato.
+ */
+export const affiliates = pgTable(
+  "affiliates",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    name: varchar("name", { length: 255 }).notNull(),
+    email: varchar("email", { length: 255 }).notNull(),
+    phone: varchar("phone", { length: 50 }),
+    taxCode: varchar("taxCode", { length: 20 }),
+    vatNumber: varchar("vatNumber", { length: 20 }),
+    iban: varchar("iban", { length: 34 }),
+    referralCode: varchar("referralCode", { length: 50 }).notNull().unique(),
+    firstOrderRate: numeric("firstOrderRate", { precision: 5, scale: 2 }).default("10.00").notNull(),
+    recurringRate: numeric("recurringRate", { precision: 5, scale: 2 }).default("5.00").notNull(),
+    status: affiliateStatusEnum("status").default("active").notNull(),
+    notes: text("notes"),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("idx_affiliates_email").on(t.email),
+    index("idx_affiliates_status").on(t.status),
+  ],
+);
+
+export type Affiliate = typeof affiliates.$inferSelect;
+export type InsertAffiliate = typeof affiliates.$inferInsert;
+
+/**
+ * Affiliate commissions — commissioni maturate per ogni ordine paid/paid_on_delivery.
+ */
+export const affiliateCommissions = pgTable(
+  "affiliate_commissions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    affiliateId: uuid("affiliateId")
+      .notNull()
+      .references(() => affiliates.id, { onDelete: "restrict" }),
+    orderId: uuid("orderId")
+      .notNull()
+      .references(() => orders.id, { onDelete: "restrict" }),
+    retailerId: uuid("retailerId")
+      .notNull()
+      .references(() => retailers.id, { onDelete: "restrict" }),
+    orderTotal: numeric("orderTotal", { precision: 10, scale: 2 }).notNull(),
+    commissionRate: numeric("commissionRate", { precision: 5, scale: 2 }).notNull(),
+    commissionAmount: numeric("commissionAmount", { precision: 10, scale: 2 }).notNull(),
+    isFirstOrder: boolean("isFirstOrder").default(false).notNull(),
+    status: commissionStatusEnum("status").default("pending").notNull(),
+    pendingAt: timestamp("pendingAt", { withTimezone: true }).defaultNow().notNull(),
+    paidAt: timestamp("paidAt", { withTimezone: true }),
+    paymentReference: text("paymentReference"),
+    voidedAt: timestamp("voidedAt", { withTimezone: true }),
+    voidedReason: text("voidedReason"),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("idx_commissions_affiliate").on(t.affiliateId),
+    index("idx_commissions_order").on(t.orderId),
+    index("idx_commissions_retailer").on(t.retailerId),
+    index("idx_commissions_status").on(t.status),
+  ],
+);
+
+export type AffiliateCommission = typeof affiliateCommissions.$inferSelect;
+export type InsertAffiliateCommission = typeof affiliateCommissions.$inferInsert;

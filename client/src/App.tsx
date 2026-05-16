@@ -37,6 +37,11 @@ import PartnerOrders from "./pages/PartnerOrders";
 import PartnerOrderDetail from "./pages/PartnerOrderDetail";
 import PartnerOrderEdit from "./pages/PartnerOrderEdit";
 import PartnerProductDetail from "./pages/PartnerProductDetail";
+import AffiliatesList from "./pages/AffiliatesList";
+import AffiliateForm from "./pages/AffiliateForm";
+import AffiliateDetail from "./pages/AffiliateDetail";
+import CommissionsList from "./pages/CommissionsList";
+import MonthlyCommissionReport from "./pages/MonthlyCommissionReport";
 
 const ADMIN_ROLES = ["admin", "operator", "viewer"];
 const RETAILER_ROLES = ["retailer_admin", "retailer_user"];
@@ -154,6 +159,24 @@ function Router() {
       </Route>
       <Route path="/orders/:id">
         <RequireRole allowedRoles={ADMIN_ROLES}><OrderDetail /></RequireRole>
+      </Route>
+      <Route path="/affiliates">
+        <RequireRole allowedRoles={ADMIN_ROLES}><AffiliatesList /></RequireRole>
+      </Route>
+      <Route path="/affiliates/commissions">
+        <RequireRole allowedRoles={ADMIN_ROLES}><CommissionsList /></RequireRole>
+      </Route>
+      <Route path="/affiliates/report">
+        <RequireRole allowedRoles={ADMIN_ROLES}><MonthlyCommissionReport /></RequireRole>
+      </Route>
+      <Route path="/affiliates/new">
+        <RequireRole allowedRoles={ADMIN_ROLES}><AffiliateForm /></RequireRole>
+      </Route>
+      <Route path="/affiliates/:id/edit">
+        <RequireRole allowedRoles={ADMIN_ROLES}><AffiliateForm /></RequireRole>
+      </Route>
+      <Route path="/affiliates/:id">
+        <RequireRole allowedRoles={ADMIN_ROLES}><AffiliateDetail /></RequireRole>
       </Route>
       <Route path="/alerts">
         <RequireRole allowedRoles={ADMIN_ROLES}><Alerts /></RequireRole>

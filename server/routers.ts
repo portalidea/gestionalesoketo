@@ -27,6 +27,7 @@ import { catalogPortalRouter } from "./catalog-portal-router";
 import { retailerCheckoutRouter } from "./retailer-checkout-router";
 import { retailerOrdersRouter } from "./retailer-orders-router";
 import { retailerSelfServiceRouter } from "./retailer-selfservice-router";
+import { affiliatesRouter } from "./affiliates-router";
 
 
 const uuid = z.string().uuid();
@@ -339,6 +340,28 @@ export const appRouter = router({
       )
       .mutation(async ({ input }) => {
         await db.assignFicClientToRetailer(input.retailerId, input.ficClientId);
+        return { success: true };
+      }),
+    /**
+     * M7-A: Assegna/rimuovi affiliato a retailer.
+     */
+    assignAffiliate: writerProcedure
+      .input(
+        z.object({
+          retailerId: uuid,
+          affiliateId: z.string().uuid().nullable(),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        const database = (await db.getDb())!;
+        const { eq: eqOp } = await import("drizzle-orm");
+        const { retailers: retailersTable } = await import("../drizzle/schema");
+        const updateData: Record<string, any> = {
+          affiliateId: input.affiliateId,
+          affiliateAssignedAt: input.affiliateId ? new Date() : null,
+          updatedAt: new Date(),
+        };
+        await database.update(retailersTable).set(updateData).where(eqOp(retailersTable.id, input.retailerId));
         return { success: true };
       }),
   }),
@@ -1268,6 +1291,9 @@ export const appRouter = router({
 
   // ============= M6.2.B Parte B — PORTALE RETAILER SELF-SERVICE =============
   retailerSelfService: retailerSelfServiceRouter,
+
+  // ============= M7-A — AFFILIATI =============
+  affiliates: affiliatesRouter,
 });
 
 export type AppRouter = typeof appRouter;

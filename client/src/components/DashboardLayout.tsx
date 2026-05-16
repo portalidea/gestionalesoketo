@@ -50,6 +50,7 @@ const baseMenuItems = [
   { icon: FileText, label: "DDT Import", path: "/ddt-imports" },
   { icon: Store, label: "Rivenditori", path: "/retailers" },
   { icon: ShoppingCart, label: "Ordini", path: "/orders" },
+  { icon: Users, label: "Affiliati", path: "/affiliates" },
   { icon: AlertTriangle, label: "Alert", path: "/alerts" },
   { icon: BarChart3, label: "Reportistica", path: "/reports" },
 ];

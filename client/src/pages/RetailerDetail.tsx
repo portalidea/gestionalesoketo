@@ -674,6 +674,40 @@ export default function RetailerDetail() {
           </CardContent>
         </Card>
 
+        {/* Card Affiliato */}
+        <Card className="border-border bg-card">
+          <CardHeader>
+            <CardTitle>Affiliato</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {(retailer as any).affiliateId ? (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <User className="h-5 w-5 text-primary" />
+                  <div>
+                    <p className="text-sm font-medium">
+                      {(retailer as any).affiliateName || 'Affiliato assegnato'}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Assegnato il{' '}
+                      {(retailer as any).affiliateAssignedAt
+                        ? new Date((retailer as any).affiliateAssignedAt).toLocaleDateString('it-IT')
+                        : '-'}
+                    </p>
+                  </div>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => setLocation(`/affiliates/${(retailer as any).affiliateId}`)}>
+                  Vedi Affiliato
+                </Button>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Nessun affiliato assegnato. Puoi assegnarlo dalla sezione Affiliati.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Tabs: Inventario e Movimenti */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList>
