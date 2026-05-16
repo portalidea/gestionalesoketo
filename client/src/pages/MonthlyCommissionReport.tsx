@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -52,6 +53,7 @@ export default function MonthlyCommissionReport() {
   }
 
   return (
+    <DashboardLayout>
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center gap-4">
@@ -198,5 +200,6 @@ export default function MonthlyCommissionReport() {
         </CardContent>
       </Card>
     </div>
+    </DashboardLayout>
   );
 }

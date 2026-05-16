@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation, useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
+import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -107,6 +108,7 @@ export default function AffiliateForm() {
   }
 
   return (
+    <DashboardLayout>
     <div className="space-y-6 max-w-2xl">
       {/* Header */}
       <div className="flex items-center gap-4">
@@ -310,5 +312,6 @@ export default function AffiliateForm() {
         </div>
       </form>
     </div>
+    </DashboardLayout>
   );
 }
