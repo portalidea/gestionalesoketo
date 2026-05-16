@@ -7,6 +7,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import fattureInCloudRoutes from "../fattureincloud-routes";
+import { cronRoutes } from "../cron-monthly-report";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -34,6 +35,8 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   // Fatture in Cloud OAuth and webhook routes
   app.use("/api", fattureInCloudRoutes);
+  // Cron endpoints
+  app.use("/api", cronRoutes);
   // tRPC API
   app.use(
     "/api/trpc",
