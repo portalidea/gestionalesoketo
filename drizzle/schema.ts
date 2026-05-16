@@ -29,7 +29,7 @@ import {
  * `location_type` aggiunto in 0003: distingue tra il magazzino centrale
  * SoKeto (singleton) e le location per-retailer.
  */
-export const userRoleEnum = pgEnum("user_role", ["admin", "operator", "viewer", "retailer_admin", "retailer_user"]);
+export const userRoleEnum = pgEnum("user_role", ["admin", "operator", "viewer", "retailer_admin", "retailer_user", "affiliate_admin", "affiliate_user"]);
 export const orderStatusEnum = pgEnum("order_status", [
   "pending", "paid", "approved_for_shipping", "transferring", "shipped", "delivered", "paid_on_delivery", "cancelled",
 ]);
@@ -83,6 +83,7 @@ export const users = pgTable("users", {
   name: text("name"),
   role: userRoleEnum("role").default("operator").notNull(),
   retailerId: uuid("retailerId").references(() => retailers.id, { onDelete: "cascade" }),
+  affiliateId: uuid("affiliateId"),  // FK to affiliates.id (defined in migration, not Drizzle FK due to declaration order)
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
