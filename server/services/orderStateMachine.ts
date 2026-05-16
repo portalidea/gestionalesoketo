@@ -146,6 +146,15 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
   switch (transitionKey) {
     case "pending→paid":
     case "pending→approved_for_shipping": {
+      // M7-A: Calculate commission if transition is to paid (advance_transfer/credit_card)
+      if (toStatus === "paid") {
+        try {
+          const { calculateCommissionForOrder } = await import("./commissionService");
+          await calculateCommissionForOrder(orderId);
+        } catch (e: any) {
+          console.error(`[orderStateMachine] commission calculate failed: ${e.message}`);
+        }
+      }
       // Create proforma on FiC
       const [retailer] = await db
         .select({ ficClientId: retailers.ficClientId, name: retailers.name })
@@ -238,6 +247,13 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
     }
 
     case "delivered→paid_on_delivery": {
+      // M7-A: Calculate commission at actual payment (on_delivery)
+      try {
+        const { calculateCommissionForOrder } = await import("./commissionService");
+        await calculateCommissionForOrder(orderId);
+      } catch (e: any) {
+        console.error(`[orderStateMachine] commission calculate (on_delivery) failed: ${e.message}`);
+      }
       // DECISIONE-1: For on_delivery, transform proforma → invoice at payment confirmation
       if (ficProformaId) {
         try {
@@ -267,6 +283,13 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
           console.error(`[orderStateMachine] deleteProforma failed: ${e.message}`);
           // Don't block cancellation
         }
+      }
+      // M7-A: Void commission if exists
+      try {
+        const { voidCommissionForOrder } = await import("./commissionService");
+        await voidCommissionForOrder(orderId, reason ?? "Ordine annullato");
+      } catch (e: any) {
+        console.error(`[orderStateMachine] commission void failed: ${e.message}`);
       }
       break;
     }
