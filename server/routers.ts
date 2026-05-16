@@ -26,6 +26,7 @@ import { ordersRouter } from "./orders-router";
 import { catalogPortalRouter } from "./catalog-portal-router";
 import { retailerCheckoutRouter } from "./retailer-checkout-router";
 import { retailerOrdersRouter } from "./retailer-orders-router";
+import { retailerSelfServiceRouter } from "./retailer-selfservice-router";
 
 
 const uuid = z.string().uuid();
@@ -1264,6 +1265,9 @@ export const appRouter = router({
   catalogPortal: catalogPortalRouter,
   retailerCheckout: retailerCheckoutRouter,
   retailerOrders: retailerOrdersRouter,
+
+  // ============= M6.2.B Parte B — PORTALE RETAILER SELF-SERVICE =============
+  retailerSelfService: retailerSelfServiceRouter,
 });
 
 export type AppRouter = typeof appRouter;
