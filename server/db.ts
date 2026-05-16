@@ -38,6 +38,9 @@ import {
   Order,
   orderItems,
   OrderItem,
+  // M7-A
+  affiliates,
+  affiliateCommissions,
 } from "../drizzle/schema";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -163,6 +166,8 @@ export async function getAllRetailers() {
       notes: retailers.notes,
       pricingPackageId: retailers.pricingPackageId,
       ficClientId: retailers.ficClientId,
+      affiliateId: retailers.affiliateId,
+      affiliateAssignedAt: retailers.affiliateAssignedAt,
       createdAt: retailers.createdAt,
       updatedAt: retailers.updatedAt,
       activeBatchCount: activeBatchCountExpr,
@@ -177,7 +182,17 @@ export async function getRetailerById(id: string) {
   const db = await getDb();
   if (!db) return undefined;
   const result = await db.select().from(retailers).where(eq(retailers.id, id)).limit(1);
-  return result[0];
+  if (!result[0]) return undefined;
+  // Enrich with affiliate info if assigned
+  if (result[0].affiliateId) {
+    const [aff] = await db
+      .select({ id: affiliates.id, name: affiliates.name, referralCode: affiliates.referralCode })
+      .from(affiliates)
+      .where(eq(affiliates.id, result[0].affiliateId))
+      .limit(1);
+    return { ...result[0], affiliate: aff || null };
+  }
+  return { ...result[0], affiliate: null };
 }
 
 export async function createRetailer(data: InsertRetailer) {

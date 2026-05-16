@@ -259,11 +259,17 @@ export const appRouter = router({
           notes: z.string().optional(),
           // M3.0.6: ficClientId in creazione (workflow "import da FiC")
           ficClientId: z.number().int().positive().optional(),
+          // M7-A: affiliato opzionale in creazione
+          affiliateId: z.string().uuid().optional(),
         }),
       )
       .mutation(async ({ input }) => {
-        // createRetailer crea anche la location associata in transazione.
-        return await db.createRetailer(input);
+        // Se affiliateId è presente, setta anche affiliateAssignedAt
+        const createData: any = { ...input };
+        if (input.affiliateId) {
+          createData.affiliateAssignedAt = new Date();
+        }
+        return await db.createRetailer(createData);
       }),
 
     update: writerProcedure

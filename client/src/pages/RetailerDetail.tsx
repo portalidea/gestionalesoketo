@@ -164,6 +164,24 @@ export default function RetailerDetail() {
     onError: (e) => toast.error(e.message),
   });
 
+  // M7-A: affiliate assignment
+  const [affiliateDialogOpen, setAffiliateDialogOpen] = useState(false);
+  const [selectedAffiliateId, setSelectedAffiliateId] = useState<string>("");
+  const { data: affiliatesList } = trpc.affiliates.list.useQuery(
+    { status: "active" },
+    { enabled: affiliateDialogOpen },
+  );
+  const assignAffiliateMutation = trpc.retailers.assignAffiliate.useMutation({
+    onSuccess: () => {
+      utils.retailers.getDetails.invalidate({ id: retailerId });
+      utils.retailers.getById.invalidate({ id: retailerId });
+      toast.success("Affiliato aggiornato");
+      setAffiliateDialogOpen(false);
+      setSelectedAffiliateId("");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const [writeOffTarget, setWriteOffTarget] = useState<WriteOffTarget | null>(
     null,
   );
@@ -680,33 +698,75 @@ export default function RetailerDetail() {
             <CardTitle>Affiliato</CardTitle>
           </CardHeader>
           <CardContent>
-            {(retailer as any).affiliateId ? (
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <User className="h-5 w-5 text-primary" />
-                  <div>
-                    <p className="text-sm font-medium">
-                      {(retailer as any).affiliateName || 'Affiliato assegnato'}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Assegnato il{' '}
-                      {(retailer as any).affiliateAssignedAt
-                        ? new Date((retailer as any).affiliateAssignedAt).toLocaleDateString('it-IT')
-                        : '-'}
-                    </p>
+            {(retailer as any).affiliate ? (
+              <>
+                <div className="space-y-2">
+                  <div className="text-sm"><strong>Nome:</strong> {(retailer as any).affiliate.name}</div>
+                  <div className="text-sm"><strong>Codice referral:</strong> {(retailer as any).affiliate.referralCode}</div>
+                  <div className="text-sm"><strong>Associato il:</strong>{" "}
+                    {retailer.affiliateAssignedAt
+                      ? new Date(retailer.affiliateAssignedAt).toLocaleDateString("it-IT")
+                      : "-"}
                   </div>
                 </div>
-                <Button variant="outline" size="sm" onClick={() => setLocation(`/affiliates/${(retailer as any).affiliateId}`)}>
-                  Vedi Affiliato
-                </Button>
-              </div>
+                <div className="mt-4 flex gap-2">
+                  <Button variant="outline" size="sm" onClick={() => {
+                    setSelectedAffiliateId("");
+                    setAffiliateDialogOpen(true);
+                  }}>Cambia affiliato</Button>
+                  <Button variant="destructive" size="sm" onClick={() => {
+                    if (!confirm("Rimuovere l'affiliato? Le commissioni future non verranno pi\u00f9 calcolate per questo rivenditore.")) return;
+                    assignAffiliateMutation.mutate({ retailerId, affiliateId: null });
+                  }}>Rimuovi affiliato</Button>
+                  <Button variant="ghost" size="sm" onClick={() => setLocation(`/affiliates/${(retailer as any).affiliate.id}`)}>
+                    Vedi scheda
+                  </Button>
+                </div>
+              </>
             ) : (
-              <p className="text-sm text-muted-foreground">
-                Nessun affiliato assegnato. Puoi assegnarlo dalla sezione Affiliati.
-              </p>
+              <div>
+                <p className="text-sm text-muted-foreground mb-4">Nessun affiliato associato.</p>
+                <Button size="sm" onClick={() => {
+                  setSelectedAffiliateId("");
+                  setAffiliateDialogOpen(true);
+                }}>Assegna affiliato</Button>
+              </div>
             )}
           </CardContent>
         </Card>
+
+        {/* Dialog Assegna/Cambia Affiliato */}
+        <Dialog open={affiliateDialogOpen} onOpenChange={setAffiliateDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{(retailer as any).affiliate ? "Cambia affiliato" : "Assegna affiliato"}</DialogTitle>
+              <DialogDescription>
+                Seleziona l'affiliato da associare a questo rivenditore.
+              </DialogDescription>
+            </DialogHeader>
+            <Select value={selectedAffiliateId} onValueChange={setSelectedAffiliateId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Seleziona affiliato..." />
+              </SelectTrigger>
+              <SelectContent>
+                {affiliatesList?.items?.filter((a: any) => a.status === "active").map((a: any) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.name} ({a.referralCode}) \u2014 {a.firstOrderRate}% / {a.recurringRate}%
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setAffiliateDialogOpen(false)}>Annulla</Button>
+              <Button
+                onClick={() => assignAffiliateMutation.mutate({ retailerId, affiliateId: selectedAffiliateId })}
+                disabled={!selectedAffiliateId || assignAffiliateMutation.isPending}
+              >
+                {assignAffiliateMutation.isPending ? "Salvataggio..." : "Conferma"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Tabs: Inventario e Movimenti */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">

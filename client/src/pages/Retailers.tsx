@@ -40,6 +40,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
 import {
   Check,
@@ -144,6 +151,12 @@ export default function Retailers() {
   const [selectedFicClientId, setSelectedFicClientId] = useState<number | null>(
     null,
   );
+  // M7-A: affiliato opzionale in creazione
+  const [selectedAffiliateId, setSelectedAffiliateId] = useState<string>("");
+  const { data: affiliatesList } = trpc.affiliates.list.useQuery(
+    { status: "active" },
+    { enabled: dialogOpen },
+  );
   const [comboboxOpen, setComboboxOpen] = useState(false);
 
   const { data: ficStatus } = trpc.ficIntegration.getStatus.useQuery();
@@ -187,6 +200,8 @@ export default function Retailers() {
       ...(selectedFicClientId !== null
         ? { ficClientId: selectedFicClientId }
         : {}),
+      // M7-A: affiliato opzionale
+      ...(selectedAffiliateId && selectedAffiliateId !== "__none__" ? { affiliateId: selectedAffiliateId } : {}),
     });
   };
 
@@ -504,6 +519,23 @@ export default function Retailers() {
                       onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                       rows={3}
                     />
+                  </div>
+                  {/* M7-A: Affiliato opzionale */}
+                  <div className="grid gap-2">
+                    <Label>Affiliato (opzionale)</Label>
+                    <Select value={selectedAffiliateId} onValueChange={setSelectedAffiliateId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Nessun affiliato" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Nessuno</SelectItem>
+                        {affiliatesList?.items?.filter((a: any) => a.status === "active").map((a: any) => (
+                          <SelectItem key={a.id} value={a.id}>
+                            {a.name} ({a.referralCode})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
                 <DialogFooter>

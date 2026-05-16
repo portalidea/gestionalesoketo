@@ -343,41 +343,49 @@ export default function AffiliateDetail() {
       </Card>
 
       {/* Rivenditori associati */}
-      {affiliate.retailers && affiliate.retailers.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Rivenditori Associati</CardTitle>
-          </CardHeader>
-          <CardContent>
+      <Card>
+        <CardHeader>
+          <CardTitle>Rivenditori Associati ({affiliate.retailers?.length ?? 0})</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!affiliate.retailers || affiliate.retailers.length === 0 ? (
+            <p className="text-center py-4 text-muted-foreground">
+              Nessun rivenditore associato a questo affiliato.
+            </p>
+          ) : (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Nome</TableHead>
-                  <TableHead>Città</TableHead>
-                  <TableHead>Data Creazione</TableHead>
+                  <TableHead>Citt\u00e0</TableHead>
+                  <TableHead>Associato il</TableHead>
+                  <TableHead>Azioni</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {affiliate.retailers.map((r: any) => (
                   <TableRow key={r.id}>
-                    <TableCell>
-                      <Link href={`/retailers/${r.id}`}>
-                        <span className="text-primary hover:underline cursor-pointer font-medium">
-                          {r.name}
-                        </span>
-                      </Link>
-                    </TableCell>
+                    <TableCell className="font-medium">{r.name}</TableCell>
                     <TableCell>{r.city || "-"}</TableCell>
                     <TableCell>
-                      {new Date(r.createdAt).toLocaleDateString("it-IT")}
+                      {r.affiliateAssignedAt
+                        ? new Date(r.affiliateAssignedAt).toLocaleDateString("it-IT")
+                        : new Date(r.createdAt).toLocaleDateString("it-IT")}
+                    </TableCell>
+                    <TableCell>
+                      <Link href={`/retailers/${r.id}`}>
+                        <span className="text-primary hover:underline cursor-pointer text-sm">
+                          Apri scheda
+                        </span>
+                      </Link>
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
-          </CardContent>
-        </Card>
-      )}
+          )}
+        </CardContent>
+      </Card>
 
       {/* Utenti Portale */}
       <Card>

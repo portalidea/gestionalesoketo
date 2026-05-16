@@ -101,7 +101,7 @@ export const affiliatesRouter = router({
 
       // Get retailers assigned
       const assignedRetailers = await db
-        .select({ id: retailers.id, name: retailers.name, city: retailers.city, createdAt: retailers.createdAt })
+        .select({ id: retailers.id, name: retailers.name, city: retailers.city, affiliateAssignedAt: retailers.affiliateAssignedAt, createdAt: retailers.createdAt })
         .from(retailers)
         .where(eq(retailers.affiliateId, input.id))
         .orderBy(desc(retailers.createdAt));
