@@ -47,17 +47,8 @@ const statusEnum = z.enum([
   "cancelled",
 ]);
 
-// FSM: allowed transitions (legacy — kept for reference, actual FSM in orderStateMachine.ts)
-const ALLOWED_TRANSITIONS: Record<string, string[]> = {
-  pending: ["paid", "approved_for_shipping", "cancelled"],
-  paid: ["transferring", "cancelled"],
-  approved_for_shipping: ["transferring", "cancelled"],
-  transferring: ["shipped"],
-  shipped: ["delivered"],
-  delivered: ["paid_on_delivery"],
-  paid_on_delivery: [],
-  cancelled: [],
-};
+// FSM: actual state machine is in server/services/orderStateMachine.ts
+// Legacy updateStatus procedure removed — all transitions go through transitionOrder()
 
 // --- Router ---
 
@@ -227,11 +218,21 @@ export const ordersRouter = router({
         items: z.array(orderItemInput).min(1),
         notes: z.string().optional(),
         notesInternal: z.string().optional(),
+        paymentTerms: z.enum(['advance_transfer', 'on_delivery', 'credit_card', 'manual']).optional(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+      // BUG-1 FIX: Resolve paymentTerms with fallback chain
+      // input.paymentTerms ?? retailer.paymentTerms ?? 'advance_transfer'
+      const [retailerForPT] = await db
+        .select({ paymentTerms: retailers.paymentTerms })
+        .from(retailers)
+        .where(eq(retailers.id, input.retailerId))
+        .limit(1);
+      const resolvedPaymentTerms = input.paymentTerms ?? retailerForPT?.paymentTerms ?? 'advance_transfer';
 
       // Calcola pricing
       const pricing = await calculateOrderPricing(input.retailerId, input.items);
@@ -316,6 +317,7 @@ export const ordersRouter = router({
           .values({
             retailerId: input.retailerId,
             status: "pending",
+            paymentTerms: resolvedPaymentTerms,
             subtotalNet: pricing.subtotalNet,
             vatAmount: pricing.vatAmount,
             totalGross: pricing.totalGross,
@@ -496,73 +498,8 @@ export const ordersRouter = router({
       };
     }),
 
-  /**
-   * 6. Transizione status con validazione FSM
-   */
-  updateStatus: staffProcedure
-    .input(
-      z.object({
-        orderId: z.string().uuid(),
-        newStatus: statusEnum,
-      }),
-    )
-    .mutation(async ({ input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
-
-      const [order] = await db
-        .select({ id: orders.id, status: orders.status })
-        .from(orders)
-        .where(eq(orders.id, input.orderId))
-        .limit(1);
-
-      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
-
-      const allowed = ALLOWED_TRANSITIONS[order.status] ?? [];
-      if (!allowed.includes(input.newStatus)) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Transizione non valida: ${order.status} → ${input.newStatus}. Consentite: ${allowed.join(", ") || "nessuna"}`,
-        });
-      }
-
-      // Validazione pre-shipped: tutti gli items devono avere batchId assegnato
-      if (input.newStatus === "shipped") {
-        const items = await db
-          .select({ id: orderItems.id, batchId: orderItems.batchId, productName: orderItems.productName })
-          .from(orderItems)
-          .where(eq(orderItems.orderId, input.orderId));
-        const unassigned = items.filter((it) => !it.batchId);
-        if (unassigned.length > 0) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `Impossibile spedire: ${unassigned.length} item(s) senza lotto assegnato (${unassigned.map((u) => u.productName).join(", ")})`,
-          });
-        }
-      }
-
-      // Timestamp per lo status
-      const timestampMap: Record<string, string> = {
-        paid: "paidAt",
-        transferring: "transferringAt",
-        shipped: "shippedAt",
-        delivered: "deliveredAt",
-        cancelled: "cancelledAt",
-      };
-      const timestampField = timestampMap[input.newStatus];
-
-      const updateData: Record<string, any> = {
-        status: input.newStatus,
-        updatedAt: new Date(),
-      };
-      if (timestampField) {
-        updateData[timestampField] = new Date();
-      }
-
-      await db.update(orders).set(updateData).where(eq(orders.id, input.orderId));
-
-      return { status: input.newStatus };
-    }),
+  // [REMOVED] updateStatus — replaced by specific procedures (confirmPayment, approveForShipping, etc.)
+  // All transitions now go through transitionOrder() in orderStateMachine.ts
 
   /**
    * 7. Genera proforma FiC e salva riferimento
@@ -929,15 +866,70 @@ export const ordersRouter = router({
   /**
    * 11. Start transfer (paid/approved_for_shipping → transferring)
    * Validates all items have batch assigned.
+   * BUG-4 FIX: After transition, decrement stock + create TRANSFER movements.
    */
   startTransfer: staffProcedure
     .input(z.object({ orderId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      return transitionOrder({
+      // 1. Transition state (validates batch assignment)
+      const result = await transitionOrder({
         orderId: input.orderId,
         toStatus: "transferring",
         actorUserId: ctx.user.id,
       });
+
+      // 2. Execute stock movements for each order item with batch
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+      // Get order retailerId
+      const [order] = await db
+        .select({ retailerId: orders.retailerId })
+        .from(orders)
+        .where(eq(orders.id, input.orderId))
+        .limit(1);
+
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
+
+      // Get all items with batch assigned
+      const items = await db
+        .select({
+          id: orderItems.id,
+          productId: orderItems.productId,
+          batchId: orderItems.batchId,
+          quantity: orderItems.quantity,
+          productName: orderItems.productName,
+        })
+        .from(orderItems)
+        .where(eq(orderItems.orderId, input.orderId));
+
+      // Import transferBatchToRetailer from db.ts
+      const { transferBatchToRetailer } = await import("./db");
+
+      // Execute TRANSFER for each item with batch
+      const transferResults: string[] = [];
+      for (const item of items) {
+        if (!item.batchId) continue; // should not happen (validated by state machine)
+        try {
+          await transferBatchToRetailer({
+            productId: item.productId,
+            batchId: item.batchId,
+            retailerId: order.retailerId,
+            quantity: item.quantity,
+            notes: `Ordine ${input.orderId} — trasferimento automatico`,
+            createdBy: ctx.user.id,
+          });
+          transferResults.push(`${item.productName}: ${item.quantity} conf. trasferite`);
+        } catch (e: any) {
+          console.error(`[startTransfer] TRANSFER failed for item ${item.id}: ${e.message}`);
+          // Don't block the transition — log and continue
+          // Admin can manually fix stock later
+          transferResults.push(`${item.productName}: ERRORE — ${e.message}`);
+        }
+      }
+
+      console.log(`[startTransfer] orderId=${input.orderId} transfers completed:`, transferResults);
+      return { ...result, transfers: transferResults };
     }),
 
   /**

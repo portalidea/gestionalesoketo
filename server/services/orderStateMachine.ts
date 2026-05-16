@@ -221,8 +221,9 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
     }
 
     case "shipped→delivered": {
-      // Transform proforma → invoice
-      if (ficProformaId) {
+      // DECISIONE-1: Transform proforma → invoice ONLY for advance_transfer/credit_card/manual
+      // For on_delivery, transform happens at delivered→paid_on_delivery (incasso effettivo)
+      if (ficProformaId && paymentTerms !== "on_delivery") {
         try {
           const invoice = await ficDocService.transformProformaToInvoice(ficProformaId);
           ficInvoiceId = invoice.ficInvoiceId;
@@ -231,6 +232,21 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
           console.error(`[orderStateMachine] transformToInvoice failed: ${e.message}`);
           // Don't block the transition, but log the failure
           // Admin can manually transform later
+        }
+      }
+      break;
+    }
+
+    case "delivered→paid_on_delivery": {
+      // DECISIONE-1: For on_delivery, transform proforma → invoice at payment confirmation
+      if (ficProformaId) {
+        try {
+          const invoice = await ficDocService.transformProformaToInvoice(ficProformaId);
+          ficInvoiceId = invoice.ficInvoiceId;
+          ficInvoiceNumber = invoice.ficInvoiceNumber;
+        } catch (e: any) {
+          console.error(`[orderStateMachine] transformToInvoice (on_delivery) failed: ${e.message}`);
+          // Don't block the transition
         }
       }
       break;
