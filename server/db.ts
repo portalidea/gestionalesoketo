@@ -2018,6 +2018,38 @@ export async function createRetailerUser(data: {
   return row;
 }
 
+export async function createAffiliateUser(data: {
+  id: string;
+  email: string;
+  name: string | null;
+  role: "affiliate_admin" | "affiliate_user";
+  affiliateId: string;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db
+    .insert(users)
+    .values({
+      id: data.id,
+      email: data.email,
+      name: data.name,
+      role: data.role,
+      affiliateId: data.affiliateId,
+    })
+    .onConflictDoUpdate({
+      target: users.id,
+      set: {
+        name: data.name,
+        role: data.role,
+        affiliateId: data.affiliateId,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+  console.log('[affiliateInvite] upsert user', { userId: data.id, role: row.role });
+  return row;
+}
+
 /**
  * Dashboard stats per il portale retailer.
  */
