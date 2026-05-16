@@ -344,6 +344,51 @@ export const affiliatesRouter = router({
           ),
         );
 
+      // Send payment notification email to affiliate
+      try {
+        // Get affiliate info for the paid commissions
+        const paidCommissions = await db
+          .select({
+            affiliateId: affiliateCommissions.affiliateId,
+            affiliateEmail: affiliates.email,
+            affiliateName: affiliates.name,
+            commissionAmount: affiliateCommissions.commissionAmount,
+          })
+          .from(affiliateCommissions)
+          .innerJoin(affiliates, eq(affiliateCommissions.affiliateId, affiliates.id))
+          .where(inArray(affiliateCommissions.id, input.commissionIds));
+
+        // Group by affiliate and send one email per affiliate
+        const byAffiliate = new Map<string, { email: string; name: string; total: number; count: number }>();
+        for (const c of paidCommissions) {
+          const existing = byAffiliate.get(c.affiliateId) || { email: c.affiliateEmail, name: c.affiliateName, total: 0, count: 0 };
+          existing.total += parseFloat(c.commissionAmount || "0");
+          existing.count += 1;
+          byAffiliate.set(c.affiliateId, existing);
+        }
+
+        const affiliateEntries = Array.from(byAffiliate.values());
+        for (let i = 0; i < affiliateEntries.length; i++) {
+          const aff = affiliateEntries[i];
+          if (aff.email) {
+            await sendEmail({
+              to: aff.email,
+              subject: `Commissioni pagate — ${new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(aff.total)}`,
+              html: buildCommissionPaidEmailHtml({
+                affiliateName: aff.name,
+                totalAmount: aff.total,
+                commissionsCount: aff.count,
+                paymentReference: input.paymentReference,
+              }),
+              from: "SoKeto Partner <partner@sm.soketo.it>",
+            });
+          }
+        }
+      } catch (emailErr) {
+        console.error('[markPaid] email notification failed', emailErr);
+        // Non-blocking: payment is already recorded
+      }
+
       return { updated: input.commissionIds.length };
     }),
 
@@ -730,6 +775,119 @@ function buildAffiliateInviteEmailHtml(opts: {
   <p style="color: #999; font-size: 12px; text-align: center;">
     SoKeto S.r.l. — Programma Affiliati<br>
     Per assistenza: partner@sm.soketo.it
+  </p>
+</body>
+</html>`;
+}
+
+function buildCommissionPaidEmailHtml(opts: {
+  affiliateName: string;
+  totalAmount: number;
+  commissionsCount: number;
+  paymentReference: string;
+}): string {
+  const formatted = new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(opts.totalAmount);
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #1a1a1a;">
+  <div style="text-align: center; margin-bottom: 30px;">
+    <h1 style="color: #16a34a; font-size: 24px; margin: 0;">SoKeto</h1>
+    <p style="color: #666; margin: 5px 0 0;">Programma Affiliati</p>
+  </div>
+  
+  <p>Ciao <strong>${opts.affiliateName}</strong>,</p>
+  
+  <p>Ti confermiamo che le tue commissioni sono state pagate!</p>
+  
+  <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 24px; text-align: center; margin: 24px 0;">
+    <p style="color: #666; margin: 0 0 8px; font-size: 14px;">Importo totale</p>
+    <p style="color: #16a34a; font-size: 32px; font-weight: 700; margin: 0;">${formatted}</p>
+  </div>
+  
+  <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+    <tr>
+      <td style="padding: 8px 0; color: #666;">Commissioni pagate</td>
+      <td style="padding: 8px 0; text-align: right; font-weight: 600;">${opts.commissionsCount}</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 0; color: #666;">Riferimento pagamento</td>
+      <td style="padding: 8px 0; text-align: right; font-weight: 600;">${opts.paymentReference}</td>
+    </tr>
+  </table>
+  
+  <p style="color: #666; font-size: 14px;">
+    Puoi visualizzare il dettaglio completo nel tuo 
+    <a href="https://gestionale.soketo.it/affiliate-portal/commissions" style="color: #16a34a;">portale affiliati</a>.
+  </p>
+  
+  <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 30px 0;">
+  
+  <p style="color: #999; font-size: 12px; text-align: center;">
+    SoKeto S.r.l. — Programma Affiliati<br>
+    Per assistenza: partner@sm.soketo.it
+  </p>
+</body>
+</html>`;
+}
+
+export function buildMonthlyReportEmailHtml(opts: {
+  affiliateName: string;
+  month: string;
+  totalPending: number;
+  totalPaid: number;
+  commissionsCount: number;
+  retailersCount: number;
+}): string {
+  const fmtPending = new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(opts.totalPending);
+  const fmtPaid = new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(opts.totalPaid);
+  const monthLabel = new Date(`${opts.month}-01`).toLocaleDateString("it-IT", { month: "long", year: "numeric" });
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #1a1a1a;">
+  <div style="text-align: center; margin-bottom: 30px;">
+    <h1 style="color: #16a34a; font-size: 24px; margin: 0;">SoKeto</h1>
+    <p style="color: #666; margin: 5px 0 0;">Report Mensile Affiliati</p>
+  </div>
+  
+  <p>Ciao <strong>${opts.affiliateName}</strong>,</p>
+  
+  <p>Ecco il riepilogo delle tue commissioni per <strong>${monthLabel}</strong>:</p>
+  
+  <table style="width: 100%; border-collapse: collapse; margin: 20px 0; background: #f8faf8; border-radius: 8px;">
+    <tr>
+      <td style="padding: 12px 16px; border-bottom: 1px solid #e5e7eb; font-weight: 600;">Commissioni totali</td>
+      <td style="padding: 12px 16px; border-bottom: 1px solid #e5e7eb; text-align: right;">${opts.commissionsCount}</td>
+    </tr>
+    <tr>
+      <td style="padding: 12px 16px; border-bottom: 1px solid #e5e7eb; font-weight: 600;">In attesa di pagamento</td>
+      <td style="padding: 12px 16px; border-bottom: 1px solid #e5e7eb; text-align: right; color: #d97706;">${fmtPending}</td>
+    </tr>
+    <tr>
+      <td style="padding: 12px 16px; border-bottom: 1px solid #e5e7eb; font-weight: 600;">Già pagate</td>
+      <td style="padding: 12px 16px; border-bottom: 1px solid #e5e7eb; text-align: right; color: #16a34a;">${fmtPaid}</td>
+    </tr>
+    <tr>
+      <td style="padding: 12px 16px; font-weight: 600;">Retailer attivi</td>
+      <td style="padding: 12px 16px; text-align: right;">${opts.retailersCount}</td>
+    </tr>
+  </table>
+  
+  <div style="text-align: center; margin: 30px 0;">
+    <a href="https://gestionale.soketo.it/affiliate-portal/dashboard" 
+       style="display: inline-block; padding: 12px 28px; background: #16a34a; color: white; text-decoration: none; border-radius: 8px; font-weight: 600;">
+      Vai alla Dashboard
+    </a>
+  </div>
+  
+  <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 30px 0;">
+  
+  <p style="color: #999; font-size: 12px; text-align: center;">
+    SoKeto S.r.l. — Programma Affiliati<br>
+    Ricevi questa email perché fai parte del programma affiliati SoKeto.
   </p>
 </body>
 </html>`;
