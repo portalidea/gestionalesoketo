@@ -42,9 +42,13 @@ import AffiliateForm from "./pages/AffiliateForm";
 import AffiliateDetail from "./pages/AffiliateDetail";
 import CommissionsList from "./pages/CommissionsList";
 import MonthlyCommissionReport from "./pages/MonthlyCommissionReport";
+import AffiliateDashboard from "./pages/AffiliateDashboard";
+import AffiliateCommissions from "./pages/AffiliateCommissions";
+import AffiliateProfile from "./pages/AffiliateProfile";
 
 const ADMIN_ROLES = ["admin", "operator", "viewer"];
 const RETAILER_ROLES = ["retailer_admin", "retailer_user"];
+const AFFILIATE_ROLES = ["affiliate_admin", "affiliate_user"];
 
 /**
  * M6.1.1: Redirect root "/" basato sul ruolo utente.
@@ -61,6 +65,13 @@ function RootRedirect() {
     (user.role === "retailer_admin" || user.role === "retailer_user")
   ) {
     return <Redirect to="/partner-portal/dashboard" />;
+  }
+
+  if (
+    user &&
+    (user.role === "affiliate_admin" || user.role === "affiliate_user")
+  ) {
+    return <Redirect to="/affiliate-portal/dashboard" />;
   }
 
   return <Home />;
@@ -193,6 +204,19 @@ function Router() {
       <Route path="/settings/integrations">
         <RequireRole allowedRoles={["admin"]}><Integrations /></RequireRole>
       </Route>
+      {/* ═══════════════════════════════════════════════════════════
+          Affiliate Portal routes — only affiliate_admin / affiliate_user
+         ═══════════════════════════════════════════════════════════ */}
+      <Route path="/affiliate-portal/dashboard">
+        <RequireRole allowedRoles={AFFILIATE_ROLES}><AffiliateDashboard /></RequireRole>
+      </Route>
+      <Route path="/affiliate-portal/commissions">
+        <RequireRole allowedRoles={AFFILIATE_ROLES}><AffiliateCommissions /></RequireRole>
+      </Route>
+      <Route path="/affiliate-portal/profile">
+        <RequireRole allowedRoles={AFFILIATE_ROLES}><AffiliateProfile /></RequireRole>
+      </Route>
+
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

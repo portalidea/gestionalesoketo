@@ -31,6 +31,9 @@ import {
   Users,
   TrendingUp,
   CheckCircle,
+  UserPlus,
+  RefreshCw,
+  Mail,
 } from "lucide-react";
 
 export default function AffiliateDetail() {
@@ -43,6 +46,9 @@ export default function AffiliateDetail() {
     ids: [],
   });
   const [paymentRef, setPaymentRef] = useState("");
+  const [inviteDialog, setInviteDialog] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
 
   const { data: affiliate, isLoading } = trpc.affiliates.getById.useQuery(
     { id: params.id! },
@@ -53,6 +59,27 @@ export default function AffiliateDetail() {
     { affiliateId: params.id!, status: "pending" },
     { enabled: !!params.id }
   );
+
+  const { data: portalUsers } = trpc.affiliates.listUsers.useQuery(
+    { affiliateId: params.id! },
+    { enabled: !!params.id }
+  );
+
+  const inviteUserMutation = trpc.affiliates.inviteUser.useMutation({
+    onSuccess: () => {
+      toast.success("Invito inviato con successo");
+      utils.affiliates.listUsers.invalidate({ affiliateId: params.id! });
+      setInviteDialog(false);
+      setInviteEmail("");
+      setInviteName("");
+    },
+    onError: (err) => toast.error("Errore: " + err.message),
+  });
+
+  const resendInviteMutation = trpc.affiliates.resendInvite.useMutation({
+    onSuccess: () => toast.success("Invito reinviato"),
+    onError: (err) => toast.error("Errore: " + err.message),
+  });
 
   const markPaidMutation = trpc.affiliates.markPaid.useMutation({
     onSuccess: () => {
@@ -351,6 +378,119 @@ export default function AffiliateDetail() {
           </CardContent>
         </Card>
       )}
+
+      {/* Utenti Portale */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              Utenti Portale
+            </CardTitle>
+            <Button size="sm" variant="outline" onClick={() => setInviteDialog(true)}>
+              <UserPlus className="mr-2 h-4 w-4" />
+              Invita Utente
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {!portalUsers || portalUsers.length === 0 ? (
+            <p className="text-center py-4 text-muted-foreground">
+              Nessun utente portale. Invita un utente per dare accesso al portale affiliati.
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Nome</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Ruolo</TableHead>
+                  <TableHead>Stato</TableHead>
+                  <TableHead className="w-10"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {portalUsers.map((u: any) => (
+                  <TableRow key={u.id}>
+                    <TableCell className="font-medium">{u.name || "-"}</TableCell>
+                    <TableCell>{u.email}</TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{u.role === "affiliate_admin" ? "Admin" : "Utente"}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={u.lastLoginAt ? "default" : "outline"}>
+                        {u.lastLoginAt ? "Attivo" : "Invitato"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {!u.lastLoginAt && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => resendInviteMutation.mutate({ userId: u.id })}
+                          disabled={resendInviteMutation.isPending}
+                          title="Reinvia invito"
+                        >
+                          <RefreshCw className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Invite Dialog */}
+      <Dialog open={inviteDialog} onOpenChange={setInviteDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Invita Utente Portale Affiliato</DialogTitle>
+            <DialogDescription>
+              L'utente riceverà un'email con un link per accedere al portale affiliati.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="inviteName">Nome</Label>
+              <Input
+                id="inviteName"
+                value={inviteName}
+                onChange={(e) => setInviteName(e.target.value)}
+                placeholder="Mario Rossi"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="inviteEmail">Email</Label>
+              <Input
+                id="inviteEmail"
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder="mario@esempio.it"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setInviteDialog(false)}>
+              Annulla
+            </Button>
+            <Button
+              onClick={() => inviteUserMutation.mutate({
+                affiliateId: params.id!,
+                email: inviteEmail,
+                name: inviteName || undefined,
+              })}
+              disabled={!inviteEmail || inviteUserMutation.isPending}
+            >
+              <Mail className="mr-2 h-4 w-4" />
+              {inviteUserMutation.isPending ? "Invio..." : "Invia Invito"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Pay Dialog */}
       <Dialog open={payDialog.open} onOpenChange={(o) => setPayDialog({ ...payDialog, open: o })}>
