@@ -57,8 +57,8 @@ CREATE INDEX IF NOT EXISTS idx_commissions_affiliate ON affiliate_commissions("a
 CREATE INDEX IF NOT EXISTS idx_commissions_order ON affiliate_commissions("orderId");
 CREATE INDEX IF NOT EXISTS idx_commissions_retailer ON affiliate_commissions("retailerId");
 CREATE INDEX IF NOT EXISTS idx_commissions_status ON affiliate_commissions(status);
-CREATE INDEX IF NOT EXISTS idx_commissions_pending_month 
-  ON affiliate_commissions(date_trunc('month', "pendingAt"), status) 
+CREATE INDEX IF NOT EXISTS idx_commissions_pending 
+  ON affiliate_commissions("pendingAt", status) 
   WHERE status = 'pending';
 
 -- Modifica retailers
