@@ -32,7 +32,7 @@ export default function PartnerCatalog() {
   const { addItem, getItemQuantity, itemCount } = useCart();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const pageSize = 24;
+  const pageSize = 50;
 
   // Debounced search
   const [debouncedSearch, setDebouncedSearch] = useState("");
