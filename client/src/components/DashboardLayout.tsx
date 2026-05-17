@@ -54,6 +54,7 @@ const baseMenuItems = [
   { icon: ShoppingCart, label: "Ordini", path: "/orders" },
   { icon: Handshake, label: "Affiliati", path: "/affiliates" },
   { icon: Euro, label: "Commissioni", path: "/affiliates/commissions" },
+  { icon: Plug, label: "Marketplace", path: "/marketplace/shopify" },
   { icon: AlertTriangle, label: "Alert", path: "/alerts" },
   { icon: BarChart3, label: "Reportistica", path: "/reports" },
 ];
