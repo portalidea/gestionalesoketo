@@ -454,7 +454,7 @@ export const ordersRouter = router({
       }
 
       // Ricalcola pricing
-      const pricing = await calculateOrderPricing(order.retailerId, input.items);
+      const pricing = await calculateOrderPricing(order.retailerId!, input.items);
 
       await db.transaction(async (tx) => {
         // Elimina vecchi items
@@ -642,7 +642,7 @@ export const ordersRouter = router({
       const [retailer] = await db
         .select({ ficClientId: retailers.ficClientId, name: retailers.name })
         .from(retailers)
-        .where(eq(retailers.id, order.retailerId))
+        .where(eq(retailers.id, order.retailerId!))
         .limit(1);
 
       if (!retailer?.ficClientId) {
@@ -757,7 +757,7 @@ export const ordersRouter = router({
       const [retailer] = await db
         .select({ ficClientId: retailers.ficClientId, name: retailers.name })
         .from(retailers)
-        .where(eq(retailers.id, order.retailerId))
+        .where(eq(retailers.id, order.retailerId!))
         .limit(1);
 
       if (!retailer?.ficClientId) {
@@ -914,7 +914,7 @@ export const ordersRouter = router({
           await transferBatchToRetailer({
             productId: item.productId,
             batchId: item.batchId,
-            retailerId: order.retailerId,
+            retailerId: order.retailerId!,
             quantity: item.quantity,
             notes: `Ordine ${input.orderId} — trasferimento automatico`,
             createdBy: ctx.user.id,

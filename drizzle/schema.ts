@@ -48,6 +48,7 @@ export const stockMovementTypeEnum = pgEnum("stock_movement_type", [
   "MARKETPLACE_RETURN",
 ]);
 export const salesChannelEnum = pgEnum("sales_channel", ["shopify", "amazon", "temu", "aliexpress", "manual"]);
+export const eventTypeEnum = pgEnum("event_type_enum", ["fair", "event", "gift", "internal", "other"]);
 export const alertTypeEnum = pgEnum("alert_type", ["LOW_STOCK", "EXPIRING", "EXPIRED"]);
 export const alertStatusEnum = pgEnum("alert_status", ["ACTIVE", "ACKNOWLEDGED", "RESOLVED"]);
 export const syncStatusEnum = pgEnum("sync_status", ["SUCCESS", "FAILED", "PARTIAL"]);
@@ -574,8 +575,12 @@ export const orders = pgTable(
     id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
     orderNumber: varchar("orderNumber", { length: 50 }).notNull().unique().default(sql`'ORD-' || EXTRACT(YEAR FROM CURRENT_DATE)::text || '-' || LPAD(nextval('public.orders_number_seq')::text, 4, '0')`),
     retailerId: uuid("retailerId")
-      .notNull()
       .references(() => retailers.id, { onDelete: "restrict" }),
+    // M6.2.D: Ordini Evento
+    eventType: eventTypeEnum("eventType"),
+    eventName: varchar("eventName", { length: 255 }),
+    eventDate: date("eventDate"),
+    fiscalReceiptRef: varchar("fiscalReceiptRef", { length: 50 }),
     status: orderStatusEnum("status").default("pending").notNull(),
     subtotalNet: numeric("subtotalNet", { precision: 10, scale: 2 }).default("0").notNull(),
     vatAmount: numeric("vatAmount", { precision: 10, scale: 2 }).default("0").notNull(),
