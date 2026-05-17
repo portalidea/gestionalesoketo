@@ -1,4 +1,5 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import { useAuth } from "@/_core/hooks/useAuth";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -80,6 +81,7 @@ type FormState = {
   isGlutenFree: boolean;
   isKeto: boolean;
   imageUrl: string;
+  costPrice: string;
 };
 
 const EMPTY_FORM: FormState = {
@@ -98,6 +100,7 @@ const EMPTY_FORM: FormState = {
   isGlutenFree: true,
   isKeto: true,
   imageUrl: "",
+  costPrice: "",
 };
 
 const NO_PRODUCER_VALUE = "__none__";
@@ -109,6 +112,7 @@ type BatchFormState = {
   productionDate: string;
   initialQuantity: string;
   notes: string;
+  costPrice: string;
 };
 
 const EMPTY_BATCH_FORM: BatchFormState = {
@@ -118,6 +122,7 @@ const EMPTY_BATCH_FORM: BatchFormState = {
   productionDate: "",
   initialQuantity: "",
   notes: "",
+  costPrice: "",
 };
 
 // ====================== Codici Fornitore (M5.5) ======================
@@ -341,6 +346,8 @@ function ChannelVariantsCard({ productId }: { productId: string }) {
 }
 
 export default function ProductDetail() {
+  const { user: me } = useAuth({ redirectOnUnauthenticated: true });
+  const isAdmin = me?.role === "admin";
   const [, params] = useRoute("/products/:id");
   const [, setLocation] = useLocation();
   const productId = params?.id ?? "";
@@ -379,6 +386,7 @@ export default function ProductDetail() {
         isGlutenFree: product.isGlutenFree === 1,
         isKeto: product.isKeto === 1,
         imageUrl: product.imageUrl ?? "",
+        costPrice: product.costPrice ?? "",
       });
     }
   }, [product]);
@@ -420,6 +428,7 @@ export default function ProductDetail() {
       isGlutenFree: form.isGlutenFree ? 1 : 0,
       isKeto: form.isKeto ? 1 : 0,
       imageUrl: form.imageUrl || undefined,
+      costPrice: form.costPrice || undefined,
     });
   };
 
@@ -518,6 +527,7 @@ export default function ProductDetail() {
       productionDate: batchForm.productionDate || undefined,
       initialQuantity: qty,
       notes: batchForm.notes || undefined,
+      costPrice: batchForm.costPrice || undefined,
     });
   };
 
@@ -766,6 +776,25 @@ export default function ProductDetail() {
                   }
                 />
               </div>
+              {isAdmin && (
+                <div className="grid gap-2">
+                  <Label htmlFor="costPrice">Costo Unitario Standard (€)</Label>
+                  <Input
+                    id="costPrice"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    value={form.costPrice}
+                    onChange={(e) =>
+                      setForm({ ...form, costPrice: e.target.value })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Costo di acquisto per il calcolo del valore magazzino
+                  </p>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -1022,6 +1051,28 @@ export default function ProductDetail() {
                             }
                           />
                         </div>
+                        {isAdmin && (
+                          <div className="grid gap-2">
+                            <Label htmlFor="batchCostPrice">Costo Unitario Lotto (€)</Label>
+                            <Input
+                              id="batchCostPrice"
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              placeholder={product?.costPrice ? `Default: €${product.costPrice}` : "0.00"}
+                              value={batchForm.costPrice}
+                              onChange={(e) =>
+                                setBatchForm({
+                                  ...batchForm,
+                                  costPrice: e.target.value,
+                                })
+                              }
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Se vuoto, usa il costo standard del prodotto{product?.costPrice ? ` (€${product.costPrice})` : ""}
+                            </p>
+                          </div>
+                        )}
                       </div>
                       <DialogFooter>
                         <Button
