@@ -812,14 +812,16 @@ export default function Products() {
         </div>
 
         {/* M6.2.E: Valuation card - admin only */}
-        {isAdmin && valuation && parseFloat(valuation.totalValue) > 0 && (
+        {isAdmin && valuation && (
           <Card className="border-border bg-card mb-4">
             <CardContent className="py-4">
-              <div className="flex items-center gap-6">
+              <div className="flex items-center gap-6 flex-wrap">
                 <div className="flex items-center gap-2">
-                  <TrendingUp className="h-5 w-5 text-green-500" />
+                  <TrendingUp className={`h-5 w-5 ${parseFloat(valuation.totalValue) > 0 ? "text-green-500" : "text-muted-foreground"}`} />
                   <span className="text-sm text-muted-foreground">Valore Magazzino:</span>
-                  <span className="text-lg font-bold text-foreground">€{parseFloat(valuation.totalValue).toLocaleString("it-IT", { minimumFractionDigits: 2 })}</span>
+                  <span className="text-lg font-bold text-foreground">
+                    €{parseFloat(valuation.totalValue).toLocaleString("it-IT", { minimumFractionDigits: 2 })}
+                  </span>
                 </div>
                 <div className="text-sm text-muted-foreground">
                   {valuation.totalUnits.toLocaleString("it-IT")} unità a stock
@@ -827,6 +829,11 @@ export default function Products() {
                 <div className="text-sm text-muted-foreground">
                   {valuation.products.length} prodotti valorizzati
                 </div>
+                {valuation.products.length === 0 && (
+                  <div className="text-sm text-amber-500">
+                    Imposta il "Costo Unitario" sui prodotti per valorizzare il magazzino
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>

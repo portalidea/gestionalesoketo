@@ -949,10 +949,10 @@ export const appRouter = router({
           p."costPrice" AS "productCostPrice",
           COALESCE(SUM(ibb."quantity"), 0)::int AS "totalStock",
           COALESCE(SUM(
-            ibb."quantity" * CASE
-              WHEN pb."costPrice"::numeric > 0 THEN pb."costPrice"::numeric
-              ELSE p."costPrice"::numeric
-            END
+            ibb."quantity" * COALESCE(
+              NULLIF(pb."costPrice"::numeric, 0),
+              p."costPrice"::numeric
+            )
           ), 0)::numeric(18,2) AS "value"
         FROM "products" p
         INNER JOIN "productBatches" pb ON pb."productId" = p."id"
