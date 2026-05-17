@@ -160,6 +160,8 @@ export const products = pgTable("products", {
   // M5.8: confezioni vendita
   piecesPerUnit: integer("piecesPerUnit").default(1).notNull(),
   sellableUnitLabel: varchar("sellableUnitLabel", { length: 50 }).default("PZ").notNull(),
+  // M6.2.E: costo unitario standard IVA esclusa (produzione + trasporto + oneri)
+  costPrice: numeric("costPrice", { precision: 10, scale: 4 }).default("0").notNull(),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -241,6 +243,8 @@ export const productBatches = pgTable(
     expirationDate: date("expirationDate").notNull(),
     productionDate: date("productionDate"),
     initialQuantity: integer("initialQuantity").notNull(),
+    // M6.2.E: costo effettivo unitario IVA esclusa per questo lotto
+    costPrice: numeric("costPrice", { precision: 10, scale: 4 }).default("0").notNull(),
     notes: text("notes"),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   },

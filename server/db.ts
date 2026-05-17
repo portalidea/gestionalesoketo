@@ -331,6 +331,9 @@ export async function getAllProducts() {
       expiryWarningDays: products.expiryWarningDays,
       imageUrl: products.imageUrl,
       vatRate: products.vatRate,
+      costPrice: products.costPrice,
+      piecesPerUnit: products.piecesPerUnit,
+      sellableUnitLabel: products.sellableUnitLabel,
       createdAt: products.createdAt,
       updatedAt: products.updatedAt,
       centralStock: centralStockExpr,
@@ -389,6 +392,7 @@ export async function createProductExtended(input: {
     batchNumber: string;
     expirationDate: string;
     quantity: number;
+    costPrice?: string; // M6.2.E
     locationId: string;
     producerId: string;
   };
@@ -423,6 +427,7 @@ export async function createProductExtended(input: {
           batchNumber: ib.batchNumber,
           expirationDate: ib.expirationDate,
           initialQuantity: ib.quantity,
+          ...(ib.costPrice ? { costPrice: ib.costPrice } : {}),
           notes: "Lotto iniziale aggiunto in creazione prodotto",
         })
         .returning();
@@ -634,6 +639,7 @@ export async function getBatchesByProduct(productId: string) {
       expirationDate: productBatches.expirationDate,
       productionDate: productBatches.productionDate,
       initialQuantity: productBatches.initialQuantity,
+      costPrice: productBatches.costPrice,
       notes: productBatches.notes,
       createdAt: productBatches.createdAt,
       centralStock: inventoryByBatch.quantity,
@@ -665,6 +671,7 @@ export async function createBatchWithReceipt(input: {
   expirationDate: string; // YYYY-MM-DD (date column, no time)
   productionDate: string | null;
   initialQuantity: number;
+  costPrice?: string; // M6.2.E: costo unitario lotto
   notes: string | null;
   createdBy: string;
 }): Promise<ProductBatch> {
@@ -686,6 +693,7 @@ export async function createBatchWithReceipt(input: {
         expirationDate: input.expirationDate,
         productionDate: input.productionDate,
         initialQuantity: input.initialQuantity,
+        ...(input.costPrice ? { costPrice: input.costPrice } : {}),
         notes: input.notes,
       })
       .returning();
