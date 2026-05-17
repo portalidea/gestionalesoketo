@@ -69,6 +69,7 @@ import {
 } from "lucide-react";
 import { useLocation, useParams } from "wouter";
 import { toast } from "sonner";
+import { getEventTypeLabel, getEventTypeColor } from "../../../shared/eventTypeLabels";
 
 const STATUS_CONFIG: Record<
   string,
@@ -304,6 +305,10 @@ export default function OrderDetail() {
     onSuccess: () => { toast.success("Ordine annullato"); invalidateOrder(); },
     onError: (err) => toast.error(err.message),
   });
+  const deliverEventOrder = trpc.orders.deliverEventOrder.useMutation({
+    onSuccess: () => { toast.success("Ordine evento consegnato"); invalidateOrder(); },
+    onError: (err) => toast.error(err.message),
+  });
 
   const generateProforma = trpc.orders.generateProforma.useMutation({
     onSuccess: (data) => {
@@ -414,11 +419,27 @@ export default function OrderDetail() {
               )}
             </div>
             <p className="text-sm text-muted-foreground mt-1">
-              {order.retailerName} — creato il{" "}
+              {(order as any).eventType ? (
+                <>
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium mr-2 ${getEventTypeColor((order as any).eventType)}`}>
+                    {getEventTypeLabel((order as any).eventType)}
+                  </span>
+                  {(order as any).eventName}
+                  {(order as any).eventDate && ` — ${format(new Date((order as any).eventDate), "dd/MM/yyyy")}`}
+                </>
+              ) : (
+                <>{order.retailerName}</>  
+              )}
+              {" "}— creato il{" "}
               {order.createdAt
                 ? format(new Date(order.createdAt), "dd MMMM yyyy 'alle' HH:mm", { locale: it })
                 : "—"}
             </p>
+            {(order as any).fiscalReceiptRef && (
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Rif. scontrino: <span className="font-mono">{(order as any).fiscalReceiptRef}</span>
+              </p>
+            )}
           </div>
         </div>
 
@@ -805,7 +826,23 @@ export default function OrderDetail() {
                   );
                 })}
 
-                {transitions.length === 0 && (
+                {/* Deliver event order button */}
+                {(order as any).eventType && order.status === "pending" && (
+                  <Button
+                    variant="default"
+                    className="w-full justify-start gap-2"
+                    disabled={isAnyMutationPending || deliverEventOrder.isPending}
+                    onClick={() => deliverEventOrder.mutate({ orderId: order.id })}
+                  >
+                    {deliverEventOrder.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Check className="h-4 w-4" />
+                    )}
+                    Consegna Ordine Evento
+                  </Button>
+                )}
+                {transitions.length === 0 && !(order as any).eventType && (
                   <p className="text-sm text-muted-foreground text-center py-2">
                     Nessuna azione disponibile
                   </p>
