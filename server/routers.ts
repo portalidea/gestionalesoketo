@@ -932,6 +932,48 @@ export const appRouter = router({
     getStockOverview: staffProcedure.query(async () => {
       return await db.getWarehouseStockOverview();
     }),
+    /**
+     * M6.2.E: Valorizzazione magazzino — solo admin.
+     * Calcola valore totale stock centrale usando costPrice dei lotti
+     * (fallback su costPrice prodotto se lotto ha costPrice = 0).
+     */
+    getValuation: adminProcedure.query(async () => {
+      const database = await db.getDb();
+      if (!database) return { totalValue: "0", totalUnits: 0, products: [] };
+      const { sql } = await import("drizzle-orm");
+      const rows = await database.execute(sql`
+        SELECT
+          p."id" AS "productId",
+          p."name" AS "productName",
+          p."sku",
+          p."costPrice" AS "productCostPrice",
+          COALESCE(SUM(ibb."quantity"), 0)::int AS "totalStock",
+          COALESCE(SUM(
+            ibb."quantity" * CASE
+              WHEN pb."costPrice"::numeric > 0 THEN pb."costPrice"::numeric
+              ELSE p."costPrice"::numeric
+            END
+          ), 0)::numeric(18,2) AS "value"
+        FROM "products" p
+        INNER JOIN "productBatches" pb ON pb."productId" = p."id"
+        INNER JOIN "inventoryByBatch" ibb ON ibb."batchId" = pb."id"
+        INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'central_warehouse'
+        WHERE ibb."quantity" > 0
+        GROUP BY p."id", p."name", p."sku", p."costPrice"
+        ORDER BY "value" DESC
+      `);
+      const products = (rows as any[]).map((r: any) => ({
+        productId: r.productId,
+        productName: r.productName,
+        sku: r.sku,
+        productCostPrice: String(r.productCostPrice),
+        totalStock: Number(r.totalStock),
+        value: String(r.value),
+      }));
+      const totalValue = products.reduce((sum, p) => sum + parseFloat(p.value || "0"), 0).toFixed(2);
+      const totalUnits = products.reduce((sum, p) => sum + p.totalStock, 0);
+      return { totalValue, totalUnits, products };
+    }),
   }),
 
   // ============= ALERTS =============
