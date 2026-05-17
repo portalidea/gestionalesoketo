@@ -40,6 +40,7 @@ import {
   sortData,
   type SortConfig,
 } from "@/components/SortableTableHead";
+import { getEventTypeLabel } from "../../../shared/eventTypeLabels";
 
 const STATUS_LABELS: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   pending: { label: "In attesa", variant: "outline" },
@@ -56,6 +57,7 @@ export default function Orders() {
   const [, setLocation] = useLocation();
   const [sort, setSort] = useState<SortConfig>(null);
   const [statusFilter, setStatusFilter] = useState<string>(ALL_STATUSES);
+  const [orderTypeFilter, setOrderTypeFilter] = useState<string>("ALL_TYPES");
   const [retailerFilter, setRetailerFilter] = useState<string>("ALL_RETAILERS");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -66,6 +68,7 @@ export default function Orders() {
 
   const ordersQuery = trpc.orders.list.useQuery({
     status: statusFilter !== ALL_STATUSES ? (statusFilter as any) : undefined,
+    orderType: orderTypeFilter !== "ALL_TYPES" ? (orderTypeFilter as any) : undefined,
     retailerId: retailerFilter !== "ALL_RETAILERS" ? retailerFilter : undefined,
     dateFrom: dateFrom || undefined,
     dateTo: dateTo || undefined,
@@ -89,10 +92,16 @@ export default function Orders() {
               </p>
             </div>
           </div>
-          <Button onClick={() => setLocation("/orders/new")} className="gap-2">
-            <Plus className="h-4 w-4" />
-            Nuovo Ordine
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setLocation("/orders/new-event")} className="gap-2">
+              <Plus className="h-4 w-4" />
+              Ordine Evento
+            </Button>
+            <Button onClick={() => setLocation("/orders/new")} className="gap-2">
+              <Plus className="h-4 w-4" />
+              Nuovo Ordine
+            </Button>
+          </div>
         </div>
 
         {/* Filtri */}
@@ -110,6 +119,20 @@ export default function Orders() {
                     {Object.entries(STATUS_LABELS).map(([key, { label }]) => (
                       <SelectItem key={key} value={key}>{label}</SelectItem>
                     ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Tipo</Label>
+                <Select value={orderTypeFilter} onValueChange={(v) => { setOrderTypeFilter(v); setPage(0); }}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Tutti i tipi" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL_TYPES">Tutti i tipi</SelectItem>
+                    <SelectItem value="retailer">Ordine Retailer</SelectItem>
+                    <SelectItem value="event">Ordine Evento</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -168,7 +191,7 @@ export default function Orders() {
                   <TableHeader>
                     <TableRow>
                       <SortableTableHead sortKey="orderNumber" sort={sort} onSort={setSort}>N. Ordine</SortableTableHead>
-                      <SortableTableHead sortKey="retailerName" sort={sort} onSort={setSort}>Rivenditore</SortableTableHead>
+                      <SortableTableHead sortKey="retailerName" sort={sort} onSort={setSort}>Rivenditore / Evento</SortableTableHead>
                       <SortableTableHead sortKey="status" sort={sort} onSort={setSort}>Stato</SortableTableHead>
                       <SortableTableHead sortKey="totalGross" sort={sort} onSort={setSort} className="text-right">Totale lordo</SortableTableHead>
                       <SortableTableHead sortKey="ficProformaNumber" sort={sort} onSort={setSort}>Proforma FiC</SortableTableHead>
@@ -200,7 +223,18 @@ export default function Orders() {
                           <TableCell className="font-mono text-sm font-medium">
                             {order.orderNumber}
                           </TableCell>
-                          <TableCell>{order.retailerName}</TableCell>
+                          <TableCell>
+                            {(order as any).eventType ? (
+                              <span className="text-xs">
+                                <Badge variant="outline" className="mr-1 text-[10px] px-1">
+                                  {getEventTypeLabel((order as any).eventType)}
+                                </Badge>
+                                {(order as any).eventName ?? "Evento"}
+                              </span>
+                            ) : (
+                              order.retailerName
+                            )}
+                          </TableCell>
                           <TableCell>
                             <Badge variant={st.variant}>{st.label}</Badge>
                           </TableCell>
