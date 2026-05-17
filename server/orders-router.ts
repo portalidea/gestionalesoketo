@@ -24,7 +24,7 @@ import {
   locations,
 } from "../drizzle/schema";
 import { eq, desc, and, gte, lte, sql, inArray, asc, gt } from "drizzle-orm";
-import { calculateOrderPricing, type PricingItemInput } from "./pricing";
+import { calculateOrderPricing, calculateEventOrderPricing, type PricingItemInput } from "./pricing";
 import { createFicProforma } from "./fic-integration";
 import { transitionOrder, modifyPaidOrder, type OrderStatus } from "./services/orderStateMachine";
 import { getAvailableStock } from "./services/stockService";
@@ -61,6 +61,7 @@ export const ordersRouter = router({
       z.object({
         status: statusEnum.optional(),
         retailerId: z.string().uuid().optional(),
+        orderType: z.enum(["retailer", "event"]).optional(),
         dateFrom: z.string().optional(), // ISO date
         dateTo: z.string().optional(), // ISO date
         limit: z.number().int().min(1).max(100).default(50),
@@ -77,6 +78,11 @@ export const ordersRouter = router({
       }
       if (input.retailerId) {
         conditions.push(eq(orders.retailerId, input.retailerId));
+      }
+      if (input.orderType === "event") {
+        conditions.push(sql`${orders.eventType} IS NOT NULL`);
+      } else if (input.orderType === "retailer") {
+        conditions.push(sql`${orders.eventType} IS NULL`);
       }
       if (input.dateFrom) {
         conditions.push(gte(orders.createdAt, new Date(input.dateFrom)));
@@ -100,11 +106,13 @@ export const ordersRouter = router({
             totalGross: orders.totalGross,
             discountPercent: orders.discountPercent,
             ficProformaNumber: orders.ficProformaNumber,
+            eventType: orders.eventType,
+            eventName: orders.eventName,
             createdAt: orders.createdAt,
             updatedAt: orders.updatedAt,
           })
           .from(orders)
-          .innerJoin(retailers, eq(orders.retailerId, retailers.id))
+          .leftJoin(retailers, eq(orders.retailerId, retailers.id))
           .where(whereClause)
           .orderBy(desc(orders.createdAt))
           .limit(input.limit)
@@ -155,12 +163,16 @@ export const ordersRouter = router({
           deliveredAt: orders.deliveredAt,
           cancelledAt: orders.cancelledAt,
           cancelledReason: orders.cancelledReason,
+          eventType: orders.eventType,
+          eventName: orders.eventName,
+          eventDate: orders.eventDate,
+          fiscalReceiptRef: orders.fiscalReceiptRef,
           createdBy: orders.createdBy,
           createdAt: orders.createdAt,
           updatedAt: orders.updatedAt,
         })
         .from(orders)
-        .innerJoin(retailers, eq(orders.retailerId, retailers.id))
+        .leftJoin(retailers, eq(orders.retailerId, retailers.id))
         .where(eq(orders.id, input.id))
         .limit(1);
 
@@ -1012,7 +1024,132 @@ export const ordersRouter = router({
     }),
 
   /**
-   * 17. Get available stock for products (admin helper)
+   * 17. Create event order (no retailer)
+   */
+  createEventOrder: staffProcedure
+    .input(
+      z.object({
+        eventType: z.enum(["fair", "event", "gift", "internal", "other"]),
+        eventName: z.string().min(1).max(255),
+        eventDate: z.string().optional(),
+        fiscalReceiptRef: z.string().max(50).optional(),
+        notes: z.string().optional(),
+        notesInternal: z.string().optional(),
+        items: z.array(orderItemInput).min(1),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+      const pricing = await calculateEventOrderPricing(input.items);
+      // FEFO allocation
+      const [warehouse] = await db
+        .select({ id: locations.id })
+        .from(locations)
+        .where(eq(locations.type, "central_warehouse"))
+        .limit(1);
+      type BatchAllocation = { productId: string; batchId: string; quantity: number; batchNumber: string; expirationDate: string; };
+      const allAllocations: (typeof pricing.items[0] & { allocations: BatchAllocation[] })[] = [];
+      const fefoWarnings: string[] = [];
+      for (const pi of pricing.items) {
+        const allocations: BatchAllocation[] = [];
+        let remaining = pi.quantity;
+        if (warehouse) {
+          const availableBatches = await db
+            .select({
+              batchId: productBatches.id,
+              batchNumber: productBatches.batchNumber,
+              expirationDate: productBatches.expirationDate,
+              centralStock: inventoryByBatch.quantity,
+            })
+            .from(productBatches)
+            .innerJoin(inventoryByBatch, and(eq(inventoryByBatch.batchId, productBatches.id), eq(inventoryByBatch.locationId, warehouse.id)))
+            .where(and(eq(productBatches.productId, pi.productId), gt(inventoryByBatch.quantity, 0)))
+            .orderBy(asc(productBatches.expirationDate));
+          for (const batch of availableBatches) {
+            if (remaining <= 0) break;
+            const allocQty = Math.min(remaining, batch.centralStock);
+            allocations.push({ productId: pi.productId, batchId: batch.batchId, quantity: allocQty, batchNumber: batch.batchNumber, expirationDate: batch.expirationDate });
+            remaining -= allocQty;
+          }
+        }
+        if (remaining > 0) fefoWarnings.push(`${pi.productSku}: stock insufficiente per ${remaining} conf`);
+        allAllocations.push({ ...pi, allocations });
+      }
+      const result = await db.transaction(async (tx) => {
+        const [order] = await tx.insert(orders).values({
+          retailerId: null,
+          eventType: input.eventType,
+          eventName: input.eventName,
+          eventDate: input.eventDate ?? null,
+          fiscalReceiptRef: input.fiscalReceiptRef ?? null,
+          status: "pending",
+          paymentTerms: "manual",
+          subtotalNet: pricing.subtotalNet,
+          vatAmount: pricing.vatAmount,
+          totalGross: pricing.totalGross,
+          discountPercent: "0.00",
+          notes: input.notes ?? null,
+          notesInternal: input.notesInternal ?? null,
+          createdBy: ctx.user.id,
+        }).returning();
+        const itemValues: Array<{ orderId: string; productId: string; quantity: number; unitPriceBase: string; discountPercent: string; unitPriceFinal: string; vatRate: string; lineTotalNet: string; lineTotalGross: string; productSku: string; productName: string; batchId: string | null; }> = [];
+        for (const pi of allAllocations) {
+          if (pi.allocations.length === 0) {
+            itemValues.push({ orderId: order.id, productId: pi.productId, quantity: pi.quantity, unitPriceBase: pi.unitPriceBase, discountPercent: pi.discountPercent, unitPriceFinal: pi.unitPriceFinal, vatRate: pi.vatRate, lineTotalNet: pi.lineTotalNet, lineTotalGross: pi.lineTotalGross, productSku: pi.productSku, productName: pi.productName, batchId: null });
+          } else {
+            for (const alloc of pi.allocations) {
+              const ratio = alloc.quantity / pi.quantity;
+              itemValues.push({ orderId: order.id, productId: pi.productId, quantity: alloc.quantity, unitPriceBase: pi.unitPriceBase, discountPercent: pi.discountPercent, unitPriceFinal: pi.unitPriceFinal, vatRate: pi.vatRate, lineTotalNet: (parseFloat(pi.lineTotalNet) * ratio).toFixed(2), lineTotalGross: (parseFloat(pi.lineTotalGross) * ratio).toFixed(2), productSku: pi.productSku, productName: pi.productName, batchId: alloc.batchId });
+            }
+            const allocatedTotal = pi.allocations.reduce((s, a) => s + a.quantity, 0);
+            const unallocated = pi.quantity - allocatedTotal;
+            if (unallocated > 0) {
+              const ratio = unallocated / pi.quantity;
+              itemValues.push({ orderId: order.id, productId: pi.productId, quantity: unallocated, unitPriceBase: pi.unitPriceBase, discountPercent: pi.discountPercent, unitPriceFinal: pi.unitPriceFinal, vatRate: pi.vatRate, lineTotalNet: (parseFloat(pi.lineTotalNet) * ratio).toFixed(2), lineTotalGross: (parseFloat(pi.lineTotalGross) * ratio).toFixed(2), productSku: pi.productSku, productName: pi.productName, batchId: null });
+            }
+          }
+        }
+        if (itemValues.length > 0) await tx.insert(orderItems).values(itemValues);
+        return order;
+      });
+      return { id: result.id, orderNumber: result.orderNumber, totalGross: pricing.totalGross, fefoWarnings };
+    }),
+
+  /**
+   * 18. Deliver event order (pending → delivered, decrement stock)
+   */
+  deliverEventOrder: staffProcedure
+    .input(z.object({ orderId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+      const [order] = await db.select().from(orders).where(eq(orders.id, input.orderId)).limit(1);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
+      if (!order.eventType) throw new TRPCError({ code: "BAD_REQUEST", message: "Non è un ordine evento" });
+      if (order.status !== "pending") throw new TRPCError({ code: "BAD_REQUEST", message: "Solo ordini pending possono essere consegnati" });
+      const items = await db.select({ id: orderItems.id, productId: orderItems.productId, batchId: orderItems.batchId, quantity: orderItems.quantity, productName: orderItems.productName }).from(orderItems).where(eq(orderItems.orderId, input.orderId));
+      const [warehouse] = await db.select({ id: locations.id }).from(locations).where(eq(locations.type, "central_warehouse")).limit(1);
+      if (!warehouse) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Magazzino centrale non configurato" });
+      const results: string[] = [];
+      await db.transaction(async (tx) => {
+        for (const item of items) {
+          if (!item.batchId) { results.push(`${item.productName}: nessun lotto, stock non decrementato`); continue; }
+          const centralRows = await tx.select().from(inventoryByBatch).where(and(eq(inventoryByBatch.locationId, warehouse.id), eq(inventoryByBatch.batchId, item.batchId))).for("update");
+          const central = centralRows[0];
+          if (!central || central.quantity < item.quantity) { results.push(`${item.productName}: stock insufficiente (${central?.quantity ?? 0} < ${item.quantity})`); continue; }
+          await tx.update(inventoryByBatch).set({ quantity: central.quantity - item.quantity, updatedAt: new Date() }).where(eq(inventoryByBatch.id, central.id));
+          const { stockMovements } = await import("../drizzle/schema");
+          await tx.insert(stockMovements).values({ productId: item.productId, type: "OUT", quantity: item.quantity, previousQuantity: central.quantity, newQuantity: central.quantity - item.quantity, batchId: item.batchId, fromLocationId: warehouse.id, notes: `Ordine evento ${order.orderNumber} — ${order.eventName}`, createdBy: ctx.user.id });
+          results.push(`${item.productName}: ${item.quantity} conf. scaricate`);
+        }
+        await tx.update(orders).set({ status: "delivered", deliveredAt: new Date(), updatedAt: new Date() }).where(eq(orders.id, input.orderId));
+      });
+      return { success: true, results };
+    }),
+
+  /**
+   * 19. Get available stock for products (admin helper)
    */
   getAvailableStock: staffProcedure
     .input(z.object({
