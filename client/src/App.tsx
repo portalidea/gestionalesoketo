@@ -28,6 +28,7 @@ import DdtImports from "./pages/DdtImports";
 import DdtImportDetail from "./pages/DdtImportDetail";
 import Orders from "./pages/Orders";
 import OrderNew from "./pages/OrderNew";
+import EventOrderNew from "./pages/EventOrderNew";
 import OrderDetail from "./pages/OrderDetail";
 import PartnerDashboard from "./pages/PartnerDashboard";
 import PartnerCatalog from "./pages/PartnerCatalog";
@@ -171,6 +172,9 @@ function Router() {
       </Route>
       <Route path="/orders/new">
         <RequireRole allowedRoles={ADMIN_ROLES}><OrderNew /></RequireRole>
+      </Route>
+      <Route path="/orders/new-event">
+        <RequireRole allowedRoles={ADMIN_ROLES}><EventOrderNew /></RequireRole>
       </Route>
       <Route path="/orders/:id">
         <RequireRole allowedRoles={ADMIN_ROLES}><OrderDetail /></RequireRole>
