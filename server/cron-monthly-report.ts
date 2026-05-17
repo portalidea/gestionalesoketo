@@ -133,3 +133,120 @@ cronRoutes.get("/cron/affiliate-monthly-report", async (req: Request, res: Respo
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+// ─── M8.1: Shopify Stock Sync Cron ─────────────────────────────────────────
+// Endpoint: GET /api/cron/shopify-stock-sync
+// Triggered every 6 hours by external scheduler.
+// 1. Imports paid orders from last 6h
+// 2. Processes stock (FEFO)
+// 3. Retries previously failed orders
+cronRoutes.get("/cron/shopify-stock-sync", async (req: Request, res: Response) => {
+  // Auth check
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret) {
+    const auth = req.headers.authorization;
+    if (!auth || auth !== `Bearer ${cronSecret}`) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+  }
+
+  try {
+    const db = await getDb();
+    if (!db) {
+      res.status(500).json({ error: "Database not available" });
+      return;
+    }
+
+    const { salesStores } = await import("../drizzle/schema");
+    // Get active Shopify store
+    const [store] = await db
+      .select()
+      .from(salesStores)
+      .where(and(eq(salesStores.channel, "shopify"), eq(salesStores.isActive, true)))
+      .limit(1);
+
+    if (!store || !(store.apiCredentials as any)?.accessToken) {
+      res.json({ success: false, error: "No active Shopify store configured" });
+      return;
+    }
+
+    // 1. Import recent orders (last 6 hours)
+    const { ShopifyClient } = await import("./services/shopifyService");
+    const {
+      importShopifyOrder,
+      processStockForMarketplaceOrder,
+      retryFailedOrders,
+    } = await import("./services/marketplaceOrderService");
+
+    const client = new ShopifyClient(
+      store.storeIdentifier,
+      (store.apiCredentials as any).accessToken,
+    );
+
+    const createdAtMin = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    let allOrders: any[] = [];
+    let fetchResult = await client.fetchOrders({
+      createdAtMin,
+      financialStatus: "paid",
+      status: "any",
+      limit: 50,
+    });
+    allOrders.push(...fetchResult.orders);
+
+    while (fetchResult.nextPageInfo) {
+      fetchResult = await client.fetchOrdersByPageInfo(fetchResult.nextPageInfo, 50);
+      allOrders.push(...fetchResult.orders);
+    }
+
+    let imported = 0;
+    let duplicates = 0;
+    let processedStock = 0;
+    let failed = 0;
+
+    for (const shopifyOrder of allOrders) {
+      try {
+        const importResult = await importShopifyOrder(store.id, shopifyOrder);
+        if (importResult.status === "duplicate") {
+          duplicates++;
+          continue;
+        }
+        imported++;
+        const stockResult = await processStockForMarketplaceOrder(
+          importResult.marketplaceOrderId,
+        );
+        if (stockResult.status === "processed") processedStock++;
+        else failed++;
+      } catch (e: any) {
+        failed++;
+      }
+    }
+
+    // 2. Retry previously failed orders
+    const retryResult = await retryFailedOrders(store.id);
+
+    // 3. Update lastSyncAt
+    await db
+      .update(salesStores)
+      .set({ lastSyncAt: new Date(), updatedAt: new Date() })
+      .where(eq(salesStores.id, store.id));
+
+    console.log(
+      `[cron/shopify-stock-sync] fetched=${allOrders.length} imported=${imported} duplicates=${duplicates} processedStock=${processedStock} failed=${failed} retried=${retryResult.retried} retrySucceeded=${retryResult.succeeded}`,
+    );
+
+    res.json({
+      success: true,
+      fetched: allOrders.length,
+      imported,
+      duplicates,
+      processedStock,
+      failed,
+      retried: retryResult.retried,
+      retrySucceeded: retryResult.succeeded,
+    });
+  } catch (err: any) {
+    console.error("[cron/shopify-stock-sync] Fatal error:", err);
+    res.status(500).json({ error: err.message || "Internal server error" });
+  }
+});

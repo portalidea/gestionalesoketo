@@ -45,6 +45,10 @@ import MonthlyCommissionReport from "./pages/MonthlyCommissionReport";
 import AffiliateDashboard from "./pages/AffiliateDashboard";
 import AffiliateCommissions from "./pages/AffiliateCommissions";
 import AffiliateProfile from "./pages/AffiliateProfile";
+import MarketplaceShopify from "./pages/MarketplaceShopify";
+import MarketplaceShopifyVariants from "./pages/MarketplaceShopifyVariants";
+import MarketplaceShopifyOrders from "./pages/MarketplaceShopifyOrders";
+import MarketplaceShopifyOrderDetail from "./pages/MarketplaceShopifyOrderDetail";
 
 const ADMIN_ROLES = ["admin", "operator", "viewer"];
 const RETAILER_ROLES = ["retailer_admin", "retailer_user"];
@@ -203,6 +207,21 @@ function Router() {
       </Route>
       <Route path="/settings/integrations">
         <RequireRole allowedRoles={["admin"]}><Integrations /></RequireRole>
+      </Route>
+      {/* ═══════════════════════════════════════════════════════════
+          Marketplace Shopify routes (M8.1)
+         ═══════════════════════════════════════════════════════════ */}
+      <Route path="/marketplace/shopify/orders/:id">
+        <RequireRole allowedRoles={ADMIN_ROLES}><MarketplaceShopifyOrderDetail /></RequireRole>
+      </Route>
+      <Route path="/marketplace/shopify/orders">
+        <RequireRole allowedRoles={ADMIN_ROLES}><MarketplaceShopifyOrders /></RequireRole>
+      </Route>
+      <Route path="/marketplace/shopify/variants">
+        <RequireRole allowedRoles={ADMIN_ROLES}><MarketplaceShopifyVariants /></RequireRole>
+      </Route>
+      <Route path="/marketplace/shopify">
+        <RequireRole allowedRoles={ADMIN_ROLES}><MarketplaceShopify /></RequireRole>
       </Route>
       {/* ═══════════════════════════════════════════════════════════
           Affiliate Portal routes — only affiliate_admin / affiliate_user

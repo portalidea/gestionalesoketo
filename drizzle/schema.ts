@@ -43,7 +43,11 @@ export const stockMovementTypeEnum = pgEnum("stock_movement_type", [
   "RECEIPT_FROM_PRODUCER",
   "TRANSFER",
   "EXPIRY_WRITE_OFF",
+  "SHOPIFY_EXIT",
+  "AMAZON_EXIT",
+  "MARKETPLACE_RETURN",
 ]);
+export const salesChannelEnum = pgEnum("sales_channel", ["shopify", "amazon", "temu", "aliexpress", "manual"]);
 export const alertTypeEnum = pgEnum("alert_type", ["LOW_STOCK", "EXPIRING", "EXPIRED"]);
 export const alertStatusEnum = pgEnum("alert_status", ["ACTIVE", "ACKNOWLEDGED", "RESOLVED"]);
 export const syncStatusEnum = pgEnum("sync_status", ["SUCCESS", "FAILED", "PARTIAL"]);
@@ -358,6 +362,8 @@ export const stockMovements = pgTable("stockMovements", {
   // M3: riferimento proforma generata su FiC. NULL se ancora in coda o nessuna.
   ficProformaId: integer("ficProformaId"),
   ficProformaNumber: varchar("ficProformaNumber", { length: 50 }),
+  // M8.1: riferimento ordine marketplace
+  marketplaceOrderId: uuid("marketplaceOrderId"),
 });
 
 export type StockMovement = typeof stockMovements.$inferSelect;
@@ -723,3 +729,127 @@ export const affiliateCommissions = pgTable(
 
 export type AffiliateCommission = typeof affiliateCommissions.$inferSelect;
 export type InsertAffiliateCommission = typeof affiliateCommissions.$inferInsert;
+
+// ─── M8.1 — Marketplace Integration ─────────────────────────────────────────
+
+/**
+ * Sales stores — multi-store, multi-channel.
+ * Per ora un solo store Shopify attivo.
+ */
+export const salesStores = pgTable(
+  "sales_stores",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    channel: salesChannelEnum("channel").notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    storeIdentifier: varchar("storeIdentifier", { length: 255 }).notNull(),
+    apiCredentials: jsonb("apiCredentials"),
+    isActive: boolean("isActive").default(true).notNull(),
+    lastSyncAt: timestamp("lastSyncAt", { withTimezone: true }),
+    notes: text("notes"),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    unique("sales_stores_channel_identifier_unique").on(t.channel, t.storeIdentifier),
+    index("idx_stores_channel_active").on(t.channel),
+  ],
+);
+export type SalesStore = typeof salesStores.$inferSelect;
+export type InsertSalesStore = typeof salesStores.$inferInsert;
+
+/**
+ * Channel variants — mapping tra SKU canale e prodotto interno.
+ * multiplier: quanti pezzi interni corrispondono a 1 unità canale.
+ */
+export const channelVariants = pgTable(
+  "channel_variants",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    storeId: uuid("storeId")
+      .notNull()
+      .references(() => salesStores.id, { onDelete: "cascade" }),
+    productId: uuid("productId").references(() => products.id, { onDelete: "restrict" }),
+    channelSku: varchar("channelSku", { length: 255 }).notNull(),
+    channelProductId: varchar("channelProductId", { length: 255 }),
+    channelVariantId: varchar("channelVariantId", { length: 255 }),
+    displayName: varchar("displayName", { length: 255 }),
+    multiplier: integer("multiplier").default(1).notNull(),
+    isActive: boolean("isActive").default(true).notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    unique("channel_variants_store_sku_unique").on(t.storeId, t.channelSku),
+    index("idx_channel_variants_product").on(t.productId),
+    index("idx_channel_variants_active").on(t.storeId),
+  ],
+);
+export type ChannelVariant = typeof channelVariants.$inferSelect;
+export type InsertChannelVariant = typeof channelVariants.$inferInsert;
+
+/**
+ * Marketplace orders — ordini importati da canali esterni (Shopify, Amazon, etc.).
+ * Separati dalla tabella orders (retailer).
+ */
+export const marketplaceOrders = pgTable(
+  "marketplace_orders",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    storeId: uuid("storeId")
+      .notNull()
+      .references(() => salesStores.id, { onDelete: "restrict" }),
+    channelOrderId: varchar("channelOrderId", { length: 255 }).notNull(),
+    channelOrderNumber: varchar("channelOrderNumber", { length: 255 }),
+    customerEmail: varchar("customerEmail", { length: 255 }),
+    customerName: varchar("customerName", { length: 255 }),
+    orderDate: timestamp("orderDate", { withTimezone: true }).notNull(),
+    totalGross: numeric("totalGross", { precision: 10, scale: 2 }),
+    currency: varchar("currency", { length: 3 }).default("EUR"),
+    shippingCountry: varchar("shippingCountry", { length: 2 }),
+    rawPayload: jsonb("rawPayload"),
+    syncedAt: timestamp("syncedAt", { withTimezone: true }).defaultNow().notNull(),
+    stockProcessedAt: timestamp("stockProcessedAt", { withTimezone: true }),
+    stockProcessingStatus: varchar("stockProcessingStatus", { length: 50 }).default("pending"),
+    stockProcessingError: text("stockProcessingError"),
+    stockProcessingAttempts: integer("stockProcessingAttempts").default(0).notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    unique("marketplace_orders_store_channel_unique").on(t.storeId, t.channelOrderId),
+    index("idx_marketplace_orders_status").on(t.stockProcessingStatus),
+    index("idx_marketplace_orders_date").on(t.orderDate),
+    index("idx_marketplace_orders_store").on(t.storeId),
+  ],
+);
+export type MarketplaceOrder = typeof marketplaceOrders.$inferSelect;
+export type InsertMarketplaceOrder = typeof marketplaceOrders.$inferInsert;
+
+/**
+ * Marketplace order items — line items degli ordini marketplace.
+ */
+export const marketplaceOrderItems = pgTable(
+  "marketplace_order_items",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    marketplaceOrderId: uuid("marketplaceOrderId")
+      .notNull()
+      .references(() => marketplaceOrders.id, { onDelete: "cascade" }),
+    channelSku: varchar("channelSku", { length: 255 }).notNull(),
+    productId: uuid("productId").references(() => products.id, { onDelete: "set null" }),
+    channelVariantId: uuid("channelVariantId").references(() => channelVariants.id, { onDelete: "set null" }),
+    channelQuantity: integer("channelQuantity").notNull(),
+    piecesQuantity: integer("piecesQuantity").notNull(),
+    unitPrice: numeric("unitPrice", { precision: 10, scale: 2 }),
+    lineTotal: numeric("lineTotal", { precision: 10, scale: 2 }),
+    displayName: varchar("displayName", { length: 255 }),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("idx_marketplace_order_items_order").on(t.marketplaceOrderId),
+    index("idx_marketplace_order_items_product").on(t.productId),
+  ],
+);
+export type MarketplaceOrderItem = typeof marketplaceOrderItems.$inferSelect;
+export type InsertMarketplaceOrderItem = typeof marketplaceOrderItems.$inferInsert;

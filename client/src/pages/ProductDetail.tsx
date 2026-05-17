@@ -286,6 +286,60 @@ function SupplierCodesSection({
   );
 }
 
+// ====================== Channel Variants Card (M8.1) ======================
+function ChannelVariantsCard({ productId }: { productId: string }) {
+  const { data: variants, isLoading } = trpc.shopify.variants.list.useQuery(
+    { limit: 50, offset: 0 },
+    { enabled: productId.length > 0 },
+  );
+
+  // Filter variants mapped to this product
+  const mapped = variants?.items?.filter((v: any) => v.productId === productId) ?? [];
+
+  if (isLoading) return null;
+  if (mapped.length === 0) return null;
+
+  return (
+    <Card className="border-border bg-card">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Package className="h-4 w-4" />
+          Varianti Canale ({mapped.length})
+        </CardTitle>
+        <CardDescription>
+          SKU Shopify mappati a questo prodotto
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>SKU Canale</TableHead>
+              <TableHead>Nome</TableHead>
+              <TableHead className="text-center">Multiplier</TableHead>
+              <TableHead className="text-center">Stato</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {mapped.map((v: any) => (
+              <TableRow key={v.id}>
+                <TableCell className="font-mono text-sm">{v.channelSku}</TableCell>
+                <TableCell>{v.displayName}</TableCell>
+                <TableCell className="text-center">{v.multiplier}×</TableCell>
+                <TableCell className="text-center">
+                  <Badge variant={v.isActive ? "default" : "secondary"}>
+                    {v.isActive ? "Attivo" : "Disattivo"}
+                  </Badge>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function ProductDetail() {
   const [, params] = useRoute("/products/:id");
   const [, setLocation] = useLocation();
@@ -1112,6 +1166,9 @@ export default function ProductDetail() {
           </Card>
         </div>
       </div>
+
+      {/* ====================== Channel Variants (M8.1) ====================== */}
+      <ChannelVariantsCard productId={productId} />
 
       {/* ====================== Dialog WRITE-OFF ====================== */}
       {/* Dialog (non AlertDialog): Radix AlertDialogAction chiude il

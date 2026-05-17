@@ -29,6 +29,7 @@ import { retailerOrdersRouter } from "./retailer-orders-router";
 import { retailerSelfServiceRouter } from "./retailer-selfservice-router";
 import { affiliatesRouter } from "./affiliates-router";
 import { affiliatePortalRouter } from "./affiliate-portal-router";
+import { shopifyRouter } from "./shopify-router";
 
 
 const uuid = z.string().uuid();
@@ -1304,6 +1305,9 @@ export const appRouter = router({
 
   // ============= M7-B — PORTALE AFFILIATI =============
   affiliatePortal: affiliatePortalRouter,
+
+  // ============= M8.1 — SHOPIFY MARKETPLACE =============
+  shopify: shopifyRouter,
 });
 
 export type AppRouter = typeof appRouter;
