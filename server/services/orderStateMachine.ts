@@ -159,7 +159,7 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
       const [retailer] = await db
         .select({ ficClientId: retailers.ficClientId, name: retailers.name })
         .from(retailers)
-        .where(eq(retailers.id, order.retailerId))
+        .where(eq(retailers.id, order.retailerId!))
         .limit(1);
 
       if (!retailer?.ficClientId) {
@@ -329,7 +329,7 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
   sendOrderStatusEmail({
     orderId,
     orderNumber: order.orderNumber ?? "",
-    retailerId: order.retailerId,
+    retailerId: order.retailerId!,
     newStatus: toStatus,
     previousStatus: currentStatus,
     reason,
@@ -458,7 +458,7 @@ export async function modifyPaidOrder(input: ModifyPaidOrderInput): Promise<void
     const [retailer] = await db
       .select({ ficClientId: retailers.ficClientId })
       .from(retailers)
-      .where(eq(retailers.id, order.retailerId))
+      .where(eq(retailers.id, order.retailerId!))
       .limit(1);
 
     if (retailer?.ficClientId) {
@@ -505,7 +505,7 @@ export async function modifyPaidOrder(input: ModifyPaidOrderInput): Promise<void
   sendOrderStatusEmail({
     orderId: input.orderId,
     orderNumber: order.orderNumber ?? "",
-    retailerId: order.retailerId,
+    retailerId: order.retailerId!,
     newStatus: "modified" as any,
     previousStatus: order.status as OrderStatus,
   }).catch((err) => {

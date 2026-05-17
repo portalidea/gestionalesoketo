@@ -185,6 +185,92 @@ export async function calculateOrderPricing(
   };
 }
 
+/**
+ * Calcola pricing per ordini evento (senza retailer, sconto 0%).
+ * Usa prezzo pieno del prodotto.
+ */
+export async function calculateEventOrderPricing(
+  items: PricingItemInput[],
+): Promise<PricingResult> {
+  const db = await getDb();
+  if (!db) throw new Error("Database non disponibile");
+  const productIds = items.map((i) => i.productId);
+  const productRows = await db
+    .select({
+      id: products.id,
+      sku: products.sku,
+      name: products.name,
+      unitPrice: products.unitPrice,
+      vatRate: products.vatRate,
+      piecesPerUnit: products.piecesPerUnit,
+    })
+    .from(products)
+    .where(sql`${products.id} IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})`);
+  const productMap = new Map(productRows.map((p) => [p.id, p]));
+  const stockRows = await db.execute<{ productId: string; totalQty: number }>(sql`
+    SELECT pb."productId" AS "productId", COALESCE(SUM(ibb."quantity"), 0)::int AS "totalQty"
+    FROM "inventoryByBatch" ibb
+    INNER JOIN "locations" l ON l."id" = ibb."locationId"
+    INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
+    WHERE l."type" = 'central_warehouse'
+      AND pb."productId" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})
+    GROUP BY pb."productId"
+  `);
+  const stockMap = new Map(
+    (stockRows as unknown as Array<{ productId: string; totalQty: number }>).map((s) => [
+      s.productId,
+      s.totalQty,
+    ]),
+  );
+  const warnings: string[] = [];
+  const pricedItems: PricingItemOutput[] = [];
+  let sumNet = 0;
+  let sumVat = 0;
+  let sumGross = 0;
+  for (const item of items) {
+    const product = productMap.get(item.productId);
+    if (!product) throw new Error(`Prodotto ${item.productId} non trovato`);
+    const unitPriceBase = parseFloat(product.unitPrice || "0");
+    const vatRate = parseFloat(product.vatRate);
+    const unitPriceFinal = unitPriceBase; // no discount for event orders
+    const lineTotalNet = roundTo2(unitPriceFinal * item.quantity);
+    const lineVat = roundTo2(lineTotalNet * (vatRate / 100));
+    const lineTotalGross = roundTo2(lineTotalNet + lineVat);
+    sumNet += lineTotalNet;
+    sumVat += lineVat;
+    sumGross += lineTotalGross;
+    const stockAvailable = stockMap.get(item.productId) ?? 0;
+    const stockWarning = item.quantity > stockAvailable;
+    if (stockWarning) {
+      warnings.push(`${product.name}: richieste ${item.quantity} conf, disponibili ${stockAvailable} conf`);
+    }
+    pricedItems.push({
+      productId: item.productId,
+      productSku: product.sku,
+      productName: product.name,
+      piecesPerUnit: product.piecesPerUnit,
+      quantity: item.quantity,
+      unitPriceBase: unitPriceBase.toFixed(2),
+      discountPercent: "0.00",
+      unitPriceFinal: unitPriceFinal.toFixed(2),
+      vatRate: vatRate.toFixed(2),
+      lineTotalNet: lineTotalNet.toFixed(2),
+      lineTotalGross: lineTotalGross.toFixed(2),
+      stockAvailableConfezioni: stockAvailable,
+      stockWarning,
+    });
+  }
+  return {
+    discountPercent: "0.00",
+    packageName: null,
+    items: pricedItems,
+    subtotalNet: roundTo2(sumNet).toFixed(2),
+    vatAmount: roundTo2(sumVat).toFixed(2),
+    totalGross: roundTo2(sumGross).toFixed(2),
+    warnings,
+  };
+}
+
 /** Arrotonda a 2 decimali */
 function roundTo2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;

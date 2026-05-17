@@ -28,7 +28,7 @@ export async function calculateCommissionForOrder(orderId: string): Promise<void
   const [retailer] = await db
     .select()
     .from(retailers)
-    .where(eq(retailers.id, order.retailerId))
+    .where(eq(retailers.id, order.retailerId!))
     .limit(1);
   if (!retailer || !retailer.affiliateId) {
     console.log("[commissionService.calculate] retailer has no affiliate, skip", {
@@ -74,7 +74,7 @@ export async function calculateCommissionForOrder(orderId: string): Promise<void
     .from(affiliateCommissions)
     .where(
       and(
-        eq(affiliateCommissions.retailerId, order.retailerId),
+        eq(affiliateCommissions.retailerId, order.retailerId!),
         ne(affiliateCommissions.status, "voided"),
       ),
     );
@@ -92,7 +92,7 @@ export async function calculateCommissionForOrder(orderId: string): Promise<void
   await db.insert(affiliateCommissions).values({
     affiliateId: affiliate.id,
     orderId: order.id,
-    retailerId: order.retailerId,
+    retailerId: order.retailerId!,
     orderTotal: orderTotal.toFixed(2),
     commissionRate: rate.toFixed(2),
     commissionAmount: commissionAmount.toFixed(2),
