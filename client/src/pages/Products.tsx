@@ -1,4 +1,5 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import { useAuth } from "@/_core/hooks/useAuth";
 import {
   daysToExpiry as daysToExpiryFn,
   getExpiryColorClass,
@@ -46,6 +47,7 @@ import {
   Loader2,
   Package,
   Plus,
+  TrendingUp,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -111,8 +113,11 @@ const EMPTY_FORM: FormData = {
 };
 
 export default function Products() {
+  const { user: me } = useAuth({ redirectOnUnauthenticated: true });
+  const isAdmin = me?.role === "admin";
   const { data: rawProducts, isLoading } = trpc.products.list.useQuery();
   const { data: producers } = trpc.producers.list.useQuery();
+  const { data: valuation } = trpc.warehouse.getValuation.useQuery(undefined, { enabled: isAdmin });
   const [, setLocation] = useLocation();
   const searchStr = useSearch();
 
@@ -155,6 +160,7 @@ export default function Products() {
         case "totalStock": return item.totalStock;
         case "activeBatchCount": return item.activeBatchCount;
         case "nearestExpiration": return item.nearestExpiration ? new Date(item.nearestExpiration) : null;
+        case "costPrice": return item.costPrice ? parseFloat(item.costPrice) : 0;
         default: return null;
       }
     },
@@ -789,6 +795,27 @@ export default function Products() {
           </Dialog>
         </div>
 
+        {/* M6.2.E: Valuation card - admin only */}
+        {isAdmin && valuation && parseFloat(valuation.totalValue) > 0 && (
+          <Card className="border-border bg-card mb-4">
+            <CardContent className="py-4">
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <TrendingUp className="h-5 w-5 text-green-500" />
+                  <span className="text-sm text-muted-foreground">Valore Magazzino:</span>
+                  <span className="text-lg font-bold text-foreground">€{parseFloat(valuation.totalValue).toLocaleString("it-IT", { minimumFractionDigits: 2 })}</span>
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  {valuation.totalUnits.toLocaleString("it-IT")} unità a stock
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  {valuation.products.length} prodotti valorizzati
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -810,6 +837,7 @@ export default function Products() {
                       <SortableTableHead sortKey="totalStock" sort={sortFromUrl} onSort={setSort} className="text-right">Stock totale</SortableTableHead>
                       <SortableTableHead sortKey="activeBatchCount" sort={sortFromUrl} onSort={setSort} className="text-right">Lotti attivi</SortableTableHead>
                       <SortableTableHead sortKey="nearestExpiration" sort={sortFromUrl} onSort={setSort}>Scadenza più vicina</SortableTableHead>
+                      {isAdmin && <SortableTableHead sortKey="costPrice" sort={sortFromUrl} onSort={setSort} className="text-right">Costo</SortableTableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -873,6 +901,11 @@ export default function Products() {
                               {expirationBadge(p.nearestExpiration, p.expiryWarningDays ?? 30)}
                             </div>
                           </TableCell>
+                          {isAdmin && (
+                            <TableCell className="text-right font-mono text-xs">
+                              {p.costPrice ? `€${p.costPrice}` : <span className="text-muted-foreground">-</span>}
+                            </TableCell>
+                          )}
                         </TableRow>
                       );
                     })}
