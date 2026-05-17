@@ -413,6 +413,7 @@ export const appRouter = router({
           vatRate: vatRateSchema.optional(),
           piecesPerUnit: z.number().min(1).optional(),
           sellableUnitLabel: z.string().optional(),
+          costPrice: z.string().optional(), // M6.2.E: costo unitario standard
         }),
       )
       .mutation(async ({ input }) => {
@@ -441,6 +442,7 @@ export const appRouter = router({
           vatRate: vatRateSchema.optional(),
           piecesPerUnit: z.number().min(1).optional(),
           sellableUnitLabel: z.string().optional(),
+          costPrice: z.string().optional(), // M6.2.E: costo unitario standard
         }),
       )
       .mutation(async ({ input }) => {
@@ -476,6 +478,7 @@ export const appRouter = router({
           imageUrl: z.string().optional(),
           piecesPerUnit: z.number().min(1).optional(),
           sellableUnitLabel: z.string().optional(),
+          costPrice: z.string().optional(), // M6.2.E
           supplierCodes: z
             .array(
               z.object({
@@ -491,6 +494,7 @@ export const appRouter = router({
               batchNumber: z.string().min(1),
               expirationDate: dateString,
               quantity: z.number().int().positive(),
+              costPrice: z.string().optional(), // M6.2.E: costo lotto
             })
             .optional(),
         }),
@@ -640,6 +644,7 @@ export const appRouter = router({
           expirationDate: dateString,
           productionDate: dateString.optional(),
           initialQuantity: z.number().int().positive(),
+          costPrice: z.string().optional(), // M6.2.E
           notes: z.string().optional(),
         }),
       )
@@ -651,6 +656,7 @@ export const appRouter = router({
           expirationDate: input.expirationDate,
           productionDate: input.productionDate ?? null,
           initialQuantity: input.initialQuantity,
+          costPrice: input.costPrice,
           notes: input.notes ?? null,
           createdBy: ctx.user.id,
         });
