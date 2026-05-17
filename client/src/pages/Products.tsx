@@ -245,6 +245,7 @@ export default function Products() {
       minStockThreshold: formData.minStockThreshold,
       expiryWarningDays: formData.expiryWarningDays,
       vatRate: formData.vatRate,
+      costPrice: (formData as any).costPrice || undefined,
       supplierCodes: validCodes,
       initialBatch:
         formData.showInitialBatch && formData.producerId !== NO_PRODUCER_VALUE
@@ -656,8 +657,23 @@ export default function Products() {
                         <SelectItem value="22.00">22% (ordinaria, birre/bevande)</SelectItem>
                       </SelectContent>
                     </Select>
-                  </div>
-
+                   </div>
+                  {/* M6.2.E: Costo unitario standard (admin only) */}
+                  {isAdmin && (
+                    <div className="space-y-2">
+                      <Label htmlFor="costPrice">Costo Unitario Standard (€)</Label>
+                      <Input
+                        id="costPrice"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder="0.00"
+                        value={(formData as any).costPrice || ""}
+                        onChange={(e) => setFormData({ ...formData, costPrice: e.target.value } as any)}
+                      />
+                      <p className="text-xs text-muted-foreground">Costo di acquisto per il calcolo del valore magazzino</p>
+                    </div>
+                  )}
                   {/* Primo lotto (opzionale, expandable) */}
                   {formData.producerId !== NO_PRODUCER_VALUE && (
                     <div className="border border-border rounded-lg">
