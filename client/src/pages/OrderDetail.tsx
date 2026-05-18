@@ -8,7 +8,7 @@
  * - Card Azioni con state machine (nuove procedure)
  * - Note interne/esterne
  */
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { daysToExpiry, getExpiryColorClass, getExpiryLabel } from "@/lib/expiry-utils";
 import { Badge } from "@/components/ui/badge";
@@ -80,6 +80,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { ChevronsUpDown } from "lucide-react";
 import { getEventTypeLabel, getEventTypeColor } from "../../../shared/eventTypeLabels";
 
 const STATUS_CONFIG: Record<
@@ -170,6 +184,78 @@ function getTimelineSteps(paymentTerms?: string | null) {
     base.push({ key: "paid_on_delivery", label: "Pagato", tsField: "paidAt" });
   }
   return base;
+}
+
+/**
+ * Sub-component: Combobox per selezione prodotto con search
+ */
+function ProductCombobox({
+  products,
+  value,
+  onSelect,
+}: {
+  products: Array<{ id: string; sku: string; name: string; unitPrice?: string | null; vatRate?: string | null }>;
+  value: string;
+  onSelect: (productId: string, unitPrice: number, vatRate: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = products.find((p) => p.id === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="w-full justify-between h-9 text-sm font-normal"
+        >
+          {selected ? (
+            <span className="truncate">
+              <span className="font-mono text-xs text-muted-foreground mr-1.5">{selected.sku}</span>
+              {selected.name}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">Seleziona prodotto...</span>
+          )}
+          <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[400px] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Cerca prodotto (SKU o nome)..." />
+          <CommandList>
+            <CommandEmpty>Nessun prodotto trovato.</CommandEmpty>
+            <CommandGroup>
+              {products.map((p) => (
+                <CommandItem
+                  key={p.id}
+                  value={`${p.sku} ${p.name}`}
+                  onSelect={() => {
+                    const unitPrice = parseFloat(p.unitPrice || "0");
+                    const vatRate = parseFloat(p.vatRate || "10");
+                    onSelect(p.id, unitPrice, vatRate);
+                    setOpen(false);
+                  }}
+                >
+                  <Check
+                    className={`mr-2 h-4 w-4 ${value === p.id ? "opacity-100" : "opacity-0"}`}
+                  />
+                  <span className="font-mono text-xs text-muted-foreground mr-2">{p.sku}</span>
+                  <span className="truncate">{p.name}</span>
+                  {p.unitPrice && (
+                    <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+                      € {parseFloat(p.unitPrice).toFixed(2)}
+                    </span>
+                  )}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 const NO_BATCH = "__none__";
@@ -282,7 +368,7 @@ export default function OrderDetail() {
   const utils = trpc.useUtils();
   const [cancelReason, setCancelReason] = useState("");
   const [editItemsOpen, setEditItemsOpen] = useState(false);
-  const [editItems, setEditItems] = useState<Array<{ productId: string; quantity: number }>>([]);
+  const [editItems, setEditItems] = useState<Array<{ productId: string; quantity: number; unitPrice: number; vatRate: number }>>([]);
 
   const orderQuery = trpc.orders.getById.useQuery(
     { id: params.id ?? "" },
@@ -408,9 +494,14 @@ export default function OrderDetail() {
   const canEditItems = ["pending", "paid", "approved_for_shipping"].includes(order.status);
 
   function openEditItemsDialog() {
-    // Pre-populate with current items
+    // Pre-populate with current items including prices
     setEditItems(
-      order.items.map((it) => ({ productId: it.productId, quantity: it.quantity }))
+      order.items.map((it) => ({
+        productId: it.productId,
+        quantity: it.quantity,
+        unitPrice: parseFloat(it.unitPriceFinal),
+        vatRate: parseFloat(it.vatRate),
+      }))
     );
     setEditItemsOpen(true);
   }
@@ -421,8 +512,31 @@ export default function OrderDetail() {
       toast.error("Almeno un item richiesto");
       return;
     }
-    modifyItemsMutation.mutate({ orderId: order.id, items: validItems });
+    modifyItemsMutation.mutate({
+      orderId: order.id,
+      items: validItems.map((it) => ({ productId: it.productId, quantity: it.quantity })),
+    });
   }
+
+  function updateEditItem(idx: number, patch: Partial<{ productId: string; quantity: number; unitPrice: number; vatRate: number }>) {
+    setEditItems((prev) => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], ...patch };
+      return next;
+    });
+  }
+
+  // Compute totals for edit dialog
+  const editSubtotalNet = useMemo(
+    () => editItems.reduce((sum, it) => sum + it.quantity * it.unitPrice, 0),
+    [editItems]
+  );
+  const editVatAmount = useMemo(
+    () => editItems.reduce((sum, it) => sum + it.quantity * it.unitPrice * (it.vatRate / 100), 0),
+    [editItems]
+  );
+  const editTotalGross = editSubtotalNet + editVatAmount;
+  const originalTotalGross = parseFloat(order?.totalGross ?? "0");
 
   // Timeline dinamica
   const timelineSteps = getTimelineSteps((order as any).paymentTerms);
@@ -916,7 +1030,7 @@ export default function OrderDetail() {
 
       {/* Edit Items Dialog */}
       <Dialog open={editItemsOpen} onOpenChange={setEditItemsOpen}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-5xl w-[90vw]">
           <DialogHeader>
             <DialogTitle>Modifica Items Ordine</DialogTitle>
             <DialogDescription>
@@ -925,62 +1039,96 @@ export default function OrderDetail() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3">
-            {editItems.map((item, idx) => (
-              <div key={idx} className="flex items-center gap-2">
-                <Select
-                  value={item.productId || "_placeholder"}
-                  onValueChange={(val) => {
-                    const next = [...editItems];
-                    next[idx] = { ...next[idx], productId: val };
-                    setEditItems(next);
-                  }}
-                >
-                  <SelectTrigger className="flex-1 h-9 text-sm">
-                    <SelectValue placeholder="Seleziona prodotto..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {productsQuery.data?.map((p: any) => (
-                      <SelectItem key={p.id} value={p.id}>
-                        <span className="font-mono text-xs mr-2">{p.sku}</span>
-                        {p.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Input
-                  type="number"
-                  min={1}
-                  value={item.quantity}
-                  onChange={(e) => {
-                    const next = [...editItems];
-                    next[idx] = { ...next[idx], quantity: Math.max(1, parseInt(e.target.value) || 1) };
-                    setEditItems(next);
-                  }}
-                  className="w-20 h-9 text-sm text-center"
-                />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9 text-destructive hover:text-destructive"
-                  onClick={() => {
-                    setEditItems(editItems.filter((_, i) => i !== idx));
-                  }}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            ))}
+          <div className="max-h-[60vh] overflow-y-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b text-sm text-muted-foreground">
+                  <th className="text-left p-2 font-medium">Prodotto</th>
+                  <th className="text-right p-2 w-28 font-medium">Quantità</th>
+                  <th className="text-right p-2 w-32 font-medium">Prezzo unit.</th>
+                  <th className="text-right p-2 w-32 font-medium">Totale</th>
+                  <th className="w-14"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {editItems.map((item, idx) => {
+                  const selectedProduct = productsQuery.data?.find((p: any) => p.id === item.productId);
+                  return (
+                    <tr key={idx} className="border-b">
+                      <td className="p-2">
+                        <ProductCombobox
+                          products={productsQuery.data ?? []}
+                          value={item.productId}
+                          onSelect={(productId, unitPrice, vatRate) => {
+                            updateEditItem(idx, { productId, unitPrice, vatRate });
+                          }}
+                        />
+                      </td>
+                      <td className="p-2">
+                        <Input
+                          type="number"
+                          min={1}
+                          value={item.quantity}
+                          onChange={(e) => updateEditItem(idx, { quantity: Math.max(1, parseInt(e.target.value) || 1) })}
+                          className="w-24 h-9 text-sm text-right ml-auto"
+                        />
+                      </td>
+                      <td className="p-2 text-right tabular-nums text-sm">
+                        {item.unitPrice > 0 ? `€ ${item.unitPrice.toFixed(2)}` : "—"}
+                      </td>
+                      <td className="p-2 text-right tabular-nums text-sm font-medium">
+                        {item.unitPrice > 0 ? `€ ${(item.quantity * item.unitPrice).toFixed(2)}` : "—"}
+                      </td>
+                      <td className="p-2 text-center">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          onClick={() => setEditItems(editItems.filter((_, i) => i !== idx))}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
 
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full gap-1.5"
-              onClick={() => setEditItems([...editItems, { productId: "", quantity: 1 }])}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Aggiungi prodotto
-            </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-3 gap-1.5"
+            onClick={() => setEditItems([...editItems, { productId: "", quantity: 1, unitPrice: 0, vatRate: 10 }])}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Aggiungi prodotto
+          </Button>
+
+          {/* Totals box */}
+          <div className="mt-4 ml-auto w-80 bg-muted/50 p-4 rounded-lg">
+            <div className="flex justify-between text-sm">
+              <span>Subtotale netto:</span>
+              <span className="tabular-nums">€ {editSubtotalNet.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between text-sm mt-1">
+              <span>IVA:</span>
+              <span className="tabular-nums">€ {editVatAmount.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between font-bold text-lg mt-2 pt-2 border-t">
+              <span>Totale:</span>
+              <span className="tabular-nums">€ {editTotalGross.toFixed(2)}</span>
+            </div>
+            {Math.abs(editTotalGross - originalTotalGross) > 0.01 && (
+              <div className="text-sm text-orange-600 dark:text-orange-400 mt-3 pt-3 border-t">
+                Delta vs ordine corrente:{" "}
+                <span className="font-medium tabular-nums">
+                  {editTotalGross > originalTotalGross ? "+" : ""}
+                  € {(editTotalGross - originalTotalGross).toFixed(2)}
+                </span>
+              </div>
+            )}
           </div>
 
           <DialogFooter className="mt-4">
@@ -989,7 +1137,11 @@ export default function OrderDetail() {
             </Button>
             <Button
               onClick={handleSaveEditItems}
-              disabled={modifyItemsMutation.isPending || editItems.length === 0}
+              disabled={
+                modifyItemsMutation.isPending ||
+                editItems.length === 0 ||
+                editItems.some((it) => !it.productId || it.quantity <= 0)
+              }
             >
               {modifyItemsMutation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
