@@ -1031,7 +1031,7 @@ export default function OrderDetail() {
 
       {/* Edit Items Dialog */}
       <Dialog open={editItemsOpen} onOpenChange={setEditItemsOpen}>
-        <DialogContent className="max-w-5xl w-[95vw] max-h-[90vh] overflow-y-auto">
+        <DialogContent className="!max-w-[1400px] w-[95vw] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Modifica Items - Ordine #{order.id.slice(0, 8)}</DialogTitle>
             <DialogDescription>
@@ -1043,7 +1043,14 @@ export default function OrderDetail() {
 
           {/* TABELLA ITEMS — ogni riga è un item dell'ordine */}
           <div className="mt-4 border rounded-lg overflow-hidden">
-            <table className="w-full">
+            <table className="w-full table-fixed">
+              <colgroup>
+                <col style={{width: 'auto'}} />
+                <col style={{width: '140px'}} />
+                <col style={{width: '140px'}} />
+                <col style={{width: '140px'}} />
+                <col style={{width: '60px'}} />
+              </colgroup>
               <thead className="bg-muted/50">
                 <tr>
                   <th className="text-left p-3 text-sm font-medium">Prodotto</th>
