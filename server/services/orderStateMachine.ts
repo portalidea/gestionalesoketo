@@ -422,26 +422,69 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
   const { calculateOrderPricing } = await import("../pricing");
   const pricing = await calculateOrderPricing(order.retailerId, input.items);
 
-  // 3. Transaction: delete old items, insert new ones, update order totals
+  // 3. Transaction: diff strategy — preserve batchId on existing items
   await db.transaction(async (tx) => {
-    await tx.delete(orderItems).where(eq(orderItems.orderId, input.orderId));
+    // Load existing items to preserve batchId
+    const existingItems = await tx
+      .select({ id: orderItems.id, productId: orderItems.productId, batchId: orderItems.batchId })
+      .from(orderItems)
+      .where(eq(orderItems.orderId, input.orderId));
 
-    const itemValues = pricing.items.map((pi) => ({
-      orderId: input.orderId,
-      productId: pi.productId,
-      quantity: pi.quantity,
-      unitPriceBase: pi.unitPriceBase,
-      discountPercent: pi.discountPercent,
-      unitPriceFinal: pi.unitPriceFinal,
-      vatRate: pi.vatRate,
-      lineTotalNet: pi.lineTotalNet,
-      lineTotalGross: pi.lineTotalGross,
-      productSku: pi.productSku,
-      productName: pi.productName,
-    }));
+    // Build a map of existing items by productId for fast lookup
+    const existingByProduct = new Map<string, typeof existingItems[0]>();
+    for (const ei of existingItems) {
+      existingByProduct.set(ei.productId, ei);
+    }
 
-    await tx.insert(orderItems).values(itemValues);
+    // Track which existing items are matched (to delete unmatched ones)
+    const matchedExistingIds = new Set<string>();
 
+    for (const pi of pricing.items) {
+      const existing = existingByProduct.get(pi.productId);
+
+      if (existing) {
+        // UPDATE: change pricing/quantity, PRESERVE batchId
+        matchedExistingIds.add(existing.id);
+        await tx
+          .update(orderItems)
+          .set({
+            quantity: pi.quantity,
+            unitPriceBase: pi.unitPriceBase,
+            discountPercent: pi.discountPercent,
+            unitPriceFinal: pi.unitPriceFinal,
+            vatRate: pi.vatRate,
+            lineTotalNet: pi.lineTotalNet,
+            lineTotalGross: pi.lineTotalGross,
+            productSku: pi.productSku,
+            productName: pi.productName,
+          })
+          .where(eq(orderItems.id, existing.id));
+      } else {
+        // INSERT: new item, batchId = null (will be assigned later)
+        await tx.insert(orderItems).values({
+          orderId: input.orderId,
+          productId: pi.productId,
+          quantity: pi.quantity,
+          unitPriceBase: pi.unitPriceBase,
+          discountPercent: pi.discountPercent,
+          unitPriceFinal: pi.unitPriceFinal,
+          vatRate: pi.vatRate,
+          lineTotalNet: pi.lineTotalNet,
+          lineTotalGross: pi.lineTotalGross,
+          productSku: pi.productSku,
+          productName: pi.productName,
+          batchId: null,
+        });
+      }
+    }
+
+    // DELETE: items that were removed by admin
+    const removedItems = existingItems.filter((ei) => !matchedExistingIds.has(ei.id));
+    for (const removed of removedItems) {
+      await tx.delete(orderItems).where(eq(orderItems.id, removed.id));
+    }
+
+    // Update order totals
     await tx
       .update(orders)
       .set({

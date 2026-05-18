@@ -1124,12 +1124,23 @@ export default function OrderDetail() {
                     <td className="p-2">
                       <Select
                         value={item.productId || "_empty"}
-                        onValueChange={(v) => {
+                        onValueChange={async (v) => {
                           if (v === "_empty") return;
-                          const product = productsQuery.data?.find((p: any) => p.id === v);
-                          const unitPrice = product ? parseFloat(product.unitPrice || "0") : 0;
-                          const vatRate = product ? parseFloat(product.vatRate || "10") : 10;
-                          updateEditItem(idx, { productId: v, unitPrice, vatRate });
+                          updateEditItem(idx, { productId: v });
+                          // Fetch discounted price for this retailer
+                          try {
+                            const pricing = await utils.orders.getProductPricingForRetailer.fetch({
+                              productId: v,
+                              retailerId: order.retailerId!,
+                            });
+                            updateEditItem(idx, { productId: v, unitPrice: pricing.discountedPrice, vatRate: pricing.vatRate });
+                          } catch {
+                            // Fallback to list price from products query
+                            const product = productsQuery.data?.find((p: any) => p.id === v);
+                            const unitPrice = product ? parseFloat(product.unitPrice || "0") : 0;
+                            const vatRate = product ? parseFloat(product.vatRate || "10") : 10;
+                            updateEditItem(idx, { productId: v, unitPrice, vatRate });
+                          }
                         }}
                       >
                         <SelectTrigger className="w-full">
