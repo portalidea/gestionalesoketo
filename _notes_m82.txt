@@ -1,0 +1,10 @@
+M8.2 Schema findings:
+- products.costPrice = costo unitario standard IVA esclusa (numeric 10,4)
+- products.unitPrice = varchar(20) — this is the list/selling price (stored as string!)
+- NO listPrice field exists separately
+- unitPrice is varchar, not numeric — need to cast/parse in queries
+- costPrice is numeric(10,4) — OK for math
+
+So:
+- "unitCost" in spec = products.costPrice
+- "listPrice" in spec = products.unitPrice (varchar, needs CAST)

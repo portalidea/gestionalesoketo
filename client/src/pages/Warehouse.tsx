@@ -30,6 +30,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
@@ -44,15 +45,21 @@ import { trpc } from "@/lib/trpc";
 import { format } from "date-fns";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   ChevronDown,
   ChevronRight,
   Loader2,
   Package,
+  Percent,
+  TrendingUp,
   Truck,
+  Wallet,
   Warehouse as WarehouseIcon,
   XCircle,
 } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useLocation } from "wouter";
 
 type TransferTarget = {
@@ -70,16 +77,51 @@ type WriteOffTarget = {
   maxQuantity: number;
 };
 
+// ============== Currency formatter ==============
+const formatCurrency = (value: number) =>
+  new Intl.NumberFormat("it-IT", {
+    style: "currency",
+    currency: "EUR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+
+// ============== Sort types ==============
+type SortField = "stock" | "costUnit" | "listUnit" | "valueCost" | "valueList" | "name";
+type SortOrder = "asc" | "desc";
+
 export default function Warehouse() {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
 
   const { data: overview, isLoading } =
     trpc.warehouse.getStockOverview.useQuery();
+  const { data: valueOverview } =
+    trpc.warehouse.getValueOverview.useQuery();
   const { data: warehouseLoc } = trpc.locations.getCentralWarehouse.useQuery();
   const { data: retailers } = trpc.retailers.list.useQuery();
   const { data: ficStatus } = trpc.ficIntegration.getStatus.useQuery();
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
+
+  // ============== Sort state ==============
+  const [sortField, setSortField] = useState<SortField>("valueCost");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortOrder("desc");
+    }
+  };
+
+  const SortIcon = ({ field }: { field: SortField }) => {
+    if (sortField !== field) return <ArrowUpDown className="h-3 w-3 ml-1 opacity-40" />;
+    return sortOrder === "asc"
+      ? <ArrowUp className="h-3 w-3 ml-1" />
+      : <ArrowDown className="h-3 w-3 ml-1" />;
+  };
 
   // ============== Transfer state ==============
   const [transferTarget, setTransferTarget] = useState<TransferTarget | null>(
@@ -129,8 +171,7 @@ export default function Warehouse() {
     { enabled: previewEnabled, retry: false },
   );
 
-  // Default checkbox to true se preconditions soddisfatte (utente può
-  // disattivare). Se preconditions non soddisfatte, force false.
+  // Default checkbox to true se preconditions soddisfatte
   useEffect(() => {
     if (proformaAllowed) setTransferProforma(true);
     else setTransferProforma(false);
@@ -160,6 +201,7 @@ export default function Warehouse() {
   const transferMutation = trpc.stockMovements.transfer.useMutation({
     onSuccess: async (res) => {
       await utils.warehouse.getStockOverview.invalidate();
+      await utils.warehouse.getValueOverview.invalidate();
       await utils.productBatches.listByProduct.invalidate();
       await utils.productBatches.suggestForTransfer.invalidate();
       await utils.retailers.getDetails.invalidate();
@@ -229,6 +271,7 @@ export default function Warehouse() {
   const writeOffMutation = trpc.stockMovements.expiryWriteOff.useMutation({
     onSuccess: async () => {
       await utils.warehouse.getStockOverview.invalidate();
+      await utils.warehouse.getValueOverview.invalidate();
       await utils.productBatches.listByProduct.invalidate();
       setWriteOffTarget(null);
       setWriteOffQty("");
@@ -264,26 +307,7 @@ export default function Warehouse() {
   };
 
   // ============== Computed ==============
-  const totalProducts = overview?.length ?? 0;
-  let totalActiveBatches = 0;
-  let totalStock = 0;
-  let expiringBatches = 0;
   const now = Date.now();
-
-  if (overview) {
-    for (const p of overview) {
-      totalActiveBatches += p.activeBatchCount;
-      totalStock += p.totalStock;
-      for (const b of p.batches) {
-        if (b.quantity > 0) {
-          const days = Math.floor(
-            (new Date(b.expirationDate).getTime() - now) / 86_400_000,
-          );
-          if (days > 0 && days <= 30) expiringBatches++;
-        }
-      }
-    }
-  }
 
   const formatDate = (d: string | null) =>
     d ? format(new Date(d), "dd/MM/yyyy") : "-";
@@ -319,6 +343,59 @@ export default function Warehouse() {
     return days <= 7;
   };
 
+  // ============== Enriched & sorted overview ==============
+  const enrichedOverview = useMemo(() => {
+    if (!overview) return [];
+    return overview.map((p) => {
+      const costUnit = parseFloat(p.productCostPrice || "0");
+      const listUnit = parseFloat(p.productUnitPrice || "0");
+      const valueCost = p.totalStock * costUnit;
+      const valueList = p.totalStock * listUnit;
+      const marginPercent = listUnit > 0 ? ((listUnit - costUnit) / listUnit) * 100 : 0;
+      return { ...p, costUnit, listUnit, valueCost, valueList, marginPercent };
+    });
+  }, [overview]);
+
+  const sortedOverview = useMemo(() => {
+    const arr = [...enrichedOverview];
+    arr.sort((a, b) => {
+      let cmp = 0;
+      switch (sortField) {
+        case "name": cmp = a.productName.localeCompare(b.productName); break;
+        case "stock": cmp = a.totalStock - b.totalStock; break;
+        case "costUnit": cmp = a.costUnit - b.costUnit; break;
+        case "listUnit": cmp = a.listUnit - b.listUnit; break;
+        case "valueCost": cmp = a.valueCost - b.valueCost; break;
+        case "valueList": cmp = a.valueList - b.valueList; break;
+      }
+      return sortOrder === "asc" ? cmp : -cmp;
+    });
+    return arr;
+  }, [enrichedOverview, sortField, sortOrder]);
+
+  // Totals for footer
+  const totals = useMemo(() => {
+    let totalUnits = 0;
+    let totalValueCost = 0;
+    let totalValueList = 0;
+    for (const p of enrichedOverview) {
+      totalUnits += p.totalStock;
+      totalValueCost += p.valueCost;
+      totalValueList += p.valueList;
+    }
+    const totalMargin = totalValueList - totalValueCost;
+    const totalMarginPercent = totalValueList > 0 ? (totalMargin / totalValueList) * 100 : 0;
+    return { totalUnits, totalValueCost, totalValueList, totalMargin, totalMarginPercent };
+  }, [enrichedOverview]);
+
+  // Margin badge color
+  const marginBadge = (pct: number) => {
+    if (pct >= 40) return <Badge className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs">{pct.toFixed(1)}%</Badge>;
+    if (pct >= 20) return <Badge className="bg-blue-600 hover:bg-blue-700 text-white text-xs">{pct.toFixed(1)}%</Badge>;
+    if (pct > 0) return <Badge className="bg-orange-500 hover:bg-orange-600 text-white text-xs">{pct.toFixed(1)}%</Badge>;
+    return <Badge variant="secondary" className="text-xs">{pct.toFixed(1)}%</Badge>;
+  };
+
   return (
     <DashboardLayout>
       <div className="space-y-8">
@@ -333,92 +410,152 @@ export default function Warehouse() {
           </p>
         </div>
 
-        {/* KPI cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* M8.2: Value stat cards */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <Card className="border-border bg-card">
-            <CardHeader className="pb-3">
-              <CardDescription>Prodotti a magazzino</CardDescription>
+            <CardHeader className="pb-2">
+              <CardDescription className="text-xs">Valore al costo</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center gap-3">
-                <Package className="h-5 w-5 text-primary" />
-                <span className="text-2xl font-bold text-foreground">
-                  {totalProducts}
+              <div className="flex items-center gap-2">
+                <Wallet className="h-4 w-4 text-emerald-500 shrink-0" />
+                <span className="text-lg font-bold text-foreground truncate">
+                  {valueOverview ? formatCurrency(valueOverview.totalValueAtCost) : "—"}
                 </span>
               </div>
             </CardContent>
           </Card>
           <Card className="border-border bg-card">
-            <CardHeader className="pb-3">
-              <CardDescription>Lotti attivi</CardDescription>
+            <CardHeader className="pb-2">
+              <CardDescription className="text-xs">Valore al listino</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center gap-3">
-                <WarehouseIcon className="h-5 w-5 text-primary" />
-                <span className="text-2xl font-bold text-foreground">
-                  {totalActiveBatches}
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-blue-500 shrink-0" />
+                <span className="text-lg font-bold text-foreground truncate">
+                  {valueOverview ? formatCurrency(valueOverview.totalValueAtListPrice) : "—"}
                 </span>
               </div>
             </CardContent>
           </Card>
           <Card className="border-border bg-card">
-            <CardHeader className="pb-3">
-              <CardDescription>Stock complessivo</CardDescription>
+            <CardHeader className="pb-2">
+              <CardDescription className="text-xs">Margine potenziale</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center gap-3">
-                <Package className="h-5 w-5 text-primary" />
-                <span className="text-2xl font-bold text-foreground">
-                  {totalStock}
-                </span>
+              <div className="flex items-center gap-2">
+                <Percent className="h-4 w-4 text-orange-500 shrink-0" />
+                <div className="min-w-0">
+                  <span className="text-lg font-bold text-foreground truncate block">
+                    {valueOverview ? formatCurrency(valueOverview.potentialMargin) : "—"}
+                  </span>
+                  {valueOverview && (
+                    <span className="text-xs text-muted-foreground">
+                      {valueOverview.potentialMarginPercent.toFixed(1)}%
+                    </span>
+                  )}
+                </div>
               </div>
             </CardContent>
           </Card>
           <Card className="border-border bg-card">
-            <CardHeader className="pb-3">
-              <CardDescription>In scadenza &lt; 30gg</CardDescription>
+            <CardHeader className="pb-2">
+              <CardDescription className="text-xs">Pezzi totali</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center gap-3">
-                <AlertTriangle className="h-5 w-5 text-orange-500" />
-                <span className="text-2xl font-bold text-foreground">
-                  {expiringBatches}
-                </span>
+              <div className="flex items-center gap-2">
+                <Package className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="min-w-0">
+                  <span className="text-lg font-bold text-foreground truncate block">
+                    {valueOverview ? valueOverview.totalUnits.toLocaleString("it-IT") : "—"}
+                  </span>
+                  {valueOverview && (
+                    <span className="text-xs text-muted-foreground">
+                      {valueOverview.uniqueProductsCount} SKU, {valueOverview.activeBatchesCount} lotti
+                    </span>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className={`border-border bg-card ${valueOverview && valueOverview.expiringSoonValue > 0 ? "ring-1 ring-red-500/30" : ""}`}>
+            <CardHeader className="pb-2">
+              <CardDescription className="text-xs">In scadenza &lt; 30gg</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2">
+                <AlertTriangle className={`h-4 w-4 shrink-0 ${valueOverview && valueOverview.expiringSoonValue > 0 ? "text-red-500" : "text-muted-foreground"}`} />
+                <div className="min-w-0">
+                  <span className="text-lg font-bold text-foreground truncate block">
+                    {valueOverview ? formatCurrency(valueOverview.expiringSoonValue) : "—"}
+                  </span>
+                  {valueOverview && (
+                    <span className="text-xs text-muted-foreground">
+                      {valueOverview.expiringSoonUnits} pezzi
+                    </span>
+                  )}
+                </div>
               </div>
             </CardContent>
           </Card>
         </div>
 
-        {/* Tabella prodotti */}
+        {/* Tabella prodotti con colonne valore */}
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
-        ) : overview && overview.length > 0 ? (
+        ) : sortedOverview.length > 0 ? (
           <Card className="border-border bg-card">
             <CardHeader>
               <CardTitle>Prodotti a magazzino</CardTitle>
               <CardDescription>
-                Stock totale e lotti per ogni prodotto presente in magazzino
-                centrale
+                Stock totale, valore e lotti per ogni prodotto presente in magazzino centrale
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-10"></TableHead>
-                    <TableHead>Prodotto</TableHead>
+                    <TableHead>
+                      <button type="button" className="flex items-center hover:text-foreground transition-colors" onClick={() => handleSort("name")}>
+                        Prodotto <SortIcon field="name" />
+                      </button>
+                    </TableHead>
                     <TableHead>SKU</TableHead>
-                    <TableHead className="text-right">Stock (conf.)</TableHead>
-                    <TableHead className="text-right">Pezzi vendibili</TableHead>
-                    <TableHead className="text-right">Lotti attivi</TableHead>
-                    <TableHead>Scadenza più vicina</TableHead>
-                    <TableHead className="w-32 text-right">Azioni</TableHead>
+                    <TableHead className="text-right">
+                      <button type="button" className="flex items-center justify-end hover:text-foreground transition-colors ml-auto" onClick={() => handleSort("stock")}>
+                        Stock <SortIcon field="stock" />
+                      </button>
+                    </TableHead>
+                    <TableHead className="text-right">
+                      <button type="button" className="flex items-center justify-end hover:text-foreground transition-colors ml-auto" onClick={() => handleSort("costUnit")}>
+                        Costo unit. <SortIcon field="costUnit" />
+                      </button>
+                    </TableHead>
+                    <TableHead className="text-right">
+                      <button type="button" className="flex items-center justify-end hover:text-foreground transition-colors ml-auto" onClick={() => handleSort("listUnit")}>
+                        Listino unit. <SortIcon field="listUnit" />
+                      </button>
+                    </TableHead>
+                    <TableHead className="text-right">
+                      <button type="button" className="flex items-center justify-end hover:text-foreground transition-colors ml-auto" onClick={() => handleSort("valueCost")}>
+                        Val. costo <SortIcon field="valueCost" />
+                      </button>
+                    </TableHead>
+                    <TableHead className="text-right">
+                      <button type="button" className="flex items-center justify-end hover:text-foreground transition-colors ml-auto" onClick={() => handleSort("valueList")}>
+                        Val. listino <SortIcon field="valueList" />
+                      </button>
+                    </TableHead>
+                    <TableHead className="text-center">Margine</TableHead>
+                    <TableHead>Scadenza</TableHead>
+                    <TableHead className="w-28 text-right">Azioni</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {overview.map((p) => {
+                  {sortedOverview.map((p) => {
                     const isExpanded = expandedProductId === p.productId;
                     const nearestDays = p.nearestExpiration
                       ? Math.floor(
@@ -434,11 +571,12 @@ export default function Warehouse() {
                           : nearestDays <= 30
                             ? "text-orange-500 font-semibold"
                             : "text-foreground";
+                    const rowHighlight = p.hasExpiringSoon ? "bg-amber-50/60 dark:bg-amber-950/20" : "";
                     return (
                       <>
                         <TableRow
                           key={p.productId}
-                          className="hover:bg-accent/50"
+                          className={`hover:bg-accent/50 ${rowHighlight}`}
                         >
                           <TableCell
                             className="cursor-pointer"
@@ -464,32 +602,30 @@ export default function Warehouse() {
                             >
                               {p.productName}
                             </button>
+                            {p.hasExpiringSoon && (
+                              <AlertTriangle className="h-3 w-3 text-amber-500 inline ml-1.5" />
+                            )}
                           </TableCell>
-                          <TableCell className="text-muted-foreground">
+                          <TableCell className="text-muted-foreground text-xs">
                             {p.productSku}
                           </TableCell>
-                          <TableCell className="text-right font-semibold">
+                          <TableCell className="text-right font-semibold tabular-nums">
                             {p.totalStock}
-                            {p.productUnit && (
-                              <span className="text-muted-foreground ml-1 font-normal">
-                                {p.productUnit}
-                              </span>
-                            )}
                           </TableCell>
-                          <TableCell className="text-right font-semibold">
-                            {(p.piecesPerUnit ?? 1) > 1 ? (
-                              <>
-                                {p.totalStock * (p.piecesPerUnit ?? 1)}
-                                <span className="text-muted-foreground ml-1 font-normal">
-                                  {p.sellableUnitLabel ?? "PZ"}
-                                </span>
-                              </>
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
+                          <TableCell className="text-right text-muted-foreground tabular-nums">
+                            {formatCurrency(p.costUnit)}
                           </TableCell>
-                          <TableCell className="text-right">
-                            {p.activeBatchCount}
+                          <TableCell className="text-right text-muted-foreground tabular-nums">
+                            {formatCurrency(p.listUnit)}
+                          </TableCell>
+                          <TableCell className="text-right font-semibold tabular-nums">
+                            {formatCurrency(p.valueCost)}
+                          </TableCell>
+                          <TableCell className="text-right font-semibold tabular-nums">
+                            {formatCurrency(p.valueList)}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {marginBadge(p.marginPercent)}
                           </TableCell>
                           <TableCell className={nearestColor}>
                             {formatDate(p.nearestExpiration)}
@@ -515,7 +651,7 @@ export default function Warehouse() {
                         {isExpanded && (
                           <TableRow key={`${p.productId}-detail`}>
                             <TableCell></TableCell>
-                            <TableCell colSpan={7} className="bg-accent/20 py-4">
+                            <TableCell colSpan={10} className="bg-accent/20 py-4">
                               <Table>
                                 <TableHeader>
                                   <TableRow>
@@ -595,6 +731,20 @@ export default function Warehouse() {
                     );
                   })}
                 </TableBody>
+                <TableFooter>
+                  <TableRow className="bg-muted/50 font-semibold">
+                    <TableCell></TableCell>
+                    <TableCell colSpan={2}>TOTALE</TableCell>
+                    <TableCell className="text-right tabular-nums">{totals.totalUnits}</TableCell>
+                    <TableCell></TableCell>
+                    <TableCell></TableCell>
+                    <TableCell className="text-right tabular-nums">{formatCurrency(totals.totalValueCost)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatCurrency(totals.totalValueList)}</TableCell>
+                    <TableCell className="text-center">{marginBadge(totals.totalMarginPercent)}</TableCell>
+                    <TableCell></TableCell>
+                    <TableCell></TableCell>
+                  </TableRow>
+                </TableFooter>
               </Table>
             </CardContent>
           </Card>
@@ -817,8 +967,6 @@ export default function Warehouse() {
       </Dialog>
 
       {/* ====================== Dialog WRITE-OFF ====================== */}
-      {/* Dialog (non AlertDialog) per evitare l'auto-close di
-          Radix Action che interrompe il form submit. M2.0.1 fix. */}
       <Dialog
         open={writeOffTarget !== null}
         onOpenChange={(open) => {

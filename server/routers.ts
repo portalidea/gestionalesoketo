@@ -933,6 +933,72 @@ export const appRouter = router({
       return await db.getWarehouseStockOverview();
     }),
     /**
+     * M8.2: Valore magazzino overview — stat cards.
+     * Calcola valore al costo, al listino, margine, scadenze imminenti.
+     * costPrice = products.costPrice (costo unitario standard IVA esclusa)
+     * listPrice = products.unitPrice (varchar, prezzo base catalogo)
+     */
+    getValueOverview: staffProcedure.query(async () => {
+      const startTime = Date.now();
+      const database = await db.getDb();
+      if (!database) return null;
+      const { sql } = await import("drizzle-orm");
+      const rows = await database.execute(sql`
+        SELECT
+          COALESCE(SUM(ibb."quantity"), 0)::int AS "totalUnits",
+          COALESCE(SUM(ibb."quantity" * p."costPrice"::numeric), 0)::numeric(18,2) AS "totalValueAtCost",
+          COALESCE(SUM(
+            ibb."quantity" * COALESCE(NULLIF(p."unitPrice", '')::numeric, 0)
+          ), 0)::numeric(18,2) AS "totalValueAtListPrice",
+          COUNT(DISTINCT p."id")::int AS "uniqueProductsCount",
+          COUNT(DISTINCT pb."id")::int AS "activeBatchesCount"
+        FROM "inventoryByBatch" ibb
+        INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
+        INNER JOIN "products" p ON p."id" = pb."productId"
+        INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'central_warehouse'
+        WHERE ibb."quantity" > 0
+      `);
+
+      const expRows = await database.execute(sql`
+        SELECT
+          COALESCE(SUM(ibb."quantity"), 0)::int AS "expiringSoonUnits",
+          COALESCE(SUM(ibb."quantity" * p."costPrice"::numeric), 0)::numeric(18,2) AS "expiringSoonValue"
+        FROM "inventoryByBatch" ibb
+        INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
+        INNER JOIN "products" p ON p."id" = pb."productId"
+        INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'central_warehouse'
+        WHERE ibb."quantity" > 0
+          AND pb."expirationDate" IS NOT NULL
+          AND pb."expirationDate" < NOW() + INTERVAL '30 days'
+          AND pb."expirationDate" > NOW()
+      `);
+
+      const r = (rows as any[])[0] || {};
+      const e = (expRows as any[])[0] || {};
+
+      const totalValueAtCost = parseFloat(r.totalValueAtCost || "0");
+      const totalValueAtListPrice = parseFloat(r.totalValueAtListPrice || "0");
+      const potentialMargin = totalValueAtListPrice - totalValueAtCost;
+      const potentialMarginPercent = totalValueAtListPrice > 0
+        ? (potentialMargin / totalValueAtListPrice) * 100
+        : 0;
+
+      const elapsed = Date.now() - startTime;
+      console.log(`[warehouse.getValueOverview] computed in ${elapsed}ms`);
+
+      return {
+        totalUnits: Number(r.totalUnits || 0),
+        totalValueAtCost,
+        totalValueAtListPrice,
+        potentialMargin,
+        potentialMarginPercent,
+        uniqueProductsCount: Number(r.uniqueProductsCount || 0),
+        activeBatchesCount: Number(r.activeBatchesCount || 0),
+        expiringSoonValue: parseFloat(e.expiringSoonValue || "0"),
+        expiringSoonUnits: Number(e.expiringSoonUnits || 0),
+      };
+    }),
+    /**
      * M6.2.E: Valorizzazione magazzino — solo admin.
      * Calcola valore totale stock centrale usando costPrice dei lotti
      * (fallback su costPrice prodotto se lotto ha costPrice = 0).

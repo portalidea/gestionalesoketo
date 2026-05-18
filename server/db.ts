@@ -1120,6 +1120,7 @@ export async function getWarehouseStockOverview() {
       productCategory: products.category,
       productUnit: products.unit,
       productUnitPrice: products.unitPrice,
+      productCostPrice: products.costPrice,
       piecesPerUnit: products.piecesPerUnit,
       sellableUnitLabel: products.sellableUnitLabel,
       batchId: productBatches.id,
@@ -1146,11 +1147,13 @@ export async function getWarehouseStockOverview() {
       productCategory: string | null;
       productUnit: string | null;
       productUnitPrice: string | null;
+      productCostPrice: string;
       piecesPerUnit: number | null;
       sellableUnitLabel: string | null;
       totalStock: number;
       activeBatchCount: number;
       nearestExpiration: string | null;
+      hasExpiringSoon: boolean;
       batches: Array<{
         batchId: string;
         batchNumber: string;
@@ -1172,11 +1175,13 @@ export async function getWarehouseStockOverview() {
         productCategory: r.productCategory,
         productUnit: r.productUnit,
         productUnitPrice: r.productUnitPrice,
+        productCostPrice: r.productCostPrice,
         piecesPerUnit: r.piecesPerUnit,
         sellableUnitLabel: r.sellableUnitLabel,
         totalStock: 0,
         activeBatchCount: 0,
         nearestExpiration: null,
+        hasExpiringSoon: false,
         batches: [],
       };
       byProduct.set(r.productId, entry);
@@ -1188,6 +1193,15 @@ export async function getWarehouseStockOverview() {
       (!entry.nearestExpiration || r.expirationDate < entry.nearestExpiration)
     ) {
       entry.nearestExpiration = r.expirationDate;
+    }
+    // Check for expiring soon batches (< 30 days)
+    if (r.quantity > 0 && r.expirationDate) {
+      const daysToExpiry = Math.floor(
+        (new Date(r.expirationDate).getTime() - Date.now()) / 86_400_000,
+      );
+      if (daysToExpiry > 0 && daysToExpiry <= 30) {
+        entry.hasExpiringSoon = true;
+      }
     }
     entry.batches.push({
       batchId: r.batchId,
