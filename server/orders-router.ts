@@ -540,6 +540,8 @@ export const ordersRouter = router({
           id: orderItems.id,
           orderId: orderItems.orderId,
           productId: orderItems.productId,
+          productName: orderItems.productName,
+          batchId: orderItems.batchId,
         })
         .from(orderItems)
         .where(eq(orderItems.id, input.orderItemId))
@@ -547,9 +549,29 @@ export const ordersRouter = router({
 
       if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item ordine non trovato" });
 
+      // Idempotenza: se batchId è già lo stesso, skip
+      if (item.batchId === input.batchId) {
+        const existingBatch = input.batchId
+          ? await db.select({ batchNumber: productBatches.batchNumber, expirationDate: productBatches.expirationDate }).from(productBatches).where(eq(productBatches.id, input.batchId)).limit(1).then(r => r[0])
+          : null;
+        return {
+          batchId: input.batchId,
+          batchNumber: existingBatch?.batchNumber ?? null,
+          expirationDate: existingBatch?.expirationDate ?? null,
+          ficUpdated: false,
+        };
+      }
+
       // Verifica ordine non è in stato finale
       const [order] = await db
-        .select({ status: orders.status })
+        .select({
+          status: orders.status,
+          ficProformaId: orders.ficProformaId,
+          orderNumber: orders.orderNumber,
+          retailerId: orders.retailerId,
+          paymentTerms: orders.paymentTerms,
+          notesInternal: orders.notesInternal,
+        })
         .from(orders)
         .where(eq(orders.id, item.orderId))
         .limit(1);
@@ -561,6 +583,9 @@ export const ordersRouter = router({
           message: `Non è possibile modificare lotti su un ordine ${order.status}`,
         });
       }
+
+      let batchNumber: string | null = null;
+      let expirationDate: string | null = null;
 
       if (input.batchId) {
         // Verifica batch esiste e appartiene allo stesso prodotto
@@ -583,21 +608,83 @@ export const ordersRouter = router({
           });
         }
 
+        batchNumber = batch.batchNumber;
+        expirationDate = batch.expirationDate;
+
         await db
           .update(orderItems)
           .set({ batchId: input.batchId })
           .where(eq(orderItems.id, input.orderItemId));
-
-        return { batchId: input.batchId, batchNumber: batch.batchNumber, expirationDate: batch.expirationDate };
       } else {
         // Rimuovi assegnazione
         await db
           .update(orderItems)
           .set({ batchId: null })
           .where(eq(orderItems.id, input.orderItemId));
-
-        return { batchId: null, batchNumber: null, expirationDate: null };
       }
+
+      // Update FiC proforma if order is paid/approved_for_shipping and has proforma
+      let ficUpdated = false;
+      if (
+        ["paid", "approved_for_shipping"].includes(order.status) &&
+        order.ficProformaId &&
+        order.retailerId
+      ) {
+        try {
+          const [retailer] = await db
+            .select({ ficClientId: retailers.ficClientId })
+            .from(retailers)
+            .where(eq(retailers.id, order.retailerId))
+            .limit(1);
+
+          if (retailer?.ficClientId) {
+            // Reload all items with updated batch info
+            const updatedItems = await db
+              .select({
+                productName: orderItems.productName,
+                productSku: orderItems.productSku,
+                quantity: orderItems.quantity,
+                unitPriceFinal: orderItems.unitPriceFinal,
+                vatRate: orderItems.vatRate,
+                batchNumber: productBatches.batchNumber,
+                expirationDate: productBatches.expirationDate,
+              })
+              .from(orderItems)
+              .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
+              .where(eq(orderItems.orderId, item.orderId));
+
+            const { modifyProforma } = await import("./services/ficDocumentService");
+            await modifyProforma(order.ficProformaId, {
+              orderId: item.orderId,
+              orderNumber: order.orderNumber ?? "",
+              retailerFicClientId: retailer.ficClientId,
+              items: updatedItems.map((it) => ({
+                productName: it.productName,
+                quantity: it.quantity,
+                unitPrice: parseFloat(it.unitPriceFinal),
+                vatRate: parseFloat(it.vatRate),
+                batchNumber: it.batchNumber ?? undefined,
+                expiryDate: it.expirationDate ?? undefined,
+                sku: it.productSku ?? undefined,
+              })),
+              paymentTerms: order.paymentTerms as any,
+              notes: order.notesInternal ?? undefined,
+            });
+            ficUpdated = true;
+            console.log(
+              `[orders.assignBatch] FiC proforma updated: ficDocId=${order.ficProformaId}, batchId=${input.batchId}, productName=${item.productName}`,
+            );
+          }
+        } catch (e: any) {
+          console.error(`[orders.assignBatch] FiC update failed: ${e.message}`);
+        }
+      }
+
+      console.log(
+        `[orders.assignBatch] DONE: orderItemId=${input.orderItemId}, batchId=${input.batchId}, ficUpdated=${ficUpdated}`,
+      );
+
+      return { batchId: input.batchId, batchNumber, expirationDate, ficUpdated };
     }),
 
   /**
@@ -623,7 +710,7 @@ export const ordersRouter = router({
     }),
 
   /**
-   * 9b. Suggest best batch for an order item (FEFO with stock > 0)
+   * 9b. List all batches with stock for an order item, with FEFO suggestion flag
    */
   suggestBatchForItem: staffProcedure
     .input(z.object({ orderItemId: z.string().uuid() }))
@@ -631,7 +718,7 @@ export const ordersRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
-      // Get the order item's product
+      // Get the order item's product and quantity
       const [item] = await db
         .select({ productId: orderItems.productId, quantity: orderItems.quantity })
         .from(orderItems)
@@ -647,15 +734,15 @@ export const ordersRouter = router({
         .where(eq(locations.type, "central_warehouse"))
         .limit(1);
 
-      if (!warehouse) return { suggestion: null };
+      if (!warehouse) return { batches: [], requiredQuantity: item.quantity };
 
-      // FEFO: first expiring batch with enough stock
+      // All batches with stock > 0, ordered FEFO
       const candidates = await db
         .select({
           batchId: productBatches.id,
           batchNumber: productBatches.batchNumber,
           expirationDate: productBatches.expirationDate,
-          stock: inventoryByBatch.quantity,
+          availableQuantity: inventoryByBatch.quantity,
         })
         .from(productBatches)
         .innerJoin(
@@ -673,13 +760,18 @@ export const ordersRouter = router({
         )
         .orderBy(asc(productBatches.expirationDate));
 
-      // Suggest first batch with enough stock, or first batch if none has enough
-      const bestFit = candidates.find((c) => c.stock >= item.quantity) ?? candidates[0] ?? null;
+      // FEFO suggestion: first batch with enough stock, or first batch overall
+      const fefoId = (candidates.find((c) => c.availableQuantity >= item.quantity) ?? candidates[0])?.batchId ?? null;
 
       return {
-        suggestion: bestFit
-          ? { batchId: bestFit.batchId, batchNumber: bestFit.batchNumber, expirationDate: bestFit.expirationDate, stock: bestFit.stock }
-          : null,
+        batches: candidates.map((c) => ({
+          batchId: c.batchId,
+          batchNumber: c.batchNumber,
+          expirationDate: c.expirationDate,
+          availableQuantity: c.availableQuantity,
+          isFefoSuggested: c.batchId === fefoId,
+        })),
+        requiredQuantity: item.quantity,
       };
     }),
 

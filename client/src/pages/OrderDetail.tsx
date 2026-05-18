@@ -8,7 +8,7 @@
  * - Card Azioni con state machine (nuove procedure)
  * - Note interne/esterne
  */
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { daysToExpiry, getExpiryColorClass, getExpiryLabel } from "@/lib/expiry-utils";
 import { Badge } from "@/components/ui/badge";
@@ -273,6 +273,7 @@ function BatchSelector({
   item: {
     id: string;
     productId: string;
+    quantity: number;
     batchId: string | null;
     batchNumber: string | null;
     expirationDate: string | null;
@@ -281,23 +282,42 @@ function BatchSelector({
   orderId: string;
 }) {
   const utils = trpc.useUtils();
+  const [autoSelected, setAutoSelected] = useState(false);
 
-  const batchesQuery = trpc.orders.batchesForProduct.useQuery(
-    { productId: item.productId },
+  const batchesQuery = trpc.orders.suggestBatchForItem.useQuery(
+    { orderItemId: item.id },
     { enabled: canEdit },
   );
 
   const assignBatch = trpc.orders.assignBatch.useMutation({
     onSuccess: (data) => {
       utils.orders.getById.invalidate({ id: orderId });
+      utils.orders.suggestBatchForItem.invalidate({ orderItemId: item.id });
       if (data.batchId) {
-        toast.success(`Lotto ${data.batchNumber} assegnato`);
+        const ficMsg = data.ficUpdated ? " (proforma FiC aggiornata)" : "";
+        toast.success(`Lotto ${data.batchNumber} assegnato${ficMsg}`);
       } else {
         toast.success("Lotto rimosso");
       }
     },
     onError: (err) => toast.error(err.message),
   });
+
+  // Auto-select FEFO batch when no batch assigned and data loads
+  useEffect(() => {
+    if (
+      canEdit &&
+      !item.batchId &&
+      !autoSelected &&
+      batchesQuery.data?.batches?.length
+    ) {
+      const fefo = batchesQuery.data.batches.find((b) => b.isFefoSuggested);
+      if (fefo) {
+        setAutoSelected(true);
+        assignBatch.mutate({ orderItemId: item.id, batchId: fefo.batchId });
+      }
+    }
+  }, [canEdit, item.batchId, autoSelected, batchesQuery.data]);
 
   // Se non editabile, mostra solo il lotto assegnato
   if (!canEdit) {
@@ -325,9 +345,12 @@ function BatchSelector({
     return <span className="text-muted-foreground text-xs">—</span>;
   }
 
-  // Editabile: mostra select
+  const batches = batchesQuery.data?.batches ?? [];
+  const requiredQty = batchesQuery.data?.requiredQuantity ?? item.quantity;
+
+  // Editabile: mostra select con FEFO badge e stock
   return (
-    <div className="min-w-[160px]">
+    <div className="min-w-[200px]">
       <Select
         value={item.batchId ?? NO_BATCH}
         onValueChange={(val) => {
@@ -345,19 +368,33 @@ function BatchSelector({
           <SelectItem value={NO_BATCH}>
             <span className="text-muted-foreground">Nessun lotto</span>
           </SelectItem>
-          {batchesQuery.data?.map((b) => (
-            <SelectItem key={b.id} value={b.id}>
-              <span className="font-mono">{b.batchNumber}</span>
-              <span className={`ml-2 text-xs ${getExpiryColorClass(daysToExpiry(b.expirationDate)) || 'text-muted-foreground'}`}>
-                scad. {b.expirationDate}
-                {(() => {
-                  const days = daysToExpiry(b.expirationDate);
-                  const label = getExpiryLabel(days);
-                  return label ? ` (${label})` : '';
-                })()}
-              </span>
-            </SelectItem>
-          ))}
+          {batches.map((b) => {
+            const insufficient = b.availableQuantity < requiredQty;
+            return (
+              <SelectItem
+                key={b.batchId}
+                value={b.batchId}
+                disabled={insufficient}
+                className={insufficient ? "opacity-50" : ""}
+              >
+                <span className="inline-flex items-center gap-1.5 flex-wrap">
+                  <span className="font-mono">{b.batchNumber}</span>
+                  <span className={`text-xs ${getExpiryColorClass(daysToExpiry(b.expirationDate)) || 'text-muted-foreground'}`}>
+                    scad. {b.expirationDate}
+                  </span>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    [{b.availableQuantity} pz]
+                  </span>
+                  {b.isFefoSuggested && (
+                    <Badge className="ml-1 h-4 px-1 text-[10px] bg-emerald-600 text-white">FEFO</Badge>
+                  )}
+                  {insufficient && (
+                    <span className="text-[10px] text-destructive">stock insuff.</span>
+                  )}
+                </span>
+              </SelectItem>
+            );
+          })}
         </SelectContent>
       </Select>
     </div>
