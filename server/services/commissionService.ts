@@ -133,3 +133,19 @@ export async function voidCommissionForOrder(orderId: string, reason: string): P
 
   console.log("[commissionService.void] done", { orderId });
 }
+
+/**
+ * Recalculate commission for an order after items modification.
+ * Voids existing commission (if any) and creates a new one with updated totals.
+ */
+export async function recalculateCommissionForOrder(orderId: string): Promise<void> {
+  console.log("[commissionService.recalculate] start", { orderId });
+
+  // Void existing commission first
+  await voidCommissionForOrder(orderId, "Order items modified — recalculating");
+
+  // Recalculate fresh
+  await calculateCommissionForOrder(orderId);
+
+  console.log("[commissionService.recalculate] done", { orderId });
+}

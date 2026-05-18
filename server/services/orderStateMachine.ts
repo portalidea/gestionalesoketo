@@ -352,20 +352,35 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
   };
 }
 
-// --- Modify paid order ---
+// --- Modify order items (full replacement: add/remove/update) ---
 
-export interface ModifyPaidOrderInput {
+export interface ModifyOrderItemsInput {
   orderId: string;
   actorUserId: string;
+  /** New items list — replaces all existing items */
   items: Array<{
-    orderItemId: string;
+    productId: string;
     quantity: number;
   }>;
 }
 
-export async function modifyPaidOrder(input: ModifyPaidOrderInput): Promise<void> {
+export interface ModifyOrderItemsResult {
+  success: boolean;
+  totalGross: string;
+  warnings: string[];
+  ficUpdated: boolean;
+  commissionRecalculated: boolean;
+}
+
+/**
+ * Unified modify order items — supports pending, paid, approved_for_shipping.
+ * Does a full delete+re-insert with recalculated pricing.
+ * NO stock check (backorder allowed — stock is checked only at transfer time).
+ * If status >= paid: updates FiC proforma + recalculates affiliate commission.
+ */
+export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<ModifyOrderItemsResult> {
   const t0 = Date.now();
-  console.log(`[orderStateMachine.modifyPaidOrder] start orderId=${input.orderId}`);
+  console.log(`[orderStateMachine.modifyOrderItems] start orderId=${input.orderId}`);
 
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
@@ -387,78 +402,67 @@ export async function modifyPaidOrder(input: ModifyPaidOrderInput): Promise<void
 
   if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
 
-  if (order.status !== "paid" && order.status !== "approved_for_shipping") {
+  const allowedStatuses = ["pending", "paid", "approved_for_shipping"];
+  if (!allowedStatuses.includes(order.status)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Modifica consentita solo per ordini in stato 'paid' o 'approved_for_shipping'. Stato attuale: ${order.status}`,
+      message: `Modifica consentita solo per ordini in stato 'pending', 'paid' o 'approved_for_shipping'. Stato attuale: ${order.status}`,
     });
   }
 
-  // 2. Update order items quantities
-  for (const item of input.items) {
-    if (item.quantity <= 0) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: `Quantità deve essere > 0 per item ${item.orderItemId}`,
-      });
-    }
-
-    // Recalculate line totals
-    const [existingItem] = await db
-      .select({
-        unitPriceFinal: orderItems.unitPriceFinal,
-        vatRate: orderItems.vatRate,
-      })
-      .from(orderItems)
-      .where(eq(orderItems.id, item.orderItemId))
-      .limit(1);
-
-    if (!existingItem) continue;
-
-    const unitPrice = parseFloat(existingItem.unitPriceFinal);
-    const vatRate = parseFloat(existingItem.vatRate);
-    const lineTotalNet = unitPrice * item.quantity;
-    const lineTotalGross = lineTotalNet * (1 + vatRate / 100);
-
-    await db
-      .update(orderItems)
-      .set({
-        quantity: item.quantity,
-        lineTotalNet: lineTotalNet.toFixed(2),
-        lineTotalGross: lineTotalGross.toFixed(2),
-      })
-      .where(eq(orderItems.id, item.orderItemId));
+  if (!order.retailerId) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Ordine senza retailer non modificabile" });
   }
 
-  // 3. Recalculate order totals
-  const allItems = await db
-    .select({
-      lineTotalNet: orderItems.lineTotalNet,
-      lineTotalGross: orderItems.lineTotalGross,
-    })
-    .from(orderItems)
-    .where(eq(orderItems.orderId, input.orderId));
+  if (input.items.length === 0) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Almeno un item richiesto" });
+  }
 
-  const subtotalNet = allItems.reduce((sum, it) => sum + parseFloat(it.lineTotalNet), 0);
-  const totalGross = allItems.reduce((sum, it) => sum + parseFloat(it.lineTotalGross), 0);
-  const vatAmount = totalGross - subtotalNet;
+  // 2. Recalculate pricing (uses retailer's pricingPackage for discount)
+  const { calculateOrderPricing } = await import("../pricing");
+  const pricing = await calculateOrderPricing(order.retailerId, input.items);
 
-  await db
-    .update(orders)
-    .set({
-      subtotalNet: subtotalNet.toFixed(2),
-      vatAmount: vatAmount.toFixed(2),
-      totalGross: totalGross.toFixed(2),
-      updatedAt: new Date(),
-    })
-    .where(eq(orders.id, input.orderId));
+  // 3. Transaction: delete old items, insert new ones, update order totals
+  await db.transaction(async (tx) => {
+    await tx.delete(orderItems).where(eq(orderItems.orderId, input.orderId));
 
-  // 4. Modify proforma on FiC if exists
-  if (order.ficProformaId) {
+    const itemValues = pricing.items.map((pi) => ({
+      orderId: input.orderId,
+      productId: pi.productId,
+      quantity: pi.quantity,
+      unitPriceBase: pi.unitPriceBase,
+      discountPercent: pi.discountPercent,
+      unitPriceFinal: pi.unitPriceFinal,
+      vatRate: pi.vatRate,
+      lineTotalNet: pi.lineTotalNet,
+      lineTotalGross: pi.lineTotalGross,
+      productSku: pi.productSku,
+      productName: pi.productName,
+    }));
+
+    await tx.insert(orderItems).values(itemValues);
+
+    await tx
+      .update(orders)
+      .set({
+        subtotalNet: pricing.subtotalNet,
+        vatAmount: pricing.vatAmount,
+        totalGross: pricing.totalGross,
+        discountPercent: pricing.discountPercent,
+        updatedAt: new Date(),
+      })
+      .where(eq(orders.id, input.orderId));
+  });
+
+  let ficUpdated = false;
+  let commissionRecalculated = false;
+
+  // 4. If status >= paid: update FiC proforma
+  if ((order.status === "paid" || order.status === "approved_for_shipping") && order.ficProformaId) {
     const [retailer] = await db
       .select({ ficClientId: retailers.ficClientId })
       .from(retailers)
-      .where(eq(retailers.id, order.retailerId!))
+      .where(eq(retailers.id, order.retailerId))
       .limit(1);
 
     if (retailer?.ficClientId) {
@@ -491,28 +495,53 @@ export async function modifyPaidOrder(input: ModifyPaidOrderInput): Promise<void
             sku: it.productSku ?? undefined,
           })),
           paymentTerms: order.paymentTerms as PaymentTerms,
-          totalGross,
+          totalGross: parseFloat(pricing.totalGross),
           notes: order.notesInternal ?? undefined,
         });
+        ficUpdated = true;
       } catch (e: any) {
-        console.error(`[orderStateMachine.modifyPaidOrder] FiC modify failed: ${e.message}`);
-        // Don't block the modification, log for manual fix
+        console.error(`[orderStateMachine.modifyOrderItems] FiC modify failed: ${e.message}`);
       }
     }
   }
 
-  // 5. Send notification email
+  // 5. If status >= paid: recalculate affiliate commission
+  if (order.status === "paid" || order.status === "approved_for_shipping") {
+    try {
+      const { recalculateCommissionForOrder } = await import("./commissionService");
+      await recalculateCommissionForOrder(input.orderId);
+      commissionRecalculated = true;
+    } catch (e: any) {
+      console.error(`[orderStateMachine.modifyOrderItems] commission recalc failed: ${e.message}`);
+    }
+  }
+
+  // 6. Send notification email
   sendOrderStatusEmail({
     orderId: input.orderId,
     orderNumber: order.orderNumber ?? "",
-    retailerId: order.retailerId!,
+    retailerId: order.retailerId,
     newStatus: "modified" as any,
     previousStatus: order.status as OrderStatus,
   }).catch((err) => {
-    console.error(`[orderStateMachine.modifyPaidOrder] email failed: ${err.message}`);
+    console.error(`[orderStateMachine.modifyOrderItems] email failed: ${err.message}`);
   });
 
   console.log(
-    `[orderStateMachine.modifyPaidOrder] DONE (${Date.now() - t0}ms)`,
+    `[orderStateMachine.modifyOrderItems] DONE (${Date.now() - t0}ms)`,
   );
+
+  return {
+    success: true,
+    totalGross: pricing.totalGross,
+    warnings: pricing.warnings,
+    ficUpdated,
+    commissionRecalculated,
+  };
+}
+
+// Legacy alias — kept for backward compatibility
+export type ModifyPaidOrderInput = ModifyOrderItemsInput;
+export async function modifyPaidOrder(input: ModifyPaidOrderInput): Promise<void> {
+  await modifyOrderItems(input);
 }

@@ -8,7 +8,7 @@
  * - Card Azioni con state machine (nuove procedure)
  * - Note interne/esterne
  */
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { daysToExpiry, getExpiryColorClass, getExpiryLabel } from "@/lib/expiry-utils";
 import { Badge } from "@/components/ui/badge";
@@ -61,14 +61,25 @@ import {
   FileText,
   Loader2,
   Package,
+  Pencil,
+  Plus,
   Receipt,
   ShoppingCart,
   RefreshCw,
+  Trash2,
   Truck,
   XCircle,
 } from "lucide-react";
 import { useLocation, useParams } from "wouter";
 import { toast } from "sonner";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { getEventTypeLabel, getEventTypeColor } from "../../../shared/eventTypeLabels";
 
 const STATUS_CONFIG: Record<
@@ -270,6 +281,8 @@ export default function OrderDetail() {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
   const [cancelReason, setCancelReason] = useState("");
+  const [editItemsOpen, setEditItemsOpen] = useState(false);
+  const [editItems, setEditItems] = useState<Array<{ productId: string; quantity: number }>>([]);
 
   const orderQuery = trpc.orders.getById.useQuery(
     { id: params.id ?? "" },
@@ -326,6 +339,23 @@ export default function OrderDetail() {
     onError: (err) => toast.error(`Errore rigenerazione proforma: ${err.message}`),
   });
 
+  // Products list for edit dialog
+  const productsQuery = trpc.products.list.useQuery(undefined, { enabled: editItemsOpen });
+
+  const modifyItemsMutation = trpc.orders.modifyOrderItems.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Items aggiornati. Nuovo totale: € ${parseFloat(data.totalGross).toFixed(2)}`);
+      if (data.warnings.length > 0) {
+        data.warnings.forEach((w) => toast.warning(w));
+      }
+      if (data.ficUpdated) toast.info("Proforma FiC aggiornata");
+      if (data.commissionRecalculated) toast.info("Commissione affiliato ricalcolata");
+      setEditItemsOpen(false);
+      invalidateOrder();
+    },
+    onError: (err) => toast.error(`Errore modifica items: ${err.message}`),
+  });
+
   function invalidateOrder() {
     utils.orders.getById.invalidate({ id: params.id ?? "" });
     utils.orders.list.invalidate();
@@ -375,6 +405,24 @@ export default function OrderDetail() {
   const isDelivered = order.status === "delivered";
   const isPaidOnDelivery = order.status === "paid_on_delivery";
   const canEditBatches = !isCancelled && !isDelivered && !isPaidOnDelivery;
+  const canEditItems = ["pending", "paid", "approved_for_shipping"].includes(order.status);
+
+  function openEditItemsDialog() {
+    // Pre-populate with current items
+    setEditItems(
+      order.items.map((it) => ({ productId: it.productId, quantity: it.quantity }))
+    );
+    setEditItemsOpen(true);
+  }
+
+  function handleSaveEditItems() {
+    const validItems = editItems.filter((it) => it.productId && it.quantity > 0);
+    if (validItems.length === 0) {
+      toast.error("Almeno un item richiesto");
+      return;
+    }
+    modifyItemsMutation.mutate({ orderId: order.id, items: validItems });
+  }
 
   // Timeline dinamica
   const timelineSteps = getTimelineSteps((order as any).paymentTerms);
@@ -543,22 +591,35 @@ export default function OrderDetail() {
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle className="text-base">Righe ordine</CardTitle>
-                {totalItems > 0 && (
-                  <div className="flex items-center gap-2">
-                    {assignedCount > 0 && (
-                      <Badge variant="outline" className="text-xs gap-1 text-emerald-500 border-emerald-500/30">
-                        <Check className="h-3 w-3" />
-                        {assignedCount}/{totalItems} con lotto
-                      </Badge>
-                    )}
-                    {unassignedCount > 0 && canEditBatches && (
-                      <Badge variant="outline" className="text-xs gap-1 text-amber-500 border-amber-500/30">
-                        <AlertTriangle className="h-3 w-3" />
-                        {unassignedCount} senza lotto
-                      </Badge>
-                    )}
-                  </div>
-                )}
+                <div className="flex items-center gap-2">
+                  {canEditItems && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 text-xs"
+                      onClick={openEditItemsDialog}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Modifica Items
+                    </Button>
+                  )}
+                  {totalItems > 0 && (
+                    <>
+                      {assignedCount > 0 && (
+                        <Badge variant="outline" className="text-xs gap-1 text-emerald-500 border-emerald-500/30">
+                          <Check className="h-3 w-3" />
+                          {assignedCount}/{totalItems} con lotto
+                        </Badge>
+                      )}
+                      {unassignedCount > 0 && canEditBatches && (
+                        <Badge variant="outline" className="text-xs gap-1 text-amber-500 border-amber-500/30">
+                          <AlertTriangle className="h-3 w-3" />
+                          {unassignedCount} senza lotto
+                        </Badge>
+                      )}
+                    </>
+                  )}
+                </div>
               </CardHeader>
               <CardContent className="p-0">
                 <div className="overflow-x-auto">
@@ -852,6 +913,92 @@ export default function OrderDetail() {
           </div>
         </div>
       </div>
+
+      {/* Edit Items Dialog */}
+      <Dialog open={editItemsOpen} onOpenChange={setEditItemsOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Modifica Items Ordine</DialogTitle>
+            <DialogDescription>
+              Aggiungi, rimuovi o modifica le quantità. Il pricing verrà ricalcolato automaticamente
+              con lo sconto del retailer. Lo stock non viene verificato (backorder consentito).
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            {editItems.map((item, idx) => (
+              <div key={idx} className="flex items-center gap-2">
+                <Select
+                  value={item.productId || "_placeholder"}
+                  onValueChange={(val) => {
+                    const next = [...editItems];
+                    next[idx] = { ...next[idx], productId: val };
+                    setEditItems(next);
+                  }}
+                >
+                  <SelectTrigger className="flex-1 h-9 text-sm">
+                    <SelectValue placeholder="Seleziona prodotto..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {productsQuery.data?.map((p: any) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        <span className="font-mono text-xs mr-2">{p.sku}</span>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input
+                  type="number"
+                  min={1}
+                  value={item.quantity}
+                  onChange={(e) => {
+                    const next = [...editItems];
+                    next[idx] = { ...next[idx], quantity: Math.max(1, parseInt(e.target.value) || 1) };
+                    setEditItems(next);
+                  }}
+                  className="w-20 h-9 text-sm text-center"
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 text-destructive hover:text-destructive"
+                  onClick={() => {
+                    setEditItems(editItems.filter((_, i) => i !== idx));
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full gap-1.5"
+              onClick={() => setEditItems([...editItems, { productId: "", quantity: 1 }])}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Aggiungi prodotto
+            </Button>
+          </div>
+
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={() => setEditItemsOpen(false)}>
+              Annulla
+            </Button>
+            <Button
+              onClick={handleSaveEditItems}
+              disabled={modifyItemsMutation.isPending || editItems.length === 0}
+            >
+              {modifyItemsMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : null}
+              Salva Modifiche
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

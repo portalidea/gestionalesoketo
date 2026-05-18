@@ -1003,24 +1003,88 @@ export const ordersRouter = router({
     }),
 
   /**
-   * 16. Modify order items (only for paid/approved_for_shipping)
-   * Updates quantities, recalculates totals, modifies proforma on FiC.
+   * 15b. Get product pricing for a retailer (helper for edit items UI)
+   * Returns list/discounted price for a product given the retailer's pricingPackage.
+   */
+  getProductPricingForRetailer: staffProcedure
+    .input(z.object({
+      productId: z.string().uuid(),
+      retailerId: z.string().uuid(),
+    }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+      const [product] = await db
+        .select({
+          id: products.id,
+          name: products.name,
+          sku: products.sku,
+          unitPrice: products.unitPrice,
+          vatRate: products.vatRate,
+        })
+        .from(products)
+        .where(eq(products.id, input.productId))
+        .limit(1);
+
+      if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "Prodotto non trovato" });
+
+      const [retailer] = await db
+        .select({
+          pricingPackageId: retailers.pricingPackageId,
+        })
+        .from(retailers)
+        .where(eq(retailers.id, input.retailerId))
+        .limit(1);
+
+      if (!retailer) throw new TRPCError({ code: "NOT_FOUND", message: "Retailer non trovato" });
+
+      let discountPercent = 0;
+      if (retailer.pricingPackageId) {
+        const { pricingPackages } = await import("../drizzle/schema");
+        const [pkg] = await db
+          .select({ discountPercent: pricingPackages.discountPercent })
+          .from(pricingPackages)
+          .where(eq(pricingPackages.id, retailer.pricingPackageId))
+          .limit(1);
+        if (pkg) discountPercent = parseFloat(pkg.discountPercent);
+      }
+
+      const listPrice = parseFloat(product.unitPrice || "0");
+      const discountedPrice = +(listPrice * (1 - discountPercent / 100)).toFixed(2);
+      const vatRate = parseFloat(product.vatRate);
+
+      return {
+        productId: product.id,
+        productName: product.name,
+        productSku: product.sku,
+        listPrice,
+        discountedPrice,
+        discountPercent,
+        vatRate,
+      };
+    }),
+
+  /**
+   * 16. Modify order items (supports pending/paid/approved_for_shipping)
+   * Full replacement: delete old items, insert new ones with recalculated pricing.
+   * NO stock check (backorder allowed). FiC + commission updated if status >= paid.
    */
   modifyOrderItems: staffProcedure
     .input(z.object({
       orderId: z.string().uuid(),
       items: z.array(z.object({
-        orderItemId: z.string().uuid(),
+        productId: z.string().uuid(),
         quantity: z.number().int().positive(),
       })).min(1),
     }))
     .mutation(async ({ input, ctx }) => {
-      await modifyPaidOrder({
+      const { modifyOrderItems } = await import("./services/orderStateMachine");
+      return await modifyOrderItems({
         orderId: input.orderId,
         actorUserId: ctx.user.id,
         items: input.items,
       });
-      return { success: true };
     }),
 
   /**
