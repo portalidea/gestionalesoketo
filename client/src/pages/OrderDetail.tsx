@@ -61,6 +61,7 @@ import {
   CreditCard,
   FileText,
   Loader2,
+  Minus,
   Package,
   Pencil,
   Plus,
@@ -1094,13 +1095,30 @@ export default function OrderDetail() {
                       </Select>
                     </td>
                     <td className="p-2">
-                      <Input
-                        type="number"
-                        min={1}
-                        value={item.quantity}
-                        onChange={(e) => updateEditItem(idx, { quantity: Math.max(1, parseInt(e.target.value) || 1) })}
-                        className="text-right tabular-nums w-full qty-input"
-                      />
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          type="button"
+                          className="p-1.5 rounded hover:bg-accent transition-colors"
+                          onClick={() => updateEditItem(idx, { quantity: Math.max(1, item.quantity - 1) })}
+                        >
+                          <Minus className="h-3.5 w-3.5" />
+                        </button>
+                        <input
+                          type="number"
+                          min={1}
+                          max={9999}
+                          value={item.quantity}
+                          onChange={(e) => updateEditItem(idx, { quantity: Math.max(1, parseInt(e.target.value) || 1) })}
+                          className="w-14 text-center text-sm bg-transparent border rounded py-1.5 tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        />
+                        <button
+                          type="button"
+                          className="p-1.5 rounded hover:bg-accent transition-colors"
+                          onClick={() => updateEditItem(idx, { quantity: Math.min(9999, item.quantity + 1) })}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </td>
                     <td className="p-3 text-right tabular-nums text-sm">
                       {item.unitPrice > 0 ? `€ ${item.unitPrice.toFixed(2)}` : "—"}
