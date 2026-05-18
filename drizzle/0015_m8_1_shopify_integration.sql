@@ -105,8 +105,8 @@ CREATE TABLE IF NOT EXISTS marketplace_order_items (
 CREATE INDEX IF NOT EXISTS idx_marketplace_order_items_order ON marketplace_order_items("marketplaceOrderId");
 CREATE INDEX IF NOT EXISTS idx_marketplace_order_items_product ON marketplace_order_items("productId");
 
--- Estendere stock_movements con riferimento marketplace
-ALTER TABLE stock_movements 
+-- Estendere stockMovements con riferimento marketplace
+ALTER TABLE "stockMovements"
   ADD COLUMN IF NOT EXISTS "marketplaceOrderId" UUID REFERENCES marketplace_orders(id) ON DELETE SET NULL;
 
-CREATE INDEX IF NOT EXISTS idx_stock_movements_marketplace ON stock_movements("marketplaceOrderId") WHERE "marketplaceOrderId" IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_stock_movements_marketplace ON "stockMovements"("marketplaceOrderId") WHERE "marketplaceOrderId" IS NOT NULL;
