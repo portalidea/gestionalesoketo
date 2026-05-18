@@ -103,8 +103,8 @@ export async function createProforma(
 
   const paymentMethodId = findPaymentMethodId(paymentMethods, paymentLabel);
 
-  // Build items_list
-  const items_list = input.items.map((item) => {
+  // Build items_list with vatRate carried for totalGross calculation
+  const itemsWithVat = input.items.map((item) => {
     const vatId = findVatTypeId(vatTypes, item.vatRate);
     const descParts: string[] = [
       item.batchNumber ? `Lotto: ${item.batchNumber}` : `Lotto: in attesa di assegnazione`,
@@ -114,22 +114,32 @@ export async function createProforma(
     return {
       product_id: 0,
       ...(item.sku ? { code: item.sku } : {}),
-      name: item.productName, // bold on FiC PDF
-      description: descParts.join(" | "), // normal text below
+      name: item.productName,
+      description: descParts.join(" | "),
       qty: item.quantity,
       net_price: item.unitPrice,
       vat: { id: vatId },
       not_taxable: false,
+      _vatRate: item.vatRate, // internal: used for totalGross calc, stripped before sending
     };
   });
 
-  // Calculate totalGross if not provided
-  const totalGross =
-    input.totalGross ??
-    input.items.reduce(
-      (sum, it) => sum + it.unitPrice * it.quantity * (1 + it.vatRate / 100),
-      0,
-    );
+  // ALWAYS compute totalGross from items per-row (like FiC does internally)
+  // Never use input.totalGross — it may be stale after modifyOrderItems
+  const totalGross = itemsWithVat.reduce((sum, item) => {
+    const itemNet = item.qty * item.net_price;
+    const itemGross = itemNet * (1 + item._vatRate / 100);
+    return sum + itemGross;
+  }, 0);
+
+  // Strip internal _vatRate before sending to FiC
+  const items_list = itemsWithVat.map(({ _vatRate, ...rest }) => rest);
+
+  console.log('[ficDocService.createProforma] computed totals', {
+    itemsCount: items_list.length,
+    itemsSumNet: items_list.reduce((s, i) => s + i.qty * i.net_price, 0).toFixed(2),
+    totalGross: (Math.round(totalGross * 100) / 100).toFixed(2),
+  });
 
   // Fetch entity from FiC
   const ficEntity = await getFicClientById(input.retailerFicClientId);
@@ -213,7 +223,7 @@ export async function modifyProforma(
 
   const paymentMethodId = findPaymentMethodId(paymentMethods, paymentLabel);
 
-  const items_list = input.items.map((item) => {
+  const itemsWithVat = input.items.map((item) => {
     const vatId = findVatTypeId(vatTypes, item.vatRate);
     const descParts: string[] = [
       item.batchNumber ? `Lotto: ${item.batchNumber}` : `Lotto: in attesa di assegnazione`,
@@ -229,15 +239,24 @@ export async function modifyProforma(
       net_price: item.unitPrice,
       vat: { id: vatId },
       not_taxable: false,
+      _vatRate: item.vatRate,
     };
   });
 
-  const totalGross =
-    input.totalGross ??
-    input.items.reduce(
-      (sum, it) => sum + it.unitPrice * it.quantity * (1 + it.vatRate / 100),
-      0,
-    );
+  // ALWAYS compute totalGross from items per-row (like FiC does internally)
+  const totalGross = itemsWithVat.reduce((sum, item) => {
+    const itemNet = item.qty * item.net_price;
+    const itemGross = itemNet * (1 + item._vatRate / 100);
+    return sum + itemGross;
+  }, 0);
+
+  const items_list = itemsWithVat.map(({ _vatRate, ...rest }) => rest);
+
+  console.log('[ficDocService.modifyProforma] computed totals', {
+    itemsCount: items_list.length,
+    itemsSumNet: items_list.reduce((s, i) => s + i.qty * i.net_price, 0).toFixed(2),
+    totalGross: (Math.round(totalGross * 100) / 100).toFixed(2),
+  });
 
   const ficEntity = await getFicClientById(input.retailerFicClientId);
 

@@ -866,7 +866,7 @@ export const ordersRouter = router({
         ficClientId: retailer.ficClientId,
         date: new Date().toISOString().split("T")[0],
         orderNumber: order.orderNumber ?? undefined,
-        totalGross: order.totalGross ? parseFloat(order.totalGross) : undefined,
+        // totalGross removed: now computed internally from items_list per-row
         notesInternal: `Ordine ${order.orderNumber}${order.notesInternal ? ` — ${order.notesInternal}` : ""}`,
         items: ficItems,
       });
@@ -981,7 +981,7 @@ export const ordersRouter = router({
         ficClientId: retailer.ficClientId,
         date: new Date().toISOString().split("T")[0],
         orderNumber: order.orderNumber ?? undefined,
-        totalGross: order.totalGross ? parseFloat(order.totalGross) : undefined,
+        // totalGross removed: now computed internally from items_list per-row
         notesInternal: `Ordine ${order.orderNumber} (rigenerata)${order.notesInternal ? ` — ${order.notesInternal}` : ""}`,
         items: ficItems,
       });

@@ -560,16 +560,25 @@ export async function createFicProforma(input: {
       not_taxable: false,
     };
   });
-  // Calcola totalGross se non fornito (somma lineTotalGross)
-  const totalGross = input.totalGross ?? input.items.reduce((sum, it) => {
+  // ALWAYS compute totalGross from items_list per-row (like FiC does internally)
+  // Never use input.totalGross — it may be stale after modifyOrderItems
+  const totalGross = input.items.reduce((sum, it) => {
     const vatRate = parseFloat(it.vatRate);
-    return sum + parseFloat(it.unitPriceFinal) * it.qty * (1 + vatRate / 100);
+    const itemNet = parseFloat(it.unitPriceFinal) * it.qty;
+    const itemGross = itemNet * (1 + vatRate / 100);
+    return sum + itemGross;
   }, 0);
 
-  // payments_list: singola rata = totale lordo documento
+  console.log('[fic:createProforma] computed totals', {
+    itemsCount: items_list.length,
+    itemsSumNet: items_list.reduce((s, i) => s + i.qty * i.net_price, 0).toFixed(2),
+    totalGross: (Math.round(totalGross * 100) / 100).toFixed(2),
+  });
+
+  // payments_list: singola rata = totale lordo documento (calcolato da items)
   const payments_list = [
     {
-      amount: Math.round(totalGross * 100) / 100, // arrotonda a 2 decimali
+      amount: Math.round(totalGross * 100) / 100,
       due_date: input.date,
       status: "not_paid" as const,
     },
