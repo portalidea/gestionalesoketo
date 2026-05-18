@@ -1099,7 +1099,7 @@ export default function OrderDetail() {
                         min={1}
                         value={item.quantity}
                         onChange={(e) => updateEditItem(idx, { quantity: Math.max(1, parseInt(e.target.value) || 1) })}
-                        className="text-right tabular-nums pr-3"
+                        className="text-right tabular-nums w-full qty-input"
                       />
                     </td>
                     <td className="p-3 text-right tabular-nums text-sm">

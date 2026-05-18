@@ -175,3 +175,11 @@
     }
   }
 }
+
+/* Quantity input: visual gap between number and spinner arrows */
+.qty-input::-webkit-inner-spin-button {
+  margin-left: 8px;
+}
+.qty-input {
+  padding-right: 8px !important;
+}
