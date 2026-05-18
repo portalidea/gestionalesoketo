@@ -2,6 +2,7 @@
  * M8.1 — Shopify Admin API Client (REST)
  * Uses native fetch, no heavy SDKs.
  * Implements retry with exponential backoff on 429/500/502/503.
+ * Hardened: safeParse, try/catch on .json(), structured error logging.
  */
 import { z } from "zod";
 
@@ -123,11 +124,22 @@ export class ShopifyClient {
       orders: unknown[];
     }>(url);
 
-    const orders = data.orders.map((o) => ShopifyOrderSchema.parse(o));
+    const orders: ShopifyOrder[] = [];
+    for (const o of data.orders) {
+      const parsed = ShopifyOrderSchema.safeParse(o);
+      if (parsed.success) {
+        orders.push(parsed.data);
+      } else {
+        console.warn(
+          `[shopifyClient.fetchOrders] safeParse failed for order, skipping. Error: ${parsed.error.message}. Payload sample: ${JSON.stringify(o).slice(0, 500)}`,
+        );
+      }
+    }
+
     const nextPageInfo = this.parseNextPageInfo(linkHeader);
 
     console.log(
-      `[shopifyClient.fetchOrders] fetched ${orders.length} orders, nextPage=${!!nextPageInfo}`,
+      `[shopifyClient.fetchOrders] fetched ${orders.length} orders (${data.orders.length} raw), nextPage=${!!nextPageInfo}`,
     );
     return { orders, nextPageInfo };
   }
@@ -146,7 +158,18 @@ export class ShopifyClient {
       orders: unknown[];
     }>(url);
 
-    const orders = data.orders.map((o) => ShopifyOrderSchema.parse(o));
+    const orders: ShopifyOrder[] = [];
+    for (const o of data.orders) {
+      const parsed = ShopifyOrderSchema.safeParse(o);
+      if (parsed.success) {
+        orders.push(parsed.data);
+      } else {
+        console.warn(
+          `[shopifyClient.fetchOrdersByPageInfo] safeParse failed, skipping. Error: ${parsed.error.message}. Payload sample: ${JSON.stringify(o).slice(0, 500)}`,
+        );
+      }
+    }
+
     const nextPageInfo = this.parseNextPageInfo(linkHeader);
     return { orders, nextPageInfo };
   }
@@ -183,28 +206,48 @@ export class ShopifyClient {
   }
 
   /**
-   * Fetch all products with their variants (paginated).
+   * Fetch all products with their variants (paginated, max 250 per page).
+   * Uses safeParse for graceful error handling on malformed products.
    */
   async fetchAllProducts(): Promise<ShopifyProduct[]> {
     const allProducts: ShopifyProduct[] = [];
-    let url: string | null = "/products.json?limit=50&fields=id,title,variants";
+    let url: string | null = "/products.json?limit=250&fields=id,title,variants";
+    let pageCount = 0;
 
     while (url) {
+      pageCount++;
+      console.log(
+        `[shopifyClient.fetchAllProducts] page ${pageCount}, accumulated ${allProducts.length} products`,
+      );
+
       const { data, linkHeader } = await this.requestWithHeaders<{
         products: unknown[];
       }>(url);
 
-      const products = data.products.map((p) => ShopifyProductSchema.parse(p));
-      allProducts.push(...products);
+      for (const p of data.products) {
+        const parsed = ShopifyProductSchema.safeParse(p);
+        if (parsed.success) {
+          allProducts.push(parsed.data);
+        } else {
+          console.warn(
+            `[shopifyClient.fetchAllProducts] safeParse failed for product, skipping. Error: ${parsed.error.message}. Payload sample: ${JSON.stringify(p).slice(0, 500)}`,
+          );
+        }
+      }
 
       const nextPageInfo = this.parseNextPageInfo(linkHeader);
       url = nextPageInfo
-        ? `/products.json?page_info=${nextPageInfo}&limit=50`
+        ? `/products.json?page_info=${nextPageInfo}&limit=250`
         : null;
+
+      // Pause 200ms between pages to avoid rate limit
+      if (url) {
+        await this.sleep(200);
+      }
     }
 
     console.log(
-      `[shopifyClient.fetchAllProducts] total: ${allProducts.length} products`,
+      `[shopifyClient.fetchAllProducts] total: ${allProducts.length} products in ${pageCount} pages`,
     );
     return allProducts;
   }
@@ -281,14 +324,27 @@ export class ShopifyClient {
           );
         }
 
-        const data = (await response.json()) as T;
+        // Wrap .json() in try/catch to handle malformed responses
+        let data: T;
+        try {
+          data = (await response.json()) as T;
+        } catch (jsonError: any) {
+          const rawText = await response.text().catch(() => "[unreadable]");
+          console.error(
+            `[shopifyClient] JSON parse error on ${path}. Status: ${response.status}. Body sample: ${rawText.slice(0, 500)}. Error: ${jsonError.message}`,
+          );
+          throw new Error(
+            `Shopify response JSON parse failed for ${path}: ${jsonError.message}`,
+          );
+        }
+
         const linkHeader = response.headers.get("Link");
         return { data, linkHeader };
       } catch (error) {
         if (attempt < MAX_RETRIES && this.isRetryableError(error)) {
           const delay = BASE_DELAY_MS * Math.pow(2, attempt);
           console.warn(
-            `[shopifyClient] Network error, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES + 1})`,
+            `[shopifyClient] Network error, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES + 1}). Error: ${error instanceof Error ? error.message : String(error)}`,
           );
           await this.sleep(delay);
           continue;
@@ -312,6 +368,9 @@ export class ShopifyClient {
   private isRetryableError(error: unknown): boolean {
     if (error instanceof TypeError) return true; // network errors
     if (error instanceof Error && error.message.includes("fetch")) return true;
+    if (error instanceof Error && error.message.includes("ECONNRESET")) return true;
+    if (error instanceof Error && error.message.includes("NS_ERROR_NET_RESET")) return true;
+    if (error instanceof Error && error.message.includes("socket hang up")) return true;
     return false;
   }
 

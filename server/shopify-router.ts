@@ -29,6 +29,7 @@ import {
 import {
   syncVariantsFromShopify,
   getVariantCounts,
+  type SyncVariantsResult,
 } from "./services/channelVariantService";
 
 const uuid = z.string().uuid();
@@ -133,7 +134,7 @@ export const shopifyRouter = router({
   // ─── Variants ────────────────────────────────────────────────────────────
 
   variants: router({
-    syncFromShopify: staffProcedure.mutation(async () => {
+    syncFromShopify: staffProcedure.mutation(async (): Promise<SyncVariantsResult> => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -146,7 +147,30 @@ export const shopifyRouter = router({
       if (!store)
         throw new TRPCError({ code: "NOT_FOUND", message: "Nessuno store Shopify configurato" });
 
-      return await syncVariantsFromShopify(store.id);
+      // 30s max timeout (under Vercel 60s limit, with margin)
+      const MAX_DURATION_MS = 30000;
+
+      try {
+        const result = await syncVariantsFromShopify(store.id, MAX_DURATION_MS);
+        console.log(
+          `[shopify.variants.syncFromShopify] completed: status=${result.status} imported=${result.imported} updated=${result.updated} errors=${result.errors.length}`,
+        );
+        return result;
+      } catch (err: any) {
+        console.error(
+          `[shopify.variants.syncFromShopify] uncaught error: ${err.message}`,
+        );
+        // Return partial result instead of throwing
+        return {
+          imported: 0,
+          updated: 0,
+          unmapped: 0,
+          errors: [`Errore sync varianti: ${err.message}`],
+          status: "partial",
+          totalProducts: 0,
+          processedProducts: 0,
+        };
+      }
     }),
 
     list: staffProcedure
