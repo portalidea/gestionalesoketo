@@ -136,8 +136,10 @@ export default function PartnerCatalog() {
         {/* Griglia prodotti */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {catalogQuery.data?.products.map((item) => {
-            const outOfStock = item.availableStock <= 0;
-            const stockLow = item.availableStock > 0 && item.availableStock <= 5;
+            const isBackorder = item.stockStatus === 'backorder';
+            const isUnavailable = item.stockStatus === 'unavailable';
+            const outOfStock = item.availableStock <= 0 && !isBackorder;
+            const stockLow = item.stockStatus === 'low_stock';
             const hasDiscount = item.discountPercentage > 0;
             const inCart = getItemQuantity(item.productId);
 
@@ -169,9 +171,14 @@ export default function PartnerCatalog() {
                       -{item.discountPercentage.toFixed(0)}%
                     </div>
                   )}
-                  {outOfStock && (
+                  {isUnavailable && (
                     <div className="absolute inset-0 bg-background/60 flex items-center justify-center">
-                      <Badge variant="destructive" className="text-sm">Esaurito</Badge>
+                      <Badge variant="destructive" className="text-sm">Non disponibile</Badge>
+                    </div>
+                  )}
+                  {isBackorder && (
+                    <div className="absolute bottom-2 left-2">
+                      <Badge className="bg-amber-500 text-white text-xs">Backorder</Badge>
                     </div>
                   )}
                 </div>
@@ -210,20 +217,24 @@ export default function PartnerCatalog() {
                   {/* Stock */}
                   <p
                     className={`text-xs font-medium ${
-                      outOfStock
+                      isUnavailable
                         ? "text-destructive"
-                        : stockLow
-                          ? "text-yellow-600 dark:text-yellow-400"
-                          : "text-muted-foreground"
+                        : isBackorder
+                          ? "text-amber-600 dark:text-amber-400"
+                          : stockLow
+                            ? "text-yellow-600 dark:text-yellow-400"
+                            : "text-muted-foreground"
                     }`}
                   >
-                    {outOfStock
+                    {isUnavailable
                       ? "Non disponibile"
-                      : `${item.availableStock} ${item.sellableUnitLabel.toLowerCase()} disponibili`}
+                      : isBackorder
+                        ? "Disponibile su ordinazione"
+                        : `${item.availableStock} ${item.sellableUnitLabel.toLowerCase()} disponibili`}
                   </p>
 
                   {/* Aggiungi al carrello */}
-                  {!outOfStock && (
+                  {!isUnavailable && (
                     <div className="flex items-center gap-2">
                       <div className="flex items-center border rounded-md">
                         <button
@@ -235,7 +246,7 @@ export default function PartnerCatalog() {
                         <input
                           type="number"
                           min={1}
-                          max={item.availableStock}
+                          max={isBackorder ? 9999 : (item.availableStock || 9999)}
                           value={getQty(item.productId)}
                           onChange={(e) => setQty(item.productId, parseInt(e.target.value) || 1)}
                           className="w-10 text-center text-sm bg-transparent border-x py-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"

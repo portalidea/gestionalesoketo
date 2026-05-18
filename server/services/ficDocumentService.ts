@@ -106,9 +106,10 @@ export async function createProforma(
   // Build items_list
   const items_list = input.items.map((item) => {
     const vatId = findVatTypeId(vatTypes, item.vatRate);
-    const descParts: string[] = [];
-    if (item.batchNumber) descParts.push(`Lotto: ${item.batchNumber}`);
-    if (item.expiryDate) descParts.push(`Scad: ${formatDateIT(item.expiryDate)}`);
+    const descParts: string[] = [
+      item.batchNumber ? `Lotto: ${item.batchNumber}` : `Lotto: in attesa di assegnazione`,
+      item.expiryDate ? `Scad: ${formatDateIT(item.expiryDate)}` : `Scad: TBD`,
+    ];
 
     return {
       product_id: 0,
@@ -214,9 +215,10 @@ export async function modifyProforma(
 
   const items_list = input.items.map((item) => {
     const vatId = findVatTypeId(vatTypes, item.vatRate);
-    const descParts: string[] = [];
-    if (item.batchNumber) descParts.push(`Lotto: ${item.batchNumber}`);
-    if (item.expiryDate) descParts.push(`Scad: ${formatDateIT(item.expiryDate)}`);
+    const descParts: string[] = [
+      item.batchNumber ? `Lotto: ${item.batchNumber}` : `Lotto: in attesa di assegnazione`,
+      item.expiryDate ? `Scad: ${formatDateIT(item.expiryDate)}` : `Scad: TBD`,
+    ];
 
     return {
       product_id: 0,

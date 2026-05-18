@@ -162,6 +162,8 @@ export const products = pgTable("products", {
   sellableUnitLabel: varchar("sellableUnitLabel", { length: 50 }).default("PZ").notNull(),
   // M6.2.E: costo unitario standard IVA esclusa (produzione + trasporto + oneri)
   costPrice: numeric("costPrice", { precision: 10, scale: 4 }).default("0").notNull(),
+  // M8.4: backorder support — if true, product can be ordered even when stock=0
+  isBackorderable: boolean("isBackorderable").default(true).notNull(),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });

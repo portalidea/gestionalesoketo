@@ -87,6 +87,75 @@ export async function getAvailableStock(
 }
 
 /**
+ * Get extended stock info for a single product including backorderability.
+ */
+export async function getStockInfo(
+  productId: string,
+): Promise<{
+  available: number;
+  total: number;
+  reserved: number;
+  isBackorderable: boolean;
+}> {
+  const db = await getDb();
+  if (!db) return { available: 0, total: 0, reserved: 0, isBackorderable: true };
+
+  // Get isBackorderable from product
+  const [product] = await db.execute<{ isBackorderable: boolean }>(sql`
+    SELECT "isBackorderable" FROM "products" WHERE "id" = ${productId}::uuid LIMIT 1
+  `);
+  const isBackorderable = (product as any)?.isBackorderable ?? true;
+
+  const stockMap = await getAvailableStock([productId]);
+  const info = stockMap.get(productId);
+
+  return {
+    available: info?.availableQty ?? 0,
+    total: info?.totalStock ?? 0,
+    reserved: info?.reservedQty ?? 0,
+    isBackorderable,
+  };
+}
+
+/**
+ * Get stock info for multiple products (batch version for catalog).
+ */
+export async function getStockInfoBatch(
+  productIds: string[],
+): Promise<Map<string, { available: number; total: number; reserved: number; isBackorderable: boolean }>> {
+  if (productIds.length === 0) return new Map();
+
+  const db = await getDb();
+  if (!db) return new Map();
+
+  // Get isBackorderable for all products
+  const backorderRows = await db.execute<{ id: string; isBackorderable: boolean }>(sql`
+    SELECT "id"::text, "isBackorderable" FROM "products"
+    WHERE "id" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})
+  `);
+  const backorderMap = new Map(
+    (backorderRows as unknown as Array<{ id: string; isBackorderable: boolean }>).map((r) => [
+      r.id,
+      r.isBackorderable,
+    ]),
+  );
+
+  const stockMap = await getAvailableStock(productIds);
+
+  const result = new Map<string, { available: number; total: number; reserved: number; isBackorderable: boolean }>();
+  for (const pid of productIds) {
+    const info = stockMap.get(pid);
+    result.set(pid, {
+      available: info?.availableQty ?? 0,
+      total: info?.totalStock ?? 0,
+      reserved: info?.reservedQty ?? 0,
+      isBackorderable: backorderMap.get(pid) ?? true,
+    });
+  }
+  return result;
+}
+
+/**
  * Validate that all items in an order have sufficient stock.
  * Returns list of items with insufficient stock.
  */

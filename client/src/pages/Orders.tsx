@@ -27,6 +27,7 @@ import { trpc } from "@/lib/trpc";
 import { format } from "date-fns";
 import { it } from "date-fns/locale";
 import {
+  AlertTriangle,
   ChevronLeft,
   ChevronRight,
   Loader2,
@@ -195,6 +196,7 @@ export default function Orders() {
                       <SortableTableHead sortKey="status" sort={sort} onSort={setSort}>Stato</SortableTableHead>
                       <SortableTableHead sortKey="totalGross" sort={sort} onSort={setSort} className="text-right">Totale lordo</SortableTableHead>
                       <SortableTableHead sortKey="ficProformaNumber" sort={sort} onSort={setSort}>Proforma FiC</SortableTableHead>
+                      <TableHead className="text-center">Lotti</TableHead>
                       <SortableTableHead sortKey="createdAt" sort={sort} onSort={setSort}>Data</SortableTableHead>
                     </TableRow>
                   </TableHeader>
@@ -243,6 +245,14 @@ export default function Orders() {
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">
                             {order.ficProformaNumber ?? "—"}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {(order as any).hasUnassignedBatch && !["delivered", "cancelled"].includes(order.status) ? (
+                              <Badge variant="outline" className="text-xs gap-1 text-amber-500 border-amber-500/30">
+                                <AlertTriangle className="h-3 w-3" />
+                                Backorder
+                              </Badge>
+                            ) : null}
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">
                             {order.createdAt

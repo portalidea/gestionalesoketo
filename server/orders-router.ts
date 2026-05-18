@@ -110,6 +110,10 @@ export const ordersRouter = router({
             eventName: orders.eventName,
             createdAt: orders.createdAt,
             updatedAt: orders.updatedAt,
+            hasUnassignedBatch: sql<boolean>`EXISTS (
+              SELECT 1 FROM "orderItems" oi
+              WHERE oi."orderId" = ${orders.id} AND oi."batchId" IS NULL
+            )`.as("hasUnassignedBatch"),
           })
           .from(orders)
           .leftJoin(retailers, eq(orders.retailerId, retailers.id))
@@ -616,6 +620,67 @@ export const ordersRouter = router({
         .orderBy(productBatches.expirationDate);
 
       return batches;
+    }),
+
+  /**
+   * 9b. Suggest best batch for an order item (FEFO with stock > 0)
+   */
+  suggestBatchForItem: staffProcedure
+    .input(z.object({ orderItemId: z.string().uuid() }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+      // Get the order item's product
+      const [item] = await db
+        .select({ productId: orderItems.productId, quantity: orderItems.quantity })
+        .from(orderItems)
+        .where(eq(orderItems.id, input.orderItemId))
+        .limit(1);
+
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item non trovato" });
+
+      // Find central warehouse
+      const [warehouse] = await db
+        .select({ id: locations.id })
+        .from(locations)
+        .where(eq(locations.type, "central_warehouse"))
+        .limit(1);
+
+      if (!warehouse) return { suggestion: null };
+
+      // FEFO: first expiring batch with enough stock
+      const candidates = await db
+        .select({
+          batchId: productBatches.id,
+          batchNumber: productBatches.batchNumber,
+          expirationDate: productBatches.expirationDate,
+          stock: inventoryByBatch.quantity,
+        })
+        .from(productBatches)
+        .innerJoin(
+          inventoryByBatch,
+          and(
+            eq(inventoryByBatch.batchId, productBatches.id),
+            eq(inventoryByBatch.locationId, warehouse.id),
+          ),
+        )
+        .where(
+          and(
+            eq(productBatches.productId, item.productId),
+            gt(inventoryByBatch.quantity, 0),
+          ),
+        )
+        .orderBy(asc(productBatches.expirationDate));
+
+      // Suggest first batch with enough stock, or first batch if none has enough
+      const bestFit = candidates.find((c) => c.stock >= item.quantity) ?? candidates[0] ?? null;
+
+      return {
+        suggestion: bestFit
+          ? { batchId: bestFit.batchId, batchNumber: bestFit.batchNumber, expirationDate: bestFit.expirationDate, stock: bestFit.stock }
+          : null,
+      };
     }),
 
   /**

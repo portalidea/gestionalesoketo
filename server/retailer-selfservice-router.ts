@@ -102,6 +102,7 @@ export const retailerSelfServiceRouter = router({
           piecesPerUnit: products.piecesPerUnit,
           sellableUnitLabel: products.sellableUnitLabel,
           description: products.description,
+          isBackorderable: products.isBackorderable,
         })
         .from(products)
         .where(conditions.length > 0 ? and(...conditions) : undefined)
@@ -115,11 +116,25 @@ export const retailerSelfServiceRouter = router({
       const productIds = productRows.map((p) => p.id);
       const stockMap = await getAvailableStock(productIds);
 
-      // Map results
+      // Map results with M8.4 stockStatus
       const catalogProducts = productRows.map((p) => {
         const listPrice = parseFloat(p.unitPrice ?? "0");
         const discountedPrice = +(listPrice * (1 - discountPercent / 100)).toFixed(2);
         const stock = stockMap.get(p.id);
+        const availableStock = stock?.availableQty ?? 0;
+
+        // M8.4: stockStatus
+        let stockStatus: 'in_stock' | 'low_stock' | 'backorder' | 'unavailable';
+        if (availableStock >= 10) {
+          stockStatus = 'in_stock';
+        } else if (availableStock > 0) {
+          stockStatus = 'low_stock';
+        } else if (p.isBackorderable) {
+          stockStatus = 'backorder';
+        } else {
+          stockStatus = 'unavailable';
+        }
+
         return {
           productId: p.id,
           name: p.name,
@@ -130,7 +145,9 @@ export const retailerSelfServiceRouter = router({
           discountedPrice,
           discountPercentage: discountPercent,
           vatRate: parseFloat(p.vatRate),
-          availableStock: stock?.availableQty ?? 0,
+          availableStock,
+          stockStatus,
+          isBackorderable: p.isBackorderable,
           piecesPerUnit: p.piecesPerUnit,
           sellableUnitLabel: p.sellableUnitLabel,
           description: p.description,

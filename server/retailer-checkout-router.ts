@@ -59,19 +59,35 @@ export const retailerCheckoutRouter = router({
       // 1. Calcola pricing
       const pricing = await calculateOrderPricing(ctx.retailerId, input.items);
 
-      // 2. Verifica stock disponibile (hard check — rifiuta se insufficiente)
+      // 2. M8.4: Verifica stock — allow backorder, reject only unavailable
+      // Get isBackorderable for each product
+      const productIdsForCheck = pricing.items.map((pi) => pi.productId);
+      const backorderableRows = await db.execute<{ id: string; isBackorderable: boolean }>(sql`
+        SELECT "id"::text, "isBackorderable" FROM "products"
+        WHERE "id" IN (${sql.join(productIdsForCheck.map((id) => sql`${id}::uuid`), sql`, `)})
+      `);
+      const backorderableMap = new Map(
+        (backorderableRows as unknown as Array<{ id: string; isBackorderable: boolean }>).map((r) => [
+          r.id, r.isBackorderable,
+        ]),
+      );
+
       const stockErrors: string[] = [];
       for (const pi of pricing.items) {
         if (pi.stockWarning) {
-          stockErrors.push(
-            `${pi.productName}: richieste ${pi.quantity} conf, disponibili ${pi.stockAvailableConfezioni} conf`,
-          );
+          const isBackorderable = backorderableMap.get(pi.productId) ?? true;
+          if (!isBackorderable) {
+            stockErrors.push(
+              `${pi.productName}: non disponibile (richieste ${pi.quantity}, disponibili ${pi.stockAvailableConfezioni})`,
+            );
+          }
+          // If backorderable, allow the order even with insufficient stock
         }
       }
       if (stockErrors.length > 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Stock insufficiente:\n${stockErrors.join("\n")}`,
+          message: `Prodotti non disponibili:\n${stockErrors.join("\n")}`,
         });
       }
 

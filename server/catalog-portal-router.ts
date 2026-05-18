@@ -64,7 +64,7 @@ export const catalogPortalRouter = router({
         if (pkg) discountPercent = parseFloat(pkg.discountPercent);
       }
 
-      // 2. Filtri prodotti
+      // 2. Filtri prodotti (exclude unavailable only if explicitly filtered)
       const conditions = [];
       if (input.search) {
         const term = `%${input.search}%`;
@@ -103,6 +103,7 @@ export const catalogPortalRouter = router({
           piecesPerUnit: products.piecesPerUnit,
           sellableUnitLabel: products.sellableUnitLabel,
           imageUrl: products.imageUrl,
+          isBackorderable: products.isBackorderable,
         })
         .from(products)
         .where(whereClause)
@@ -169,7 +170,7 @@ export const catalogPortalRouter = router({
         ]),
       );
 
-      // 8. Mappa risultati
+      // 8. Mappa risultati con stockStatus
       const items = productRows.map((p) => {
         const unitPriceBase = parseFloat(p.unitPrice || "0");
         const unitPriceFinal = Math.round(unitPriceBase * (1 - discountPercent / 100) * 100) / 100;
@@ -177,6 +178,18 @@ export const catalogPortalRouter = router({
         const totalReserved = reservedMap.get(p.id) ?? 0;
         const stockAvailable = Math.max(0, totalStock - totalReserved);
         const stockReserved = myReservedMap.get(p.id) ?? 0;
+
+        // M8.4: stockStatus logic
+        let stockStatus: 'in_stock' | 'low_stock' | 'backorder' | 'unavailable';
+        if (stockAvailable >= 10) {
+          stockStatus = 'in_stock';
+        } else if (stockAvailable > 0) {
+          stockStatus = 'low_stock';
+        } else if (p.isBackorderable) {
+          stockStatus = 'backorder';
+        } else {
+          stockStatus = 'unavailable';
+        }
 
         return {
           productId: p.id,
@@ -193,7 +206,9 @@ export const catalogPortalRouter = router({
           imageUrl: p.imageUrl,
           stockAvailable,
           stockReserved,
-          isAvailable: stockAvailable > 0,
+          isBackorderable: p.isBackorderable,
+          stockStatus,
+          isAvailable: stockStatus !== 'unavailable',
         };
       });
 

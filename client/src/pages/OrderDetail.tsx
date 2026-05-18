@@ -932,6 +932,57 @@ export default function OrderDetail() {
               </CardContent>
             </Card>
 
+            {/* Stato Lotti */}
+            {canEditBatches && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Package className="h-4 w-4" />
+                    Stato Lotti
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {order.items.map((item) => {
+                    const hasBatch = !!item.batchId;
+                    return (
+                      <div
+                        key={item.id}
+                        className={`flex items-center justify-between p-2 rounded-md text-xs ${
+                          hasBatch
+                            ? "bg-emerald-500/5 border border-emerald-500/20"
+                            : "bg-amber-500/5 border border-amber-500/20"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          {hasBatch ? (
+                            <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                          ) : (
+                            <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                          )}
+                          <span className="truncate font-medium">{item.productName}</span>
+                          <span className="text-muted-foreground">×{item.quantity}</span>
+                        </div>
+                        <div className="text-right shrink-0 ml-2">
+                          {hasBatch ? (
+                            <span className="font-mono text-emerald-600 dark:text-emerald-400">
+                              {item.batchNumber}
+                            </span>
+                          ) : (
+                            <span className="text-amber-600 dark:text-amber-400">Da assegnare</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {unassignedCount === 0 && (
+                    <p className="text-xs text-emerald-600 dark:text-emerald-400 text-center pt-1">
+                      Tutti i lotti assegnati
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
             {/* Azioni */}
             <Card>
               <CardHeader>
