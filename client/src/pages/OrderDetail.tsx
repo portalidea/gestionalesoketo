@@ -459,6 +459,18 @@ export default function OrderDetail() {
 
   const isAnyMutationPending = Object.values(mutationMap).some((m: any) => m.isPending);
 
+  // Compute totals for edit dialog (must be before early returns to avoid React #310)
+  const editSubtotalNet = useMemo(
+    () => editItems.reduce((sum, it) => sum + it.quantity * it.unitPrice, 0),
+    [editItems]
+  );
+  const editVatAmount = useMemo(
+    () => editItems.reduce((sum, it) => sum + it.quantity * it.unitPrice * (it.vatRate / 100), 0),
+    [editItems]
+  );
+  const editTotalGross = editSubtotalNet + editVatAmount;
+  const originalTotalGross = parseFloat(orderQuery.data?.totalGross ?? "0");
+
   if (orderQuery.isLoading) {
     return (
       <DashboardLayout>
@@ -525,18 +537,6 @@ export default function OrderDetail() {
       return next;
     });
   }
-
-  // Compute totals for edit dialog
-  const editSubtotalNet = useMemo(
-    () => editItems.reduce((sum, it) => sum + it.quantity * it.unitPrice, 0),
-    [editItems]
-  );
-  const editVatAmount = useMemo(
-    () => editItems.reduce((sum, it) => sum + it.quantity * it.unitPrice * (it.vatRate / 100), 0),
-    [editItems]
-  );
-  const editTotalGross = editSubtotalNet + editVatAmount;
-  const originalTotalGross = parseFloat(order?.totalGross ?? "0");
 
   // Timeline dinamica
   const timelineSteps = getTimelineSteps((order as any).paymentTerms);
