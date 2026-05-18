@@ -6,8 +6,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, gt, gte, inArray, isNull, like, lt, or, sql } from "drizzle-orm";
-import { router } from "./_core/trpc";
-import { staffProcedure } from "./_core/trpc";
+import { router, staffProcedure, staffProcedureLongRunning } from "./_core/trpc";
 import { getDb } from "./db";
 import {
   channelVariants,
@@ -134,7 +133,7 @@ export const shopifyRouter = router({
   // ─── Variants ────────────────────────────────────────────────────────────
 
   variants: router({
-    syncFromShopify: staffProcedure.mutation(async (): Promise<SyncVariantsResult> => {
+    syncFromShopify: staffProcedureLongRunning.mutation(async (): Promise<SyncVariantsResult> => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -147,11 +146,8 @@ export const shopifyRouter = router({
       if (!store)
         throw new TRPCError({ code: "NOT_FOUND", message: "Nessuno store Shopify configurato" });
 
-      // 30s max timeout (under Vercel 60s limit, with margin)
-      const MAX_DURATION_MS = 30000;
-
       try {
-        const result = await syncVariantsFromShopify(store.id, MAX_DURATION_MS);
+        const result = await syncVariantsFromShopify(store.id);
         console.log(
           `[shopify.variants.syncFromShopify] completed: status=${result.status} imported=${result.imported} updated=${result.updated} errors=${result.errors.length}`,
         );
@@ -168,7 +164,7 @@ export const shopifyRouter = router({
           errors: [`Errore sync varianti: ${err.message}`],
           status: "partial",
           totalProducts: 0,
-          processedProducts: 0,
+          totalVariants: 0,
         };
       }
     }),

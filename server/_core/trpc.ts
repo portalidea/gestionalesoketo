@@ -164,6 +164,13 @@ const requireStaff = t.middleware(async (opts) => {
 export const staffProcedure = t.procedure.use(withTimeout).use(requireStaff);
 
 /**
+ * M8.1: Staff procedure WITHOUT the 8s timeout middleware.
+ * For long-running operations like Shopify sync (needs up to 45s).
+ * Still enforces staff auth.
+ */
+export const staffProcedureLongRunning = t.procedure.use(requireStaff);
+
+/**
  * M7-B: Per utenti affiliato (affiliate_admin o affiliate_user).
  * Inietta ctx.affiliateId dal profilo utente.
  */

@@ -1,14 +1,14 @@
 /**
  * M8.1 — Channel Variant Service
  * Syncs variants from Shopify and manages unmapped variants.
- * Hardened: progress logging, per-variant error handling, timeout awareness.
+ * Performance: bulk upsert in chunks of 200 (avoids Vercel 60s timeout).
  */
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { channelVariants, salesStores } from "../../drizzle/schema";
-import { ShopifyClient } from "./shopifyService";
+import { ShopifyClient, type ShopifyProduct } from "./shopifyService";
 
-// ─── Sync Variants from Shopify ──────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface SyncVariantsResult {
   imported: number;
@@ -17,18 +17,19 @@ export interface SyncVariantsResult {
   errors: string[];
   status: "completed" | "partial" | "timeout";
   totalProducts: number;
-  processedProducts: number;
+  totalVariants: number;
 }
 
+// ─── Sync Variants from Shopify (bulk upsert) ───────────────────────────────
+
+const CHUNK_SIZE = 200;
+
 /**
- * Sync all variants from Shopify store.
- * Includes timeout awareness: if approaching maxDurationMs, returns partial result.
- * @param storeId - UUID of the sales_stores record
- * @param maxDurationMs - Maximum allowed duration in ms (default 28000 = 28s, under Vercel 30s)
+ * Sync all variants from Shopify store using bulk upsert.
+ * Replaces per-variant loop with chunked INSERT ... ON CONFLICT DO UPDATE.
  */
 export async function syncVariantsFromShopify(
   storeId: string,
-  maxDurationMs = 28000,
 ): Promise<SyncVariantsResult> {
   const startTime = Date.now();
   const db = await getDb();
@@ -49,10 +50,10 @@ export async function syncVariantsFromShopify(
   if (!credentials.accessToken)
     throw new Error(`Store ${storeId} missing accessToken`);
 
-  // 2. Fetch all products/variants from Shopify (pagination handled inside client)
+  // 2. Fetch all products/variants from Shopify
   const client = new ShopifyClient(store.storeIdentifier, credentials.accessToken);
 
-  let products;
+  let products: ShopifyProduct[];
   try {
     products = await client.fetchAllProducts();
   } catch (fetchErr: any) {
@@ -66,130 +67,132 @@ export async function syncVariantsFromShopify(
       errors: [`Errore fetch prodotti da Shopify: ${fetchErr.message}`],
       status: "partial",
       totalProducts: 0,
-      processedProducts: 0,
+      totalVariants: 0,
     };
   }
 
+  const fetchElapsed = Date.now() - startTime;
   console.log(
-    `[channelVariantService.sync] storeId=${storeId} fetched ${products.length} products from Shopify in ${Date.now() - startTime}ms`,
+    `[channelVariantService.sync] storeId=${storeId} fetched ${products.length} products in ${fetchElapsed}ms`,
   );
 
-  let imported = 0;
-  let updated = 0;
-  let processedProducts = 0;
-  const errors: string[] = [];
-  let timedOut = false;
+  // 3. Flatten all variants into upsert-ready rows
+  const allRows: Array<{
+    storeId: string;
+    channelSku: string;
+    channelProductId: string;
+    channelVariantId: string;
+    displayName: string;
+    multiplier: number;
+    isActive: boolean;
+  }> = [];
 
-  // 3. For each product, UPSERT variants
-  for (let i = 0; i < products.length; i++) {
-    // Timeout check: leave 2s margin for final DB query
-    if (Date.now() - startTime > maxDurationMs - 2000) {
-      console.warn(
-        `[channelVariantService.sync] timeout approaching at product ${i + 1}/${products.length} (${Date.now() - startTime}ms elapsed). Stopping.`,
-      );
-      timedOut = true;
-      break;
-    }
-
-    const product = products[i];
-
-    // Progress logging every 50 products
-    if (i > 0 && i % 50 === 0) {
-      console.log(
-        `[channelVariantService.sync] progress: ${i}/${products.length} products processed, imported=${imported} updated=${updated} errors=${errors.length} (${Date.now() - startTime}ms)`,
-      );
-    }
-
+  for (const product of products) {
     for (const variant of product.variants) {
       const sku = variant.sku || `variant_${variant.id}`;
+      const displayName =
+        product.variants.length > 1
+          ? `${product.title} - ${variant.title}`
+          : product.title;
 
-      try {
-        // Check if already exists
-        const existing = await db
-          .select({
-            id: channelVariants.id,
-            productId: channelVariants.productId,
-            multiplier: channelVariants.multiplier,
-          })
-          .from(channelVariants)
-          .where(
-            and(
-              eq(channelVariants.storeId, storeId),
-              eq(channelVariants.channelSku, sku),
-            ),
-          )
-          .limit(1);
-
-        const displayName =
-          product.variants.length > 1
-            ? `${product.title} - ${variant.title}`
-            : product.title;
-
-        if (existing.length > 0) {
-          // Update: only channelProductId, channelVariantId, displayName
-          // Do NOT overwrite productId or multiplier (admin manages those)
-          await db
-            .update(channelVariants)
-            .set({
-              channelProductId: String(product.id),
-              channelVariantId: String(variant.id),
-              displayName,
-              updatedAt: new Date(),
-            })
-            .where(eq(channelVariants.id, existing[0].id));
-          updated++;
-        } else {
-          // Insert new: productId=NULL, multiplier=1 (admin must map)
-          await db.insert(channelVariants).values({
-            storeId,
-            channelSku: sku,
-            channelProductId: String(product.id),
-            channelVariantId: String(variant.id),
-            displayName,
-            productId: null,
-            multiplier: 1,
-            isActive: true,
-          });
-          imported++;
-        }
-      } catch (variantErr: any) {
-        errors.push(
-          `Prodotto "${product.title}" SKU "${sku}": ${variantErr.message}`,
-        );
-        console.error(
-          `[channelVariantService.sync] error on product=${product.id} sku=${sku}: ${variantErr.message}`,
-        );
-      }
+      allRows.push({
+        storeId,
+        channelSku: sku,
+        channelProductId: String(product.id),
+        channelVariantId: String(variant.id),
+        displayName,
+        multiplier: 1, // default, admin adjusts after
+        isActive: true,
+      });
     }
-
-    processedProducts++;
   }
-
-  // 4. Count unmapped
-  let unmapped = 0;
-  try {
-    const [{ count }] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(channelVariants)
-      .where(
-        and(
-          eq(channelVariants.storeId, storeId),
-          isNull(channelVariants.productId),
-          eq(channelVariants.isActive, true),
-        ),
-      );
-    unmapped = count;
-  } catch (countErr: any) {
-    console.error(
-      `[channelVariantService.sync] count unmapped failed: ${countErr.message}`,
-    );
-  }
-
-  const elapsed = Date.now() - startTime;
-  const status = timedOut ? "timeout" : errors.length > 0 ? "partial" : "completed";
 
   console.log(
-    `[channelVariantService.sync] done: storeId=${storeId} status=${status} imported=${imported} updated=${updated} unmapped=${unmapped} errors=${errors.length} processedProducts=${processedProducts}/${products.length} elapsed=${elapsed}ms`,
+    `[channelVariantService.sync] prepared ${allRows.length} variant rows for bulk upsert`,
+  );
+
+  if (allRows.length === 0) {
+    return {
+      imported: 0,
+      updated: 0,
+      unmapped: 0,
+      errors: [],
+      status: "completed",
+      totalProducts: products.length,
+      totalVariants: 0,
+    };
+  }
+
+  // 4. Count existing before upsert (to calculate imported vs updated)
+  const [{ existingCount }] = await db
+    .select({ existingCount: sql<number>`count(*)::int` })
+    .from(channelVariants)
+    .where(eq(channelVariants.storeId, storeId));
+
+  // 5. Bulk upsert in chunks
+  const errors: string[] = [];
+  let upsertedTotal = 0;
+
+  for (let i = 0; i < allRows.length; i += CHUNK_SIZE) {
+    const chunk = allRows.slice(i, i + CHUNK_SIZE);
+    const chunkNum = Math.floor(i / CHUNK_SIZE) + 1;
+    const totalChunks = Math.ceil(allRows.length / CHUNK_SIZE);
+
+    try {
+      await db
+        .insert(channelVariants)
+        .values(chunk)
+        .onConflictDoUpdate({
+          target: [channelVariants.storeId, channelVariants.channelSku],
+          set: {
+            channelProductId: sql`EXCLUDED."channelProductId"`,
+            channelVariantId: sql`EXCLUDED."channelVariantId"`,
+            displayName: sql`EXCLUDED."displayName"`,
+            updatedAt: new Date(),
+            // DO NOT overwrite productId, multiplier (admin manages those)
+          },
+        });
+
+      upsertedTotal += chunk.length;
+      console.log(
+        `[channelVariantService.sync] chunk ${chunkNum}/${totalChunks} done (${chunk.length} rows, cumulative ${upsertedTotal})`,
+      );
+    } catch (chunkErr: any) {
+      errors.push(
+        `Chunk ${chunkNum}/${totalChunks}: ${chunkErr.message}`,
+      );
+      console.error(
+        `[channelVariantService.sync] chunk ${chunkNum} failed: ${chunkErr.message}`,
+      );
+    }
+  }
+
+  // 6. Count after upsert to determine imported vs updated
+  const [{ afterCount }] = await db
+    .select({ afterCount: sql<number>`count(*)::int` })
+    .from(channelVariants)
+    .where(eq(channelVariants.storeId, storeId));
+
+  const imported = afterCount - existingCount;
+  const updated = upsertedTotal - imported;
+
+  // 7. Count unmapped
+  const [{ count: unmapped }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(channelVariants)
+    .where(
+      and(
+        eq(channelVariants.storeId, storeId),
+        isNull(channelVariants.productId),
+        eq(channelVariants.isActive, true),
+      ),
+    );
+
+  const elapsed = Date.now() - startTime;
+  const status = errors.length > 0 ? "partial" : "completed";
+
+  console.log(
+    `[channelVariantService.sync] bulk upsert ${allRows.length} variants done in ${elapsed}ms. imported=${imported} updated=${updated} unmapped=${unmapped} errors=${errors.length}`,
   );
 
   return {
@@ -199,7 +202,7 @@ export async function syncVariantsFromShopify(
     errors,
     status,
     totalProducts: products.length,
-    processedProducts,
+    totalVariants: allRows.length,
   };
 }
 
