@@ -48,6 +48,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { trpc } from "@/lib/trpc";
 import { format } from "date-fns";
 import { it } from "date-fns/locale";
@@ -1030,90 +1031,109 @@ export default function OrderDetail() {
 
       {/* Edit Items Dialog */}
       <Dialog open={editItemsOpen} onOpenChange={setEditItemsOpen}>
-        <DialogContent className="max-w-5xl w-[90vw]">
+        <DialogContent className="max-w-5xl w-[95vw] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Modifica Items Ordine</DialogTitle>
+            <DialogTitle>Modifica Items - Ordine #{order.id.slice(0, 8)}</DialogTitle>
             <DialogDescription>
-              Aggiungi, rimuovi o modifica le quantità. Il pricing verrà ricalcolato automaticamente
-              con lo sconto del retailer. Lo stock non viene verificato (backorder consentito).
+              Aggiungi, rimuovi o modifica le quantità. Il pricing verrà ricalcolato
+              automaticamente con lo sconto del retailer. Lo stock non viene verificato
+              (backorder consentito).
             </DialogDescription>
           </DialogHeader>
 
-          <div className="max-h-[60vh] overflow-y-auto">
+          {/* TABELLA ITEMS — ogni riga è un item dell'ordine */}
+          <div className="mt-4 border rounded-lg overflow-hidden">
             <table className="w-full">
-              <thead>
-                <tr className="border-b text-sm text-muted-foreground">
-                  <th className="text-left p-2 font-medium">Prodotto</th>
-                  <th className="text-right p-2 w-28 font-medium">Quantità</th>
-                  <th className="text-right p-2 w-32 font-medium">Prezzo unit.</th>
-                  <th className="text-right p-2 w-32 font-medium">Totale</th>
-                  <th className="w-14"></th>
+              <thead className="bg-muted/50">
+                <tr>
+                  <th className="text-left p-3 text-sm font-medium">Prodotto</th>
+                  <th className="text-right p-3 text-sm font-medium w-32">Quantità</th>
+                  <th className="text-right p-3 text-sm font-medium w-32">Prezzo unit.</th>
+                  <th className="text-right p-3 text-sm font-medium w-32">Totale</th>
+                  <th className="w-12"></th>
                 </tr>
               </thead>
               <tbody>
-                {editItems.map((item, idx) => {
-                  const selectedProduct = productsQuery.data?.find((p: any) => p.id === item.productId);
-                  return (
-                    <tr key={idx} className="border-b">
-                      <td className="p-2">
-                        <ProductCombobox
-                          products={productsQuery.data ?? []}
-                          value={item.productId}
-                          onSelect={(productId, unitPrice, vatRate) => {
-                            updateEditItem(idx, { productId, unitPrice, vatRate });
-                          }}
-                        />
-                      </td>
-                      <td className="p-2">
-                        <Input
-                          type="number"
-                          min={1}
-                          value={item.quantity}
-                          onChange={(e) => updateEditItem(idx, { quantity: Math.max(1, parseInt(e.target.value) || 1) })}
-                          className="w-24 h-9 text-sm text-right ml-auto"
-                        />
-                      </td>
-                      <td className="p-2 text-right tabular-nums text-sm">
-                        {item.unitPrice > 0 ? `€ ${item.unitPrice.toFixed(2)}` : "—"}
-                      </td>
-                      <td className="p-2 text-right tabular-nums text-sm font-medium">
-                        {item.unitPrice > 0 ? `€ ${(item.quantity * item.unitPrice).toFixed(2)}` : "—"}
-                      </td>
-                      <td className="p-2 text-center">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-destructive hover:text-destructive"
-                          onClick={() => setEditItems(editItems.filter((_, i) => i !== idx))}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {editItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="p-6 text-center text-muted-foreground">
+                      Nessun item. Click "Aggiungi prodotto" per iniziare.
+                    </td>
+                  </tr>
+                ) : editItems.map((item, idx) => (
+                  <tr key={idx} className="border-t">
+                    <td className="p-2">
+                      <Select
+                        value={item.productId || "_empty"}
+                        onValueChange={(v) => {
+                          if (v === "_empty") return;
+                          const product = productsQuery.data?.find((p: any) => p.id === v);
+                          const unitPrice = product ? parseFloat(product.unitPrice || "0") : 0;
+                          const vatRate = product ? parseFloat(product.vatRate || "10") : 10;
+                          updateEditItem(idx, { productId: v, unitPrice, vatRate });
+                        }}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Seleziona prodotto..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {productsQuery.data?.map((p: any) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              <span className="font-mono text-xs mr-2">{p.sku}</span>
+                              {p.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </td>
+                    <td className="p-2">
+                      <Input
+                        type="number"
+                        min={1}
+                        value={item.quantity}
+                        onChange={(e) => updateEditItem(idx, { quantity: Math.max(1, parseInt(e.target.value) || 1) })}
+                        className="text-right tabular-nums"
+                      />
+                    </td>
+                    <td className="p-3 text-right tabular-nums text-sm">
+                      {item.unitPrice > 0 ? `€ ${item.unitPrice.toFixed(2)}` : "—"}
+                    </td>
+                    <td className="p-3 text-right tabular-nums font-medium">
+                      {item.unitPrice > 0 ? `€ ${(item.quantity * item.unitPrice).toFixed(2)}` : "—"}
+                    </td>
+                    <td className="p-2">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setEditItems(editItems.filter((_, i) => i !== idx))}
+                      >
+                        <Trash2 className="h-4 w-4 text-red-500" />
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
 
+          {/* PULSANTE AGGIUNGI */}
           <Button
             variant="outline"
-            size="sm"
-            className="mt-3 gap-1.5"
             onClick={() => setEditItems([...editItems, { productId: "", quantity: 1, unitPrice: 0, vatRate: 10 }])}
+            className="mt-4"
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Plus className="mr-2 h-4 w-4" />
             Aggiungi prodotto
           </Button>
 
-          {/* Totals box */}
-          <div className="mt-4 ml-auto w-80 bg-muted/50 p-4 rounded-lg">
+          {/* BOX TOTALI */}
+          <div className="mt-6 ml-auto w-full sm:w-80 bg-muted/50 p-4 rounded-lg">
             <div className="flex justify-between text-sm">
-              <span>Subtotale netto:</span>
+              <span className="text-muted-foreground">Subtotale netto:</span>
               <span className="tabular-nums">€ {editSubtotalNet.toFixed(2)}</span>
             </div>
             <div className="flex justify-between text-sm mt-1">
-              <span>IVA:</span>
+              <span className="text-muted-foreground">IVA:</span>
               <span className="tabular-nums">€ {editVatAmount.toFixed(2)}</span>
             </div>
             <div className="flex justify-between font-bold text-lg mt-2 pt-2 border-t">
@@ -1121,9 +1141,9 @@ export default function OrderDetail() {
               <span className="tabular-nums">€ {editTotalGross.toFixed(2)}</span>
             </div>
             {Math.abs(editTotalGross - originalTotalGross) > 0.01 && (
-              <div className="text-sm text-orange-600 dark:text-orange-400 mt-3 pt-3 border-t">
+              <div className="mt-3 pt-3 border-t text-sm text-orange-600 dark:text-orange-400">
                 Delta vs ordine corrente:{" "}
-                <span className="font-medium tabular-nums">
+                <span className="font-medium tabular-nums ml-2">
                   {editTotalGross > originalTotalGross ? "+" : ""}
                   € {(editTotalGross - originalTotalGross).toFixed(2)}
                 </span>
@@ -1131,7 +1151,22 @@ export default function OrderDetail() {
             )}
           </div>
 
-          <DialogFooter className="mt-4">
+          {/* WARNING SE ORDINE PAID */}
+          {order.status === "paid" && Math.abs(editTotalGross - originalTotalGross) > 0.01 && (
+            <Alert className="mt-4 border-orange-500/30">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>Ordine già pagato</AlertTitle>
+              <AlertDescription>
+                La modifica genererà differenza vs importo bonificato.{" "}
+                {editTotalGross > originalTotalGross
+                  ? `Il retailer dovrà integrare € ${(editTotalGross - originalTotalGross).toFixed(2)}.`
+                  : `Va rimborsato al retailer € ${(originalTotalGross - editTotalGross).toFixed(2)}.`
+                }
+              </AlertDescription>
+            </Alert>
+          )}
+
+          <DialogFooter className="mt-6">
             <Button variant="outline" onClick={() => setEditItemsOpen(false)}>
               Annulla
             </Button>
@@ -1143,10 +1178,7 @@ export default function OrderDetail() {
                 editItems.some((it) => !it.productId || it.quantity <= 0)
               }
             >
-              {modifyItemsMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-              ) : null}
-              Salva Modifiche
+              {modifyItemsMutation.isPending ? "Salvataggio..." : "Salva Modifiche"}
             </Button>
           </DialogFooter>
         </DialogContent>
