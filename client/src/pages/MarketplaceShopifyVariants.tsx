@@ -3,10 +3,11 @@ import { Link, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -30,7 +31,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ArrowLeft, Package, RefreshCw, Search, Edit2 } from "lucide-react";
+import { ArrowLeft, Package, RefreshCw, Search, Edit2, Layers, Trash2, Plus } from "lucide-react";
 
 export default function MarketplaceShopifyVariants() {
   const searchString = useSearch();
@@ -41,6 +42,8 @@ export default function MarketplaceShopifyVariants() {
   const [onlyUnmapped, setOnlyUnmapped] = useState(initialUnmapped);
   const [page, setPage] = useState(0);
   const pageSize = 25;
+
+  const utils = trpc.useUtils();
 
   const { data, isLoading, refetch } = trpc.shopify.variants.list.useQuery({
     search: search || undefined,
@@ -61,7 +64,7 @@ export default function MarketplaceShopifyVariants() {
     onError: (err) => toast.error(err.message),
   });
 
-  // Edit dialog state
+  // ─── Edit Mapping Dialog ───────────────────────────────────────────────────
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editVariant, setEditVariant] = useState<any>(null);
   const [editProductId, setEditProductId] = useState<string>("");
@@ -90,6 +93,101 @@ export default function MarketplaceShopifyVariants() {
       productId: editProductId === "__none__" ? null : editProductId,
       multiplier: parseInt(editMultiplier) || 1,
     });
+  };
+
+  // ─── Bundle Dialog ─────────────────────────────────────────────────────────
+  const [bundleDialogOpen, setBundleDialogOpen] = useState(false);
+  const [bundleVariant, setBundleVariant] = useState<any>(null);
+  const [bundleComponents, setBundleComponents] = useState<
+    Array<{ productId: string; quantity: number }>
+  >([]);
+
+  const { data: existingComponents, refetch: refetchComponents } =
+    trpc.shopify.variants.getComponents.useQuery(
+      { variantId: bundleVariant?.id ?? "" },
+      { enabled: !!bundleVariant?.id && bundleDialogOpen },
+    );
+
+  const setBundleMutation = trpc.shopify.variants.setBundle.useMutation({
+    onSuccess: () => {
+      toast.success("Bundle salvato");
+      setBundleDialogOpen(false);
+      refetch();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const openBundleEditor = (variant: any) => {
+    setBundleVariant(variant);
+    setBundleComponents([]);
+    setBundleDialogOpen(true);
+  };
+
+  // When existing components load, populate the form
+  const populatedComponents = useMemo(() => {
+    if (existingComponents && existingComponents.length > 0 && bundleComponents.length === 0) {
+      return existingComponents.map((c) => ({
+        productId: c.productId,
+        quantity: c.quantity,
+      }));
+    }
+    return bundleComponents;
+  }, [existingComponents, bundleComponents]);
+
+  const activeComponents =
+    bundleComponents.length > 0 ? bundleComponents : populatedComponents;
+
+  const addComponent = () => {
+    setBundleComponents([...activeComponents, { productId: "", quantity: 1 }]);
+  };
+
+  const updateComponent = (index: number, field: string, value: any) => {
+    const updated = [...activeComponents];
+    (updated[index] as any)[field] = value;
+    setBundleComponents(updated);
+  };
+
+  const removeComponent = (index: number) => {
+    const updated = activeComponents.filter((_, i) => i !== index);
+    setBundleComponents(updated);
+  };
+
+  const handleSaveBundle = () => {
+    if (!bundleVariant) return;
+    const validComponents = activeComponents.filter(
+      (c) => c.productId && c.quantity > 0,
+    );
+    if (validComponents.length === 0) {
+      toast.error("Aggiungi almeno un componente al bundle");
+      return;
+    }
+    setBundleMutation.mutate({
+      variantId: bundleVariant.id,
+      isBundle: true,
+      components: validComponents,
+    });
+  };
+
+  // ─── Toggle Bundle ─────────────────────────────────────────────────────────
+  const toggleBundleMutation = trpc.shopify.variants.setBundle.useMutation({
+    onSuccess: () => {
+      refetch();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const handleToggleBundle = (variant: any, isBundle: boolean) => {
+    if (isBundle) {
+      // Open bundle editor
+      openBundleEditor(variant);
+    } else {
+      // Unset bundle
+      toggleBundleMutation.mutate({
+        variantId: variant.id,
+        isBundle: false,
+      });
+      toast.success("Bundle disattivato");
+    }
   };
 
   const totalPages = Math.ceil((data?.totalCount ?? 0) / pageSize);
@@ -167,7 +265,8 @@ export default function MarketplaceShopifyVariants() {
                 <TableRow>
                   <TableHead>SKU Shopify</TableHead>
                   <TableHead>Nome Shopify</TableHead>
-                  <TableHead>Prodotto Interno</TableHead>
+                  <TableHead className="text-center">Bundle</TableHead>
+                  <TableHead>Prodotto / Componenti</TableHead>
                   <TableHead className="text-center">Multiplier</TableHead>
                   <TableHead className="text-center">Stato</TableHead>
                   <TableHead className="text-right">Azioni</TableHead>
@@ -176,23 +275,40 @@ export default function MarketplaceShopifyVariants() {
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                       Caricamento...
                     </TableCell>
                   </TableRow>
                 ) : data?.items.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                       Nessuna variante trovata
                     </TableCell>
                   </TableRow>
                 ) : (
-                  data?.items.map((v) => (
+                  data?.items.map((v: any) => (
                     <TableRow key={v.id}>
                       <TableCell className="font-mono text-sm">{v.channelSku}</TableCell>
                       <TableCell className="max-w-[200px] truncate">{v.displayName}</TableCell>
+                      <TableCell className="text-center">
+                        <Switch
+                          checked={v.isBundle}
+                          onCheckedChange={(checked) => handleToggleBundle(v, checked)}
+                          disabled={toggleBundleMutation.isPending}
+                        />
+                      </TableCell>
                       <TableCell>
-                        {v.productName ? (
+                        {v.isBundle ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openBundleEditor(v)}
+                            className="gap-1"
+                          >
+                            <Layers className="h-3.5 w-3.5" />
+                            Modifica componenti
+                          </Button>
+                        ) : v.productName ? (
                           <span className="text-sm">
                             {v.productName}{" "}
                             <span className="text-muted-foreground">({v.productSku})</span>
@@ -201,20 +317,28 @@ export default function MarketplaceShopifyVariants() {
                           <Badge variant="destructive" className="text-xs">Non mappato</Badge>
                         )}
                       </TableCell>
-                      <TableCell className="text-center">{v.multiplier}×</TableCell>
+                      <TableCell className="text-center">
+                        {v.isBundle ? (
+                          <span className="text-muted-foreground text-xs">—</span>
+                        ) : (
+                          <span>{v.multiplier}×</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-center">
                         <Badge variant={v.isActive ? "default" : "secondary"}>
                           {v.isActive ? "Attivo" : "Disattivo"}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => openEditDialog(v)}
-                        >
-                          <Edit2 className="h-4 w-4" />
-                        </Button>
+                        {!v.isBundle && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => openEditDialog(v)}
+                          >
+                            <Edit2 className="h-4 w-4" />
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))
@@ -252,7 +376,7 @@ export default function MarketplaceShopifyVariants() {
         )}
       </div>
 
-      {/* Edit Mapping Dialog */}
+      {/* Edit Mapping Dialog (simple variant) */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
         <DialogContent>
           <DialogHeader>
@@ -304,6 +428,102 @@ export default function MarketplaceShopifyVariants() {
             </Button>
             <Button onClick={handleSaveMapping} disabled={updateMappingMutation.isPending}>
               {updateMappingMutation.isPending ? "Salvataggio..." : "Salva"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bundle Editor Dialog */}
+      <Dialog open={bundleDialogOpen} onOpenChange={setBundleDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Layers className="h-5 w-5" />
+              Componenti bundle: {bundleVariant?.displayName}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Definisci i prodotti interni che compongono questo bundle Shopify.
+              Lo stock del bundle sarà calcolato come il minimo tra i componenti.
+            </p>
+
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Prodotto</TableHead>
+                  <TableHead className="w-[100px]">Quantità</TableHead>
+                  <TableHead className="w-[50px]"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {activeComponents.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={3} className="text-center py-4 text-muted-foreground">
+                      Nessun componente. Clicca "Aggiungi componente" per iniziare.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  activeComponents.map((c, i) => (
+                    <TableRow key={i}>
+                      <TableCell>
+                        <Select
+                          value={c.productId || "__none__"}
+                          onValueChange={(v) =>
+                            updateComponent(i, "productId", v === "__none__" ? "" : v)
+                          }
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Seleziona prodotto..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">— Seleziona —</SelectItem>
+                            {productsList?.map((p: any) => (
+                              <SelectItem key={p.id} value={p.id}>
+                                {p.name} ({p.sku})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                      <TableCell>
+                        <Input
+                          type="number"
+                          min={1}
+                          value={c.quantity}
+                          onChange={(e) =>
+                            updateComponent(i, "quantity", parseInt(e.target.value) || 1)
+                          }
+                          className="w-[80px]"
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeComponent(i)}
+                          className="text-destructive hover:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+
+            <Button variant="outline" size="sm" onClick={addComponent} className="gap-1">
+              <Plus className="h-4 w-4" />
+              Aggiungi componente
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setBundleDialogOpen(false)}>
+              Annulla
+            </Button>
+            <Button onClick={handleSaveBundle} disabled={setBundleMutation.isPending}>
+              {setBundleMutation.isPending ? "Salvataggio..." : "Salva Bundle"}
             </Button>
           </DialogFooter>
         </DialogContent>

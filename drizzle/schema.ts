@@ -785,6 +785,7 @@ export const channelVariants = pgTable(
     displayName: varchar("displayName", { length: 255 }),
     multiplier: integer("multiplier").default(1).notNull(),
     isActive: boolean("isActive").default(true).notNull(),
+    isBundle: boolean("isBundle").default(false).notNull(),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -796,6 +797,33 @@ export const channelVariants = pgTable(
 );
 export type ChannelVariant = typeof channelVariants.$inferSelect;
 export type InsertChannelVariant = typeof channelVariants.$inferInsert;
+
+/**
+ * Channel variant components — per bundle: ogni componente con prodotto e quantità.
+ * Un bundle "BOX-COLAZIONE" può contenere: Pancake x2, Biscotti x1, Crema x1.
+ */
+export const channelVariantComponents = pgTable(
+  "channel_variant_components",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    channelVariantId: uuid("channelVariantId")
+      .notNull()
+      .references(() => channelVariants.id, { onDelete: "cascade" }),
+    productId: uuid("productId")
+      .notNull()
+      .references(() => products.id, { onDelete: "restrict" }),
+    quantity: integer("quantity").notNull(),
+    sortOrder: integer("sortOrder").default(0).notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("idx_channel_variant_components_variant").on(t.channelVariantId),
+    index("idx_channel_variant_components_product").on(t.productId),
+  ],
+);
+export type ChannelVariantComponent = typeof channelVariantComponents.$inferSelect;
+export type InsertChannelVariantComponent = typeof channelVariantComponents.$inferInsert;
 
 /**
  * Marketplace orders — ordini importati da canali esterni (Shopify, Amazon, etc.).

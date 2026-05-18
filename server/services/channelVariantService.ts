@@ -3,9 +3,16 @@
  * Syncs variants from Shopify and manages unmapped variants.
  * Performance: bulk upsert in chunks of 200 (avoids Vercel 60s timeout).
  */
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { channelVariants, salesStores } from "../../drizzle/schema";
+import {
+  channelVariants,
+  channelVariantComponents,
+  inventoryByBatch,
+  locations,
+  productBatches,
+  salesStores,
+} from "../../drizzle/schema";
 import { ShopifyClient, type ShopifyProduct } from "./shopifyService";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -204,6 +211,97 @@ export async function syncVariantsFromShopify(
     totalProducts: products.length,
     totalVariants: allRows.length,
   };
+}
+
+// ─── Compute Bundle Available Stock ──────────────────────────────────────────
+
+/**
+ * Compute available stock for a channel variant.
+ * For simple variants: sum(inventoryByBatch) / multiplier
+ * For bundles: min across components of floor(componentStock / componentQty)
+ */
+export async function computeVariantAvailableStock(
+  variantId: string,
+): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+
+  // 1. Load variant
+  const [variant] = await db
+    .select({
+      id: channelVariants.id,
+      productId: channelVariants.productId,
+      multiplier: channelVariants.multiplier,
+      isBundle: channelVariants.isBundle,
+    })
+    .from(channelVariants)
+    .where(eq(channelVariants.id, variantId))
+    .limit(1);
+
+  if (!variant) return 0;
+
+  // 2. Get central warehouse
+  const [warehouse] = await db
+    .select({ id: locations.id })
+    .from(locations)
+    .where(eq(locations.type, "central_warehouse"))
+    .limit(1);
+
+  if (!warehouse) return 0;
+
+  if (!variant.isBundle) {
+    // Simple variant: stock / multiplier
+    if (!variant.productId) return 0;
+    const stock = await getProductStockInWarehouse(variant.productId, warehouse.id);
+    return Math.floor(stock / variant.multiplier);
+  }
+
+  // Bundle: min across components
+  const components = await db
+    .select({
+      productId: channelVariantComponents.productId,
+      quantity: channelVariantComponents.quantity,
+    })
+    .from(channelVariantComponents)
+    .where(eq(channelVariantComponents.channelVariantId, variantId));
+
+  if (components.length === 0) return 0;
+
+  let minBundles = Infinity;
+  for (const c of components) {
+    const componentStock = await getProductStockInWarehouse(c.productId, warehouse.id);
+    const possibleBundles = Math.floor(componentStock / c.quantity);
+    minBundles = Math.min(minBundles, possibleBundles);
+  }
+
+  return minBundles === Infinity ? 0 : minBundles;
+}
+
+/**
+ * Helper: get total available stock for a product in a specific warehouse.
+ */
+async function getProductStockInWarehouse(
+  productId: string,
+  warehouseId: string,
+): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+
+  const [row] = await db
+    .select({
+      totalQty: sql<number>`COALESCE(SUM(${inventoryByBatch.quantity}), 0)::int`,
+    })
+    .from(inventoryByBatch)
+    .innerJoin(productBatches, eq(inventoryByBatch.batchId, productBatches.id))
+    .where(
+      and(
+        eq(productBatches.productId, productId),
+        eq(inventoryByBatch.locationId, warehouseId),
+        gt(inventoryByBatch.quantity, 0),
+      ),
+    );
+
+  return row?.totalQty ?? 0;
 }
 
 // ─── Get Unmapped Variants ───────────────────────────────────────────────────

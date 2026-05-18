@@ -6,6 +6,7 @@ import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import {
   channelVariants,
+  channelVariantComponents,
   inventoryByBatch,
   locations,
   marketplaceOrderItems,
@@ -196,81 +197,91 @@ export async function processStockForMarketplaceOrder(
   const errors: string[] = [];
   let processedCount = 0;
 
-  // 5. Process each item with productId
+  // 5. Process each item — resolve variant to determine simple vs bundle
   for (const item of items) {
-    if (!item.productId) {
-      errors.push(
-        `SKU "${item.channelSku}" (${item.displayName}): non mappato a prodotto interno`,
-      );
-      continue;
-    }
-
     try {
-      // FEFO: get available batches ordered by expiration
-      const availableBatches = await db
-        .select({
-          batchId: productBatches.id,
-          batchNumber: productBatches.batchNumber,
-          expirationDate: productBatches.expirationDate,
-          quantity: inventoryByBatch.quantity,
-          inventoryId: inventoryByBatch.id,
-        })
-        .from(productBatches)
-        .innerJoin(
-          inventoryByBatch,
-          and(
-            eq(inventoryByBatch.batchId, productBatches.id),
-            eq(inventoryByBatch.locationId, warehouse.id),
-          ),
-        )
-        .where(
-          and(
-            eq(productBatches.productId, item.productId),
-            gt(inventoryByBatch.quantity, 0),
-          ),
-        )
-        .orderBy(asc(productBatches.expirationDate));
-
-      let remaining = item.piecesQuantity;
-
-      // Greedy FEFO allocation
-      for (const batch of availableBatches) {
-        if (remaining <= 0) break;
-        const allocQty = Math.min(remaining, batch.quantity);
-
-        // Decrement central stock
-        await db
-          .update(inventoryByBatch)
-          .set({
-            quantity: batch.quantity - allocQty,
-            updatedAt: new Date(),
+      // Load channel variant to check isBundle
+      let variant: { id: string; productId: string | null; multiplier: number; isBundle: boolean } | null = null;
+      if (item.channelVariantId) {
+        const [v] = await db
+          .select({
+            id: channelVariants.id,
+            productId: channelVariants.productId,
+            multiplier: channelVariants.multiplier,
+            isBundle: channelVariants.isBundle,
           })
-          .where(eq(inventoryByBatch.id, batch.inventoryId));
-
-        // Create stock movement
-        await db.insert(stockMovements).values({
-          productId: item.productId,
-          type: "SHOPIFY_EXIT",
-          quantity: allocQty,
-          previousQuantity: batch.quantity,
-          newQuantity: batch.quantity - allocQty,
-          batchId: batch.batchId,
-          fromLocationId: warehouse.id,
-          toLocationId: null,
-          marketplaceOrderId,
-          notes: `Shopify order #${order.channelOrderNumber}`,
-          notesInternal: `Shopify order #${order.channelOrderNumber}, customer: ${order.customerName || order.customerEmail || "N/A"}, SKU: ${item.channelSku}, batch: ${batch.batchNumber}`,
-        });
-
-        remaining -= allocQty;
+          .from(channelVariants)
+          .where(eq(channelVariants.id, item.channelVariantId))
+          .limit(1);
+        variant = v || null;
       }
 
-      if (remaining > 0) {
-        errors.push(
-          `SKU "${item.channelSku}" (${item.displayName}): stock insufficiente, mancano ${remaining} pezzi su ${item.piecesQuantity} richiesti`,
-        );
+      if (variant?.isBundle) {
+        // ─── Bundle case: decrement each component separately ───
+        const components = await db
+          .select({
+            productId: channelVariantComponents.productId,
+            quantity: channelVariantComponents.quantity,
+          })
+          .from(channelVariantComponents)
+          .where(eq(channelVariantComponents.channelVariantId, variant.id));
+
+        if (components.length === 0) {
+          errors.push(
+            `SKU "${item.channelSku}" (${item.displayName}): bundle senza componenti configurati`,
+          );
+          continue;
+        }
+
+        let bundleOk = true;
+        for (const component of components) {
+          const requiredQty = component.quantity * item.channelQuantity;
+
+          const fefoResult = await decrementStockFEFO({
+            db,
+            productId: component.productId,
+            quantity: requiredQty,
+            warehouseId: warehouse.id,
+            marketplaceOrderId,
+            notes: `Shopify order #${order.channelOrderNumber}`,
+            notesInternal: `Shopify order #${order.channelOrderNumber}, bundle ${item.displayName} component, customer: ${order.customerName || order.customerEmail || "N/A"}, SKU: ${item.channelSku}`,
+          });
+
+          if (fefoResult.shortfall > 0) {
+            errors.push(
+              `SKU "${item.channelSku}" bundle component productId=${component.productId}: stock insufficiente, mancano ${fefoResult.shortfall} pezzi`,
+            );
+            bundleOk = false;
+          }
+        }
+
+        if (bundleOk) processedCount++;
       } else {
-        processedCount++;
+        // ─── Simple case: single product ───
+        if (!item.productId) {
+          errors.push(
+            `SKU "${item.channelSku}" (${item.displayName}): non mappato a prodotto interno`,
+          );
+          continue;
+        }
+
+        const fefoResult = await decrementStockFEFO({
+          db,
+          productId: item.productId,
+          quantity: item.piecesQuantity,
+          warehouseId: warehouse.id,
+          marketplaceOrderId,
+          notes: `Shopify order #${order.channelOrderNumber}`,
+          notesInternal: `Shopify order #${order.channelOrderNumber}, customer: ${order.customerName || order.customerEmail || "N/A"}, SKU: ${item.channelSku}`,
+        });
+
+        if (fefoResult.shortfall > 0) {
+          errors.push(
+            `SKU "${item.channelSku}" (${item.displayName}): stock insufficiente, mancano ${fefoResult.shortfall} pezzi su ${item.piecesQuantity} richiesti`,
+          );
+        } else {
+          processedCount++;
+        }
       }
     } catch (e: any) {
       errors.push(
@@ -358,4 +369,86 @@ export async function retryFailedOrders(
   );
 
   return { retried: failedOrders.length, succeeded };
+}
+
+// ─── FEFO Decrement Helper ──────────────────────────────────────────────────
+
+interface DecrementStockFEFOParams {
+  db: any;
+  productId: string;
+  quantity: number;
+  warehouseId: string;
+  marketplaceOrderId: string;
+  notes: string;
+  notesInternal: string;
+}
+
+async function decrementStockFEFO(
+  params: DecrementStockFEFOParams,
+): Promise<{ allocated: number; shortfall: number }> {
+  const { db, productId, quantity, warehouseId, marketplaceOrderId, notes, notesInternal } = params;
+
+  // FEFO: get available batches ordered by expiration
+  const availableBatches = await db
+    .select({
+      batchId: productBatches.id,
+      batchNumber: productBatches.batchNumber,
+      expirationDate: productBatches.expirationDate,
+      quantity: inventoryByBatch.quantity,
+      inventoryId: inventoryByBatch.id,
+    })
+    .from(productBatches)
+    .innerJoin(
+      inventoryByBatch,
+      and(
+        eq(inventoryByBatch.batchId, productBatches.id),
+        eq(inventoryByBatch.locationId, warehouseId),
+      ),
+    )
+    .where(
+      and(
+        eq(productBatches.productId, productId),
+        gt(inventoryByBatch.quantity, 0),
+      ),
+    )
+    .orderBy(asc(productBatches.expirationDate));
+
+  let remaining = quantity;
+
+  // Greedy FEFO allocation
+  for (const batch of availableBatches) {
+    if (remaining <= 0) break;
+    const allocQty = Math.min(remaining, batch.quantity);
+
+    // Decrement central stock
+    await db
+      .update(inventoryByBatch)
+      .set({
+        quantity: batch.quantity - allocQty,
+        updatedAt: new Date(),
+      })
+      .where(eq(inventoryByBatch.id, batch.inventoryId));
+
+    // Create stock movement
+    await db.insert(stockMovements).values({
+      productId,
+      type: "SHOPIFY_EXIT",
+      quantity: allocQty,
+      previousQuantity: batch.quantity,
+      newQuantity: batch.quantity - allocQty,
+      batchId: batch.batchId,
+      fromLocationId: warehouseId,
+      toLocationId: null,
+      marketplaceOrderId,
+      notes,
+      notesInternal: `${notesInternal}, batch: ${batch.batchNumber}`,
+    });
+
+    remaining -= allocQty;
+  }
+
+  return {
+    allocated: quantity - remaining,
+    shortfall: remaining,
+  };
 }

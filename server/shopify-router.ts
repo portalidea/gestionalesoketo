@@ -10,6 +10,7 @@ import { router, staffProcedure, staffProcedureLongRunning } from "./_core/trpc"
 import { getDb } from "./db";
 import {
   channelVariants,
+  channelVariantComponents,
   inventoryByBatch,
   locations,
   marketplaceOrderItems,
@@ -28,6 +29,7 @@ import {
 import {
   syncVariantsFromShopify,
   getVariantCounts,
+  computeVariantAvailableStock,
   type SyncVariantsResult,
 } from "./services/channelVariantService";
 
@@ -291,6 +293,136 @@ export const shopifyRouter = router({
         );
 
         return { success: true };
+      }),
+
+    setBundle: staffProcedure
+      .input(
+        z.object({
+          variantId: z.string().uuid(),
+          isBundle: z.boolean(),
+          components: z
+            .array(
+              z.object({
+                productId: z.string().uuid(),
+                quantity: z.number().int().min(1),
+              }),
+            )
+            .optional(),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+        // Verify variant exists
+        const [variant] = await db
+          .select({ id: channelVariants.id })
+          .from(channelVariants)
+          .where(eq(channelVariants.id, input.variantId))
+          .limit(1);
+
+        if (!variant)
+          throw new TRPCError({ code: "NOT_FOUND", message: "Variant non trovata" });
+
+        if (input.isBundle) {
+          // Validate components
+          if (!input.components || input.components.length === 0) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Un bundle deve avere almeno un componente",
+            });
+          }
+
+          // Validate all productIds exist
+          const productIds = input.components.map((c) => c.productId);
+          const existingProducts = await db
+            .select({ id: products.id })
+            .from(products)
+            .where(inArray(products.id, productIds));
+
+          if (existingProducts.length !== new Set(productIds).size) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Uno o pi\u00f9 prodotti componente non trovati",
+            });
+          }
+
+          // Transaction: update variant + replace components
+          await db.transaction(async (tx: any) => {
+            // Set isBundle=true, clear productId (bundle doesn't map to single product)
+            await tx
+              .update(channelVariants)
+              .set({
+                isBundle: true,
+                productId: null,
+                updatedAt: new Date(),
+              })
+              .where(eq(channelVariants.id, input.variantId));
+
+            // Delete existing components
+            await tx
+              .delete(channelVariantComponents)
+              .where(eq(channelVariantComponents.channelVariantId, input.variantId));
+
+            // Insert new components
+            await tx.insert(channelVariantComponents).values(
+              input.components!.map((c, i) => ({
+                channelVariantId: input.variantId,
+                productId: c.productId,
+                quantity: c.quantity,
+                sortOrder: i,
+              })),
+            );
+          });
+
+          console.log(
+            `[shopify.variants.setBundle] variantId=${input.variantId} set as bundle with ${input.components.length} components`,
+          );
+        } else {
+          // Unset bundle: remove components, set isBundle=false
+          await db.transaction(async (tx: any) => {
+            await tx
+              .delete(channelVariantComponents)
+              .where(eq(channelVariantComponents.channelVariantId, input.variantId));
+
+            await tx
+              .update(channelVariants)
+              .set({
+                isBundle: false,
+                updatedAt: new Date(),
+              })
+              .where(eq(channelVariants.id, input.variantId));
+          });
+
+          console.log(
+            `[shopify.variants.setBundle] variantId=${input.variantId} unset bundle`,
+          );
+        }
+
+        return { success: true };
+      }),
+
+    getComponents: staffProcedure
+      .input(z.object({ variantId: z.string().uuid() }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+        const components = await db
+          .select({
+            id: channelVariantComponents.id,
+            productId: channelVariantComponents.productId,
+            productName: products.name,
+            productSku: products.sku,
+            quantity: channelVariantComponents.quantity,
+            sortOrder: channelVariantComponents.sortOrder,
+          })
+          .from(channelVariantComponents)
+          .leftJoin(products, eq(channelVariantComponents.productId, products.id))
+          .where(eq(channelVariantComponents.channelVariantId, input.variantId))
+          .orderBy(asc(channelVariantComponents.sortOrder));
+
+        return components;
       }),
   }),
 
@@ -615,17 +747,23 @@ export const shopifyRouter = router({
         if (!warehouse)
           throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Magazzino centrale non configurato" });
 
-        // Get active variants with product mapping
+        // Get active variants (both mapped simple + bundles)
         const conditions: any[] = [
           eq(channelVariants.storeId, store.id),
           eq(channelVariants.isActive, true),
         ];
 
         if (input.productIds && input.productIds.length > 0) {
+          // Filter by productId only for non-bundle variants
           conditions.push(inArray(channelVariants.productId, input.productIds));
         } else {
-          // Only sync mapped variants
-          conditions.push(sql`${channelVariants.productId} IS NOT NULL`);
+          // Sync mapped variants + bundles
+          conditions.push(
+            or(
+              sql`${channelVariants.productId} IS NOT NULL`,
+              eq(channelVariants.isBundle, true),
+            ),
+          );
         }
 
         const variants = await db
@@ -635,12 +773,13 @@ export const shopifyRouter = router({
             channelVariantId: channelVariants.channelVariantId,
             channelSku: channelVariants.channelSku,
             multiplier: channelVariants.multiplier,
+            isBundle: channelVariants.isBundle,
           })
           .from(channelVariants)
           .where(and(...conditions));
 
         console.log(
-          `[shopify.stock.syncToShopify] syncing ${variants.length} variants`,
+          `[shopify.stock.syncToShopify] syncing ${variants.length} variants (incl bundles)`,
         );
 
         // Fetch Shopify locations (we need the primary location)
@@ -655,34 +794,21 @@ export const shopifyRouter = router({
         const errors: Array<{ productId: string; sku: string; error: string }> = [];
 
         for (const variant of variants) {
-          if (!variant.productId || !variant.channelVariantId) {
+          if (!variant.channelVariantId) {
+            skipped++;
+            continue;
+          }
+
+          // Skip non-bundle variants without productId
+          if (!variant.isBundle && !variant.productId) {
             skipped++;
             continue;
           }
 
           try {
-            // Calculate available stock in central warehouse for this product
-            const stockRows = await db
-              .select({
-                totalQty: sql<number>`COALESCE(SUM(${inventoryByBatch.quantity}), 0)::int`,
-              })
-              .from(inventoryByBatch)
-              .innerJoin(productBatches, eq(inventoryByBatch.batchId, productBatches.id))
-              .where(
-                and(
-                  eq(productBatches.productId, variant.productId),
-                  eq(inventoryByBatch.locationId, warehouse.id),
-                  gt(inventoryByBatch.quantity, 0),
-                ),
-              );
+            // Use computeVariantAvailableStock for both simple and bundle variants
+            const available = await computeVariantAvailableStock(variant.id);
 
-            const masterStock = stockRows[0]?.totalQty ?? 0;
-            const available = Math.floor(masterStock / variant.multiplier);
-
-            // We need the inventory_item_id for the variant
-            // For now, we use the channelVariantId as a proxy
-            // In a real scenario, we'd need to fetch the inventory_item_id from Shopify
-            // This is a simplification - the variant ID needs to be mapped to inventory_item_id
             // TODO: Store inventory_item_id in channel_variants for direct access
             await client.updateInventoryLevel(
               parseInt(variant.channelVariantId),
@@ -693,7 +819,7 @@ export const shopifyRouter = router({
             synced++;
           } catch (e: any) {
             errors.push({
-              productId: variant.productId,
+              productId: variant.productId || "bundle",
               sku: variant.channelSku,
               error: e.message,
             });
