@@ -15,6 +15,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarProvider,
   SidebarTrigger,
   useSidebar,
@@ -24,6 +27,7 @@ import {
   AlertTriangle,
   ArrowLeftRight,
   BarChart3,
+  ChevronDown,
   Euro,
   Factory,
   FileText,
@@ -33,17 +37,31 @@ import {
   Package,
   PanelLeft,
   Plug,
+  ShoppingBag,
   ShoppingCart,
   Store,
   Tag,
+  TrendingUp,
   Users,
   Warehouse,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { useLocation, Redirect } from "wouter";
 import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 
-const baseMenuItems = [
+type MenuItem = {
+  icon: any;
+  label: string;
+  path: string;
+  children?: Array<{ icon: any; label: string; path: string }>;
+};
+
+const baseMenuItems: MenuItem[] = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/" },
   { icon: Factory, label: "Produttori", path: "/producers" },
   { icon: Package, label: "Prodotti", path: "/products" },
@@ -56,10 +74,19 @@ const baseMenuItems = [
   { icon: Euro, label: "Commissioni", path: "/affiliates/commissions" },
   { icon: Plug, label: "Marketplace", path: "/marketplace/shopify" },
   { icon: AlertTriangle, label: "Alert", path: "/alerts" },
-  { icon: BarChart3, label: "Reportistica", path: "/reports" },
+  {
+    icon: BarChart3,
+    label: "Reportistica",
+    path: "/reports",
+    children: [
+      { icon: Warehouse, label: "Magazzino", path: "/reports/warehouse" },
+      { icon: TrendingUp, label: "Vendite & Ordini", path: "/reports/sales" },
+      { icon: ShoppingBag, label: "Marketplace", path: "/reports/marketplace" },
+    ],
+  },
 ];
 
-const adminMenuItems = [
+const adminMenuItems: MenuItem[] = [
   { icon: Tag, label: "Pacchetti", path: "/settings/packages" },
   { icon: Users, label: "Team", path: "/settings/team" },
   { icon: Plug, label: "Integrazioni", path: "/settings/integrations" },
@@ -197,6 +224,45 @@ function DashboardLayoutContent({
           <SidebarContent className="gap-0">
             <SidebarMenu className="px-2 py-1">
               {menuItems.map(item => {
+                if (item.children) {
+                  const isGroupActive = location.startsWith(item.path);
+                  return (
+                    <Collapsible key={item.path} defaultOpen={isGroupActive} className="group/collapsible">
+                      <SidebarMenuItem>
+                        <CollapsibleTrigger asChild>
+                          <SidebarMenuButton
+                            isActive={isGroupActive}
+                            tooltip={item.label}
+                            className="h-10 transition-all font-normal"
+                          >
+                            <item.icon className={`h-4 w-4 ${isGroupActive ? "text-primary" : ""}`} />
+                            <span>{item.label}</span>
+                            <ChevronDown className="ml-auto h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
+                          </SidebarMenuButton>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <SidebarMenuSub>
+                            {item.children.map(sub => {
+                              const isSubActive = location === sub.path;
+                              return (
+                                <SidebarMenuSubItem key={sub.path}>
+                                  <SidebarMenuSubButton
+                                    isActive={isSubActive}
+                                    onClick={() => setLocation(sub.path)}
+                                    className="h-9"
+                                  >
+                                    <sub.icon className={`h-3.5 w-3.5 ${isSubActive ? "text-primary" : ""}`} />
+                                    <span>{sub.label}</span>
+                                  </SidebarMenuSubButton>
+                                </SidebarMenuSubItem>
+                              );
+                            })}
+                          </SidebarMenuSub>
+                        </CollapsibleContent>
+                      </SidebarMenuItem>
+                    </Collapsible>
+                  );
+                }
                 const isActive = location === item.path;
                 return (
                   <SidebarMenuItem key={item.path}>
