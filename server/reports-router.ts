@@ -68,7 +68,7 @@ const warehouseRouter = router({
       }>(sql`
         SELECT
           COALESCE(SUM(ibb."quantity" * p."costPrice"), 0)::float AS "totalValueAtCost",
-          COALESCE(SUM(ibb."quantity" * p."unitPrice" / COALESCE(NULLIF(p."piecesPerUnit", 0), 1)), 0)::float AS "totalValueAtListPrice",
+          COALESCE(SUM(ibb."quantity" * NULLIF(p."unitPrice", '')::numeric / COALESCE(NULLIF(p."piecesPerUnit", 0), 1)), 0)::float AS "totalValueAtListPrice",
           COALESCE(SUM(ibb."quantity"), 0)::int AS "totalUnits",
           COUNT(DISTINCT p."id")::int AS "uniqueSkus",
           COUNT(DISTINCT pb."id")::int AS "totalBatches"
