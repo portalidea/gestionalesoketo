@@ -1,4 +1,5 @@
 import { useState } from "react";
+import DashboardLayout from "@/components/DashboardLayout";
 import { trpc } from "@/lib/trpc";
 import {
   ReportLayout,
@@ -93,11 +94,13 @@ export default function SalesReport() {
 
   const data = overview.data;
   const isLoading = overview.isLoading;
+  const overviewError = overview.error;
 
   const topRetailerName = data?.topRetailers?.[0]?.name ?? "-";
   const topRetailerRevenue = data?.topRetailers?.[0]?.revenue ?? 0;
 
   return (
+    <DashboardLayout>
     <ReportLayout
       title="Report Vendite & Ordini"
       dateRange={dateRange}
@@ -111,6 +114,8 @@ export default function SalesReport() {
     >
       {isLoading ? (
         <div className="text-center py-12 text-muted-foreground">Caricamento...</div>
+      ) : overviewError ? (
+        <div className="text-center py-12 text-red-500">Errore: {overviewError.message}</div>
       ) : !data ? (
         <div className="text-center py-12 text-muted-foreground">Nessun dato disponibile</div>
       ) : (
@@ -432,5 +437,6 @@ export default function SalesReport() {
         </>
       )}
     </ReportLayout>
+    </DashboardLayout>
   );
 }

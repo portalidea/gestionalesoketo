@@ -1,4 +1,5 @@
 import { Link } from "wouter";
+import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Warehouse, ShoppingCart, ShoppingBag, ArrowRight } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -55,6 +56,7 @@ export default function ReportsHub() {
   ];
 
   return (
+    <DashboardLayout>
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Reportistica</h1>
       <p className="text-muted-foreground">
@@ -85,5 +87,6 @@ export default function ReportsHub() {
         ))}
       </div>
     </div>
+    </DashboardLayout>
   );
 }

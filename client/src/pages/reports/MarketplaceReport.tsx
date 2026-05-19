@@ -1,4 +1,5 @@
 import { useState } from "react";
+import DashboardLayout from "@/components/DashboardLayout";
 import { trpc } from "@/lib/trpc";
 import {
   ReportLayout,
@@ -70,8 +71,10 @@ export default function MarketplaceReport() {
 
   const data = overview.data;
   const isLoading = overview.isLoading;
+  const overviewError = overview.error;
 
   return (
+    <DashboardLayout>
     <ReportLayout
       title="Report Marketplace"
       dateRange={dateRange}
@@ -82,6 +85,8 @@ export default function MarketplaceReport() {
     >
       {isLoading ? (
         <div className="text-center py-12 text-muted-foreground">Caricamento...</div>
+      ) : overviewError ? (
+        <div className="text-center py-12 text-red-500">Errore: {overviewError.message}</div>
       ) : !data ? (
         <div className="text-center py-12 text-muted-foreground">Nessun dato disponibile</div>
       ) : (
@@ -346,5 +351,6 @@ export default function MarketplaceReport() {
         </>
       )}
     </ReportLayout>
+    </DashboardLayout>
   );
 }
