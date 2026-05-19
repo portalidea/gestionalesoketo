@@ -30,6 +30,7 @@ import { retailerSelfServiceRouter } from "./retailer-selfservice-router";
 import { affiliatesRouter } from "./affiliates-router";
 import { affiliatePortalRouter } from "./affiliate-portal-router";
 import { shopifyRouter } from "./shopify-router";
+import { reportsRouter } from "./reports-router";
 
 
 const uuid = z.string().uuid();
@@ -1422,6 +1423,8 @@ export const appRouter = router({
 
   // ============= M8.1 — SHOPIFY MARKETPLACE =============
   shopify: shopifyRouter,
+  // ============= M9 — REPORTS =============
+  reports: reportsRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -19,7 +19,6 @@ import ProducerDetail from "./pages/ProducerDetail";
 import Producers from "./pages/Producers";
 import ProductDetail from "./pages/ProductDetail";
 import Products from "./pages/Products";
-import Reports from "./pages/Reports";
 import RetailerDetail from "./pages/RetailerDetail";
 import Retailers from "./pages/Retailers";
 import Team from "./pages/Team";
@@ -50,6 +49,10 @@ import MarketplaceShopify from "./pages/MarketplaceShopify";
 import MarketplaceShopifyVariants from "./pages/MarketplaceShopifyVariants";
 import MarketplaceShopifyOrders from "./pages/MarketplaceShopifyOrders";
 import MarketplaceShopifyOrderDetail from "./pages/MarketplaceShopifyOrderDetail";
+import ReportsHub from "./pages/reports/ReportsHub";
+import WarehouseReport from "./pages/reports/WarehouseReport";
+import SalesReport from "./pages/reports/SalesReport";
+import MarketplaceReport from "./pages/reports/MarketplaceReport";
 
 const ADMIN_ROLES = ["admin", "operator", "viewer"];
 const RETAILER_ROLES = ["retailer_admin", "retailer_user"];
@@ -200,8 +203,17 @@ function Router() {
       <Route path="/alerts">
         <RequireRole allowedRoles={ADMIN_ROLES}><Alerts /></RequireRole>
       </Route>
+      <Route path="/reports/warehouse">
+        <RequireRole allowedRoles={ADMIN_ROLES}><WarehouseReport /></RequireRole>
+      </Route>
+      <Route path="/reports/sales">
+        <RequireRole allowedRoles={ADMIN_ROLES}><SalesReport /></RequireRole>
+      </Route>
+      <Route path="/reports/marketplace">
+        <RequireRole allowedRoles={ADMIN_ROLES}><MarketplaceReport /></RequireRole>
+      </Route>
       <Route path="/reports">
-        <RequireRole allowedRoles={ADMIN_ROLES}><Reports /></RequireRole>
+        <RequireRole allowedRoles={ADMIN_ROLES}><ReportsHub /></RequireRole>
       </Route>
       <Route path="/settings/team">
         <RequireRole allowedRoles={["admin"]}><Team /></RequireRole>
