@@ -42,6 +42,37 @@ function formatDateIT(isoDate: string): string {
   }
 }
 
+/**
+ * Compute payments_list amount using Italian fiscal rule:
+ * VAT is calculated on the total net per VAT group, NOT per-row.
+ * This matches how FiC calculates amount_gross internally.
+ */
+function computePaymentsAmount(items: Array<{
+  quantity: number;
+  unitPrice: number;  // net price per unit (already discounted)
+  vatRate: number;    // 10 or 22
+}>): number {
+  // Aggregate net total per VAT group
+  const vatGroups: Record<string, number> = {};
+  for (const item of items) {
+    const lineNet = item.quantity * item.unitPrice;
+    const vatKey = item.vatRate.toString();
+    vatGroups[vatKey] = (vatGroups[vatKey] ?? 0) + lineNet;
+  }
+
+  let totalGross = 0;
+  for (const [vatRateStr, totalNet] of Object.entries(vatGroups)) {
+    const vatRate = parseFloat(vatRateStr);
+    // Round net to 2 decimals first (half-up with EPSILON)
+    const netRounded = Math.round((totalNet + Number.EPSILON) * 100) / 100;
+    const vat = Math.round((netRounded * vatRate / 100 + Number.EPSILON) * 100) / 100;
+    totalGross += netRounded + vat;
+  }
+
+  // Final rounding
+  return Math.round((totalGross + Number.EPSILON) * 100) / 100;
+}
+
 // --- Interfaces ---
 
 export interface FicProformaItem {
@@ -124,21 +155,18 @@ export async function createProforma(
     };
   });
 
-  // ALWAYS compute totalGross from items per-row (like FiC does internally)
-  // Never use input.totalGross — it may be stale after modifyOrderItems
-  const totalGross = itemsWithVat.reduce((sum, item) => {
-    const itemNet = item.qty * item.net_price;
-    const itemGross = itemNet * (1 + item._vatRate / 100);
-    return sum + itemGross;
-  }, 0);
-
   // Strip internal _vatRate before sending to FiC
   const items_list = itemsWithVat.map(({ _vatRate, ...rest }) => rest);
 
-  console.log('[ficDocService.createProforma] computed totals', {
+  // Compute payments amount using Italian fiscal rule: VAT on total net per VAT group
+  const paymentsAmount = computePaymentsAmount(
+    itemsWithVat.map((item) => ({ quantity: item.qty, unitPrice: item.net_price, vatRate: item._vatRate }))
+  );
+
+  console.log('[ficDocService.createProforma] payments calc', {
     itemsCount: items_list.length,
     itemsSumNet: items_list.reduce((s, i) => s + i.qty * i.net_price, 0).toFixed(2),
-    totalGross: (Math.round(totalGross * 100) / 100).toFixed(2),
+    totalGross: paymentsAmount.toFixed(2),
   });
 
   // Fetch entity from FiC
@@ -156,7 +184,7 @@ export async function createProforma(
       items_list,
       payments_list: [
         {
-          amount: Math.round(totalGross * 100) / 100,
+          amount: paymentsAmount,
           due_date: new Date().toISOString().slice(0, 10),
           status: "not_paid" as const,
         },
@@ -243,19 +271,17 @@ export async function modifyProforma(
     };
   });
 
-  // ALWAYS compute totalGross from items per-row (like FiC does internally)
-  const totalGross = itemsWithVat.reduce((sum, item) => {
-    const itemNet = item.qty * item.net_price;
-    const itemGross = itemNet * (1 + item._vatRate / 100);
-    return sum + itemGross;
-  }, 0);
-
   const items_list = itemsWithVat.map(({ _vatRate, ...rest }) => rest);
 
-  console.log('[ficDocService.modifyProforma] computed totals', {
+  // Compute payments amount using Italian fiscal rule: VAT on total net per VAT group
+  const paymentsAmount = computePaymentsAmount(
+    itemsWithVat.map((item) => ({ quantity: item.qty, unitPrice: item.net_price, vatRate: item._vatRate }))
+  );
+
+  console.log('[ficDocService.modifyProforma] payments calc', {
     itemsCount: items_list.length,
     itemsSumNet: items_list.reduce((s, i) => s + i.qty * i.net_price, 0).toFixed(2),
-    totalGross: (Math.round(totalGross * 100) / 100).toFixed(2),
+    totalGross: paymentsAmount.toFixed(2),
   });
 
   const ficEntity = await getFicClientById(input.retailerFicClientId);
@@ -272,7 +298,7 @@ export async function modifyProforma(
       items_list,
       payments_list: [
         {
-          amount: Math.round(totalGross * 100) / 100,
+          amount: paymentsAmount,
           due_date: new Date().toISOString().slice(0, 10),
           status: "not_paid" as const,
         },

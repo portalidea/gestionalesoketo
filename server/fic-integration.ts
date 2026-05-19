@@ -510,6 +510,32 @@ function findPaymentMethodId(methods: FicPaymentMethod[], nameHint: string): num
 }
 
 /**
+ * Compute payments_list amount using Italian fiscal rule:
+ * VAT is calculated on the total net per VAT group, NOT per-row.
+ * This matches how FiC calculates amount_gross internally.
+ */
+function computePaymentsAmount(items: Array<{
+  quantity: number;
+  unitPrice: number;
+  vatRate: number;
+}>): number {
+  const vatGroups: Record<string, number> = {};
+  for (const item of items) {
+    const lineNet = item.quantity * item.unitPrice;
+    const vatKey = item.vatRate.toString();
+    vatGroups[vatKey] = (vatGroups[vatKey] ?? 0) + lineNet;
+  }
+  let totalGross = 0;
+  for (const [vatRateStr, totalNet] of Object.entries(vatGroups)) {
+    const vatRate = parseFloat(vatRateStr);
+    const netRounded = Math.round((totalNet + Number.EPSILON) * 100) / 100;
+    const vat = Math.round((netRounded * vatRate / 100 + Number.EPSILON) * 100) / 100;
+    totalGross += netRounded + vat;
+  }
+  return Math.round((totalGross + Number.EPSILON) * 100) / 100;
+}
+
+/**
  * Crea proforma su FiC dato payload retailer-side.
  *
  * Ritorna {id, number} su success, throw su qualsiasi errore (rete, 4xx,
@@ -518,7 +544,7 @@ function findPaymentMethodId(methods: FicPaymentMethod[], nameHint: string): num
  * M6.2.A FIX:
  * - vat.id (ID del vat_type FiC) invece di vat.value
  * - payment_method.id (ID del payment_method FiC) invece di name
- * - payments_list con singola rata = totalGross
+ * - payments_list con singola rata calcolata con regola fiscale italiana
  */
 export async function createFicProforma(input: {
   ficClientId: number;
@@ -560,25 +586,25 @@ export async function createFicProforma(input: {
       not_taxable: false,
     };
   });
-  // ALWAYS compute totalGross from items_list per-row (like FiC does internally)
-  // Never use input.totalGross — it may be stale after modifyOrderItems
-  const totalGross = input.items.reduce((sum, it) => {
-    const vatRate = parseFloat(it.vatRate);
-    const itemNet = parseFloat(it.unitPriceFinal) * it.qty;
-    const itemGross = itemNet * (1 + vatRate / 100);
-    return sum + itemGross;
-  }, 0);
+  // Compute payments amount using Italian fiscal rule: VAT on total net per VAT group
+  const paymentsAmount = computePaymentsAmount(
+    input.items.map((it) => ({
+      quantity: it.qty,
+      unitPrice: parseFloat(it.unitPriceFinal),
+      vatRate: parseFloat(it.vatRate),
+    }))
+  );
 
-  console.log('[fic:createProforma] computed totals', {
+  console.log('[fic:createProforma] payments calc', {
     itemsCount: items_list.length,
     itemsSumNet: items_list.reduce((s, i) => s + i.qty * i.net_price, 0).toFixed(2),
-    totalGross: (Math.round(totalGross * 100) / 100).toFixed(2),
+    totalGross: paymentsAmount.toFixed(2),
   });
 
-  // payments_list: singola rata = totale lordo documento (calcolato da items)
+  // payments_list: singola rata = totale lordo documento (regola fiscale italiana)
   const payments_list = [
     {
-      amount: Math.round(totalGross * 100) / 100,
+      amount: paymentsAmount,
       due_date: input.date,
       status: "not_paid" as const,
     },
