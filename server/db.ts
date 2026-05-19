@@ -1787,7 +1787,7 @@ export async function calculatePricingForRetailer(input: {
     .where(sql`${products.id} = ANY(${productIds}::uuid[])`);
   const prodMap = new Map(prodRows.map((p) => [p.id, p] as const));
 
-  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
   const discount = parseFloat(pkg.discountPercent);
 
   let subtotalNet = 0;

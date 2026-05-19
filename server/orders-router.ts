@@ -1208,7 +1208,7 @@ export const ordersRouter = router({
       }
 
       const listPrice = parseFloat(product.unitPrice || "0");
-      const discountedPrice = +(listPrice * (1 - discountPercent / 100)).toFixed(2);
+      const discountedPrice = Math.round((listPrice * (1 - discountPercent / 100) + Number.EPSILON) * 100) / 100;
       const vatRate = parseFloat(product.vatRate);
 
       return {
