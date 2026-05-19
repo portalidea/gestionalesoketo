@@ -301,10 +301,14 @@ export const ordersRouter = router({
             )
             .orderBy(asc(productBatches.expirationDate));
 
-          // Greedy FEFO allocation
+          // Greedy FEFO allocation — remaining è in confezioni, centralStock in pezzi
+          const piecesPerUnitVal = pi.piecesPerUnit ?? 1;
           for (const batch of availableBatches) {
             if (remaining <= 0) break;
-            const allocQty = Math.min(remaining, batch.centralStock);
+            // Converti stock pezzi in confezioni disponibili da questo lotto
+            const batchConfezioni = Math.floor(batch.centralStock / piecesPerUnitVal);
+            if (batchConfezioni <= 0) continue;
+            const allocQty = Math.min(remaining, batchConfezioni);
             allocations.push({
               productId: pi.productId,
               batchId: batch.batchId,
@@ -1060,7 +1064,7 @@ export const ordersRouter = router({
 
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
 
-      // Get all items with batch assigned
+      // Get all items with batch assigned + piecesPerUnit from products
       const items = await db
         .select({
           id: orderItems.id,
@@ -1068,8 +1072,10 @@ export const ordersRouter = router({
           batchId: orderItems.batchId,
           quantity: orderItems.quantity,
           productName: orderItems.productName,
+          piecesPerUnit: products.piecesPerUnit,
         })
         .from(orderItems)
+        .leftJoin(products, eq(orderItems.productId, products.id))
         .where(eq(orderItems.orderId, input.orderId));
 
       // Import transferBatchToRetailer from db.ts
@@ -1079,16 +1085,19 @@ export const ordersRouter = router({
       const transferResults: string[] = [];
       for (const item of items) {
         if (!item.batchId) continue; // should not happen (validated by state machine)
+        // CRITICO: quantity è in confezioni, inventoryByBatch è in pezzi singoli
+        const ppu = item.piecesPerUnit ?? 1;
+        const piecesToTransfer = item.quantity * ppu;
         try {
           await transferBatchToRetailer({
             productId: item.productId,
             batchId: item.batchId,
             retailerId: order.retailerId!,
-            quantity: item.quantity,
-            notes: `Ordine ${input.orderId} — trasferimento automatico`,
+            quantity: piecesToTransfer,
+            notes: `Ordine ${input.orderId} — ${item.quantity} conf. × ${ppu} = ${piecesToTransfer} pezzi`,
             createdBy: ctx.user.id,
           });
-          transferResults.push(`${item.productName}: ${item.quantity} conf. trasferite`);
+          transferResults.push(`${item.productName}: ${item.quantity} conf. (${piecesToTransfer} pezzi) trasferite`);
         } catch (e: any) {
           console.error(`[startTransfer] TRANSFER failed for item ${item.id}: ${e.message}`);
           // Don't block the transition — log and continue
@@ -1287,9 +1296,13 @@ export const ordersRouter = router({
             .innerJoin(inventoryByBatch, and(eq(inventoryByBatch.batchId, productBatches.id), eq(inventoryByBatch.locationId, warehouse.id)))
             .where(and(eq(productBatches.productId, pi.productId), gt(inventoryByBatch.quantity, 0)))
             .orderBy(asc(productBatches.expirationDate));
+          // remaining è in confezioni, centralStock in pezzi
+          const piecesPerUnitVal = pi.piecesPerUnit ?? 1;
           for (const batch of availableBatches) {
             if (remaining <= 0) break;
-            const allocQty = Math.min(remaining, batch.centralStock);
+            const batchConfezioni = Math.floor(batch.centralStock / piecesPerUnitVal);
+            if (batchConfezioni <= 0) continue;
+            const allocQty = Math.min(remaining, batchConfezioni);
             allocations.push({ productId: pi.productId, batchId: batch.batchId, quantity: allocQty, batchNumber: batch.batchNumber, expirationDate: batch.expirationDate });
             remaining -= allocQty;
           }

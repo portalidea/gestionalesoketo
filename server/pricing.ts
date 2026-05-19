@@ -148,15 +148,16 @@ export async function calculateOrderPricing(
     sumVat += lineVat;
     sumGross += lineTotalGross;
 
-    // Stock check (soft warning)
-    const stockAvailable = stockMap.get(item.productId) ?? 0;
-    const stockWarning = item.quantity > stockAvailable;
+     // Stock check (soft warning) — stockMap è in pezzi, convertiamo in confezioni
+    const stockPieces = stockMap.get(item.productId) ?? 0;
+    const ppu = piecesPerUnit ?? 1;
+    const stockAvailableConf = Math.floor(stockPieces / ppu);
+    const stockWarning = item.quantity > stockAvailableConf;
     if (stockWarning) {
       warnings.push(
-        `${product.name}: richieste ${item.quantity} conf, disponibili ${stockAvailable} conf`,
+        `${product.name}: richieste ${item.quantity} conf, disponibili ${stockAvailableConf} conf`,
       );
     }
-
     pricedItems.push({
       productId: item.productId,
       productSku: product.sku,
@@ -169,7 +170,7 @@ export async function calculateOrderPricing(
       vatRate: vatRate.toFixed(2),
       lineTotalNet: lineTotalNet.toFixed(2),
       lineTotalGross: lineTotalGross.toFixed(2),
-      stockAvailableConfezioni: stockAvailable,
+      stockAvailableConfezioni: stockAvailableConf,
       stockWarning,
     });
   }
@@ -239,10 +240,13 @@ export async function calculateEventOrderPricing(
     sumNet += lineTotalNet;
     sumVat += lineVat;
     sumGross += lineTotalGross;
-    const stockAvailable = stockMap.get(item.productId) ?? 0;
-    const stockWarning = item.quantity > stockAvailable;
+    // Stock in pezzi → converti in confezioni
+    const stockPieces = stockMap.get(item.productId) ?? 0;
+    const ppu = product.piecesPerUnit ?? 1;
+    const stockAvailableConf = Math.floor(stockPieces / ppu);
+    const stockWarning = item.quantity > stockAvailableConf;
     if (stockWarning) {
-      warnings.push(`${product.name}: richieste ${item.quantity} conf, disponibili ${stockAvailable} conf`);
+      warnings.push(`${product.name}: richieste ${item.quantity} conf, disponibili ${stockAvailableConf} conf`);
     }
     pricedItems.push({
       productId: item.productId,
@@ -256,7 +260,7 @@ export async function calculateEventOrderPricing(
       vatRate: vatRate.toFixed(2),
       lineTotalNet: lineTotalNet.toFixed(2),
       lineTotalGross: lineTotalGross.toFixed(2),
-      stockAvailableConfezioni: stockAvailable,
+      stockAvailableConfezioni: stockAvailableConf,
       stockWarning,
     });
   }

@@ -117,13 +117,15 @@ export const retailerSelfServiceRouter = router({
       const stockMap = await getAvailableStock(productIds);
 
       // Map results with M8.4 stockStatus
+      // NOTA: availableQty è in pezzi, convertiamo in confezioni per il retailer
       const catalogProducts = productRows.map((p) => {
         const listPrice = parseFloat(p.unitPrice ?? "0");
         const discountedPrice = +(listPrice * (1 - discountPercent / 100)).toFixed(2);
         const stock = stockMap.get(p.id);
-        const availableStock = stock?.availableQty ?? 0;
+        const ppu = p.piecesPerUnit ?? 1;
+        const availableStock = Math.floor((stock?.availableQty ?? 0) / ppu);
 
-        // M8.4: stockStatus
+        // M8.4: stockStatus (in confezioni)
         let stockStatus: 'in_stock' | 'low_stock' | 'backorder' | 'unavailable';
         if (availableStock >= 10) {
           stockStatus = 'in_stock';
@@ -193,18 +195,19 @@ export const retailerSelfServiceRouter = router({
         manual: "Manuale",
       };
 
-      // Check stock warnings
+      // Check stock warnings (converti pezzi in confezioni)
       const productIds = input.items.map((i) => i.productId);
       const stockMap = await getAvailableStock(productIds);
       const warnings: Array<{ productId: string; message: string }> = [];
       for (const item of input.items) {
         const stock = stockMap.get(item.productId);
-        const available = stock?.availableQty ?? 0;
-        if (item.quantity > available) {
-          const pricingItem = pricing.items.find((pi) => pi.productId === item.productId);
+        const pricingItem = pricing.items.find((pi) => pi.productId === item.productId);
+        const ppu = pricingItem?.piecesPerUnit ?? 1;
+        const availableConf = Math.floor((stock?.availableQty ?? 0) / ppu);
+        if (item.quantity > availableConf) {
           warnings.push({
             productId: item.productId,
-            message: `Solo ${available} disponibili per "${pricingItem?.productName ?? item.productId}", richiesti ${item.quantity}`,
+            message: `Solo ${availableConf} conf. disponibili per "${pricingItem?.productName ?? item.productId}", richieste ${item.quantity}`,
           });
         }
       }
@@ -249,20 +252,32 @@ export const retailerSelfServiceRouter = router({
       const database = await getDb();
       if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
-      // Validate stock (hard fail)
+      // Validate stock (hard fail) — converti pezzi in confezioni
       const productIds = input.items.map((i) => i.productId);
       const stockMap = await getAvailableStock(productIds);
+      // Recupera piecesPerUnit per ogni prodotto
+      const ppuRows = await database.execute<{ id: string; piecesPerUnit: number | null }>(sql`
+        SELECT "id"::text, "piecesPerUnit" FROM "products"
+        WHERE "id" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})
+      `);
+      const ppuMap = new Map(
+        (ppuRows as unknown as Array<{ id: string; piecesPerUnit: number | null }>).map((r) => [
+          r.id, r.piecesPerUnit ?? 1,
+        ]),
+      );
       const insufficientItems: string[] = [];
       for (const item of input.items) {
         const stock = stockMap.get(item.productId);
-        if (!stock || item.quantity > stock.availableQty) {
+        const ppu = ppuMap.get(item.productId) ?? 1;
+        const availableConf = Math.floor((stock?.availableQty ?? 0) / ppu);
+        if (item.quantity > availableConf) {
           insufficientItems.push(item.productId);
         }
       }
       if (insufficientItems.length > 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Stock insufficiente per ${insufficientItems.length} prodotto/i. Aggiorna le quantità.`,
+          message: `Stock insufficiente per ${insufficientItems.length} prodotto/i. Aggiorna le quantit\u00e0.`,
         });
       }
 
@@ -584,11 +599,20 @@ export const retailerSelfServiceRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Solo ordini in stato 'pending' possono essere modificati" });
       }
 
-      // Validate stock (excluding current order from reserved)
+       // Validate stock (excluding current order from reserved) — converti pezzi in confezioni
       const productIds = input.items.map((i) => i.productId);
       const stockMap = await getAvailableStock(productIds);
-
-      // Get current order items to "free" their reserved stock
+      // Recupera piecesPerUnit
+      const ppuRows = await database.execute<{ id: string; piecesPerUnit: number | null }>(sql`
+        SELECT "id"::text, "piecesPerUnit" FROM "products"
+        WHERE "id" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})
+      `);
+      const ppuMap = new Map(
+        (ppuRows as unknown as Array<{ id: string; piecesPerUnit: number | null }>).map((r) => [
+          r.id, r.piecesPerUnit ?? 1,
+        ]),
+      );
+      // Get current order items to "free" their reserved stock (in confezioni)
       const currentItems = await database
         .select({ productId: orderItems.productId, quantity: orderItems.quantity })
         .from(orderItems)
@@ -597,18 +621,18 @@ export const retailerSelfServiceRouter = router({
       for (const ci of currentItems) {
         currentReserved.set(ci.productId, (currentReserved.get(ci.productId) ?? 0) + ci.quantity);
       }
-
       for (const item of input.items) {
         const stock = stockMap.get(item.productId);
-        const available = (stock?.availableQty ?? 0) + (currentReserved.get(item.productId) ?? 0);
-        if (item.quantity > available) {
+        const ppu = ppuMap.get(item.productId) ?? 1;
+        // availableQty è in pezzi, convertiamo in confezioni + aggiungiamo le conf già riservate da questo ordine
+        const availableConf = Math.floor((stock?.availableQty ?? 0) / ppu) + (currentReserved.get(item.productId) ?? 0);
+        if (item.quantity > availableConf) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `Stock insufficiente per prodotto ${item.productId}: disponibili ${available}, richiesti ${item.quantity}`,
+            message: `Stock insufficiente per prodotto ${item.productId}: disponibili ${availableConf} conf., richieste ${item.quantity}`,
           });
         }
       }
-
       // Recalculate pricing
       const pricing = await calculateOrderPricing(ctx.retailerId, input.items);
 

@@ -87,7 +87,7 @@ const formatCurrency = (value: number) =>
   }).format(value);
 
 // ============== Sort types ==============
-type SortField = "stock" | "costUnit" | "costPack" | "listUnit" | "valueCost" | "valueList" | "name";
+type SortField = "stock" | "costUnit" | "listUnit" | "valueCost" | "valueList" | "name";
 type SortOrder = "asc" | "desc";
 
 export default function Warehouse() {
@@ -349,12 +349,12 @@ export default function Warehouse() {
     return overview.map((p) => {
       const costUnit = parseFloat(p.productCostPrice || "0");
       const ppu = p.piecesPerUnit ?? 1;
-      const costPack = costUnit * ppu;
-      const listUnit = parseFloat(p.productUnitPrice || "0");
-      const valueCost = p.totalStock * costPack;
-      const valueList = p.totalStock * listUnit;
-      const marginPercent = listUnit > 0 ? ((listUnit - costPack) / listUnit) * 100 : 0;
-      return { ...p, costUnit, costPack, ppu, listUnit, valueCost, valueList, marginPercent };
+      const listConf = parseFloat(p.productUnitPrice || "0");
+      const pricePerPiece = ppu > 0 ? listConf / ppu : 0;
+      const valueCost = p.totalStock * costUnit;
+      const valueList = p.totalStock * pricePerPiece;
+      const marginPercent = pricePerPiece > 0 ? ((pricePerPiece - costUnit) / pricePerPiece) * 100 : 0;
+      return { ...p, costUnit, ppu, listConf, pricePerPiece, valueCost, valueList, marginPercent };
     });
   }, [overview]);
 
@@ -366,8 +366,7 @@ export default function Warehouse() {
         case "name": cmp = a.productName.localeCompare(b.productName); break;
         case "stock": cmp = a.totalStock - b.totalStock; break;
         case "costUnit": cmp = a.costUnit - b.costUnit; break;
-        case "costPack": cmp = a.costPack - b.costPack; break;
-        case "listUnit": cmp = a.listUnit - b.listUnit; break;
+        case "listUnit": cmp = a.listConf - b.listConf; break;
         case "valueCost": cmp = a.valueCost - b.valueCost; break;
         case "valueList": cmp = a.valueList - b.valueList; break;
       }
@@ -538,13 +537,8 @@ export default function Warehouse() {
                       </button>
                     </TableHead>
                     <TableHead className="text-right">
-                      <button type="button" className="flex items-center justify-end hover:text-foreground transition-colors ml-auto" onClick={() => handleSort("costPack")}>
-                        Costo conf. <SortIcon field="costPack" />
-                      </button>
-                    </TableHead>
-                    <TableHead className="text-right">
                       <button type="button" className="flex items-center justify-end hover:text-foreground transition-colors ml-auto" onClick={() => handleSort("listUnit")}>
-                        Listino unit. <SortIcon field="listUnit" />
+                        Prezzo conf. <SortIcon field="listUnit" />
                       </button>
                     </TableHead>
                     <TableHead className="text-right">
@@ -624,10 +618,7 @@ export default function Warehouse() {
                             {formatCurrency(p.costUnit)}
                           </TableCell>
                           <TableCell className="text-right text-muted-foreground tabular-nums">
-                            {formatCurrency(p.costPack)}
-                          </TableCell>
-                          <TableCell className="text-right text-muted-foreground tabular-nums">
-                            {formatCurrency(p.listUnit)}
+                            {formatCurrency(p.listConf)}
                           </TableCell>
                           <TableCell className="text-right font-semibold tabular-nums">
                             {formatCurrency(p.valueCost)}
@@ -747,7 +738,6 @@ export default function Warehouse() {
                     <TableCell></TableCell>
                     <TableCell colSpan={2}>TOTALE</TableCell>
                     <TableCell className="text-right tabular-nums">{totals.totalUnits}</TableCell>
-                    <TableCell></TableCell>
                     <TableCell></TableCell>
                     <TableCell></TableCell>
                     <TableCell className="text-right tabular-nums">{formatCurrency(totals.totalValueCost)}</TableCell>

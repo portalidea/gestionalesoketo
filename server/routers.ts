@@ -946,9 +946,9 @@ export const appRouter = router({
       const rows = await database.execute(sql`
         SELECT
           COALESCE(SUM(ibb."quantity"), 0)::int AS "totalUnits",
-          COALESCE(SUM(ibb."quantity" * p."costPrice"::numeric * COALESCE(p."piecesPerUnit", 1)), 0)::numeric(18,2) AS "totalValueAtCost",
+          COALESCE(SUM(ibb."quantity" * p."costPrice"::numeric), 0)::numeric(18,2) AS "totalValueAtCost",
           COALESCE(SUM(
-            ibb."quantity" * COALESCE(NULLIF(p."unitPrice", '')::numeric, 0)
+            ibb."quantity" * COALESCE(NULLIF(p."unitPrice", '')::numeric, 0) / COALESCE(p."piecesPerUnit", 1)
           ), 0)::numeric(18,2) AS "totalValueAtListPrice",
           COUNT(DISTINCT p."id")::int AS "uniqueProductsCount",
           COUNT(DISTINCT pb."id")::int AS "activeBatchesCount"
@@ -962,7 +962,7 @@ export const appRouter = router({
       const expRows = await database.execute(sql`
         SELECT
           COALESCE(SUM(ibb."quantity"), 0)::int AS "expiringSoonUnits",
-          COALESCE(SUM(ibb."quantity" * p."costPrice"::numeric * COALESCE(p."piecesPerUnit", 1)), 0)::numeric(18,2) AS "expiringSoonValue"
+          COALESCE(SUM(ibb."quantity" * p."costPrice"::numeric), 0)::numeric(18,2) AS "expiringSoonValue"
         FROM "inventoryByBatch" ibb
         INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
         INNER JOIN "products" p ON p."id" = pb."productId"

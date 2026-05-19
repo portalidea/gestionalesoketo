@@ -135,9 +135,13 @@ export const retailerCheckoutRouter = router({
             )
             .orderBy(asc(productBatches.expirationDate));
 
+          // remaining è in confezioni, centralStock in pezzi
+          const piecesPerUnitVal = pi.piecesPerUnit ?? 1;
           for (const batch of availableBatches) {
             if (remaining <= 0) break;
-            const allocQty = Math.min(remaining, batch.centralStock);
+            const batchConfezioni = Math.floor(batch.centralStock / piecesPerUnitVal);
+            if (batchConfezioni <= 0) continue;
+            const allocQty = Math.min(remaining, batchConfezioni);
             allocations.push({
               productId: pi.productId,
               batchId: batch.batchId,

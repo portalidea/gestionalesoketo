@@ -158,9 +158,11 @@ export async function getStockInfoBatch(
 /**
  * Validate that all items in an order have sufficient stock.
  * Returns list of items with insufficient stock.
+ * NOTE: items.quantity è in confezioni, availableQty è in pezzi.
+ * Convertiamo pezzi disponibili in confezioni per il confronto.
  */
 export async function validateOrderStock(
-  items: Array<{ productId: string; productName: string; quantity: number }>,
+  items: Array<{ productId: string; productName: string; quantity: number; piecesPerUnit?: number | null }>,
 ): Promise<{ valid: boolean; insufficientItems: Array<{ productName: string; requested: number; available: number }> }> {
   const productIds = items.map((i) => i.productId);
   const stockInfo = await getAvailableStock(productIds);
@@ -169,12 +171,14 @@ export async function validateOrderStock(
 
   for (const item of items) {
     const info = stockInfo.get(item.productId);
-    const available = info?.availableQty ?? 0;
-    if (item.quantity > available) {
+    const availablePieces = info?.availableQty ?? 0;
+    const ppu = item.piecesPerUnit ?? 1;
+    const availableConf = Math.floor(availablePieces / ppu);
+    if (item.quantity > availableConf) {
       insufficientItems.push({
         productName: item.productName,
         requested: item.quantity,
-        available,
+        available: availableConf,
       });
     }
   }

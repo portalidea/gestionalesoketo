@@ -171,12 +171,17 @@ export const catalogPortalRouter = router({
       );
 
       // 8. Mappa risultati con stockStatus
+      // NOTA: totalStock è in pezzi, reservedQty è in confezioni (orderItems.quantity)
+      // Convertiamo tutto in confezioni per il retailer
       const items = productRows.map((p) => {
         const unitPriceBase = parseFloat(p.unitPrice || "0");
         const unitPriceFinal = Math.round(unitPriceBase * (1 - discountPercent / 100) * 100) / 100;
-        const totalStock = stockMap.get(p.id) ?? 0;
+        const ppu = p.piecesPerUnit ?? 1;
+        const totalStockPieces = stockMap.get(p.id) ?? 0;
+        const totalStockConf = Math.floor(totalStockPieces / ppu);
+        // reservedQty è già in confezioni (orderItems.quantity = confezioni)
         const totalReserved = reservedMap.get(p.id) ?? 0;
-        const stockAvailable = Math.max(0, totalStock - totalReserved);
+        const stockAvailable = Math.max(0, totalStockConf - totalReserved);
         const stockReserved = myReservedMap.get(p.id) ?? 0;
 
         // M8.4: stockStatus logic
@@ -279,9 +284,11 @@ export const catalogPortalRouter = router({
         )
         .orderBy(asc(productBatches.expirationDate));
 
-      // Stock totale e prenotato
-      const totalStock = batchRows.reduce((sum, b) => sum + b.stock, 0);
-
+       // Stock totale (pezzi) → converti in confezioni
+      const totalStockPieces = batchRows.reduce((sum, b) => sum + b.stock, 0);
+      const ppu = product.piecesPerUnit ?? 1;
+      const totalStockConf = Math.floor(totalStockPieces / ppu);
+      // reservedQty è in confezioni (orderItems.quantity)
       const reservedRows = await db.execute<{ reservedQty: number }>(sql`
         SELECT COALESCE(SUM(oi."quantity"), 0)::int AS "reservedQty"
         FROM "orderItems" oi
@@ -290,7 +297,7 @@ export const catalogPortalRouter = router({
           AND oi."productId" = ${input.productId}::uuid
       `);
       const totalReserved = (reservedRows as unknown as Array<{ reservedQty: number }>)[0]?.reservedQty ?? 0;
-      const stockAvailable = Math.max(0, totalStock - totalReserved);
+      const stockAvailable = Math.max(0, totalStockConf - totalReserved);
 
       return {
         product: {
@@ -306,7 +313,7 @@ export const catalogPortalRouter = router({
           expirationDate: b.expirationDate,
           stock: b.stock,
         })),
-        stockTotal: totalStock,
+        stockTotal: totalStockPieces,
         stockReserved: totalReserved,
         stockAvailable,
       };
