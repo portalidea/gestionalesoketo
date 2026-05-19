@@ -104,8 +104,8 @@ export default function Warehouse() {
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
 
   // ============== Sort state ==============
-  const [sortField, setSortField] = useState<SortField>("valueCost");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
+  const [sortField, setSortField] = useState<SortField>("name");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
