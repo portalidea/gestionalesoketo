@@ -87,7 +87,7 @@ const formatCurrency = (value: number) =>
   }).format(value);
 
 // ============== Sort types ==============
-type SortField = "stock" | "costUnit" | "listUnit" | "valueCost" | "valueList" | "name";
+type SortField = "stock" | "costUnit" | "costPack" | "listUnit" | "valueCost" | "valueList" | "name";
 type SortOrder = "asc" | "desc";
 
 export default function Warehouse() {
@@ -348,11 +348,13 @@ export default function Warehouse() {
     if (!overview) return [];
     return overview.map((p) => {
       const costUnit = parseFloat(p.productCostPrice || "0");
+      const ppu = p.piecesPerUnit ?? 1;
+      const costPack = costUnit * ppu;
       const listUnit = parseFloat(p.productUnitPrice || "0");
-      const valueCost = p.totalStock * costUnit;
+      const valueCost = p.totalStock * costPack;
       const valueList = p.totalStock * listUnit;
-      const marginPercent = listUnit > 0 ? ((listUnit - costUnit) / listUnit) * 100 : 0;
-      return { ...p, costUnit, listUnit, valueCost, valueList, marginPercent };
+      const marginPercent = listUnit > 0 ? ((listUnit - costPack) / listUnit) * 100 : 0;
+      return { ...p, costUnit, costPack, ppu, listUnit, valueCost, valueList, marginPercent };
     });
   }, [overview]);
 
@@ -364,6 +366,7 @@ export default function Warehouse() {
         case "name": cmp = a.productName.localeCompare(b.productName); break;
         case "stock": cmp = a.totalStock - b.totalStock; break;
         case "costUnit": cmp = a.costUnit - b.costUnit; break;
+        case "costPack": cmp = a.costPack - b.costPack; break;
         case "listUnit": cmp = a.listUnit - b.listUnit; break;
         case "valueCost": cmp = a.valueCost - b.valueCost; break;
         case "valueList": cmp = a.valueList - b.valueList; break;
@@ -531,7 +534,12 @@ export default function Warehouse() {
                     </TableHead>
                     <TableHead className="text-right">
                       <button type="button" className="flex items-center justify-end hover:text-foreground transition-colors ml-auto" onClick={() => handleSort("costUnit")}>
-                        Costo unit. <SortIcon field="costUnit" />
+                        Costo singolo <SortIcon field="costUnit" />
+                      </button>
+                    </TableHead>
+                    <TableHead className="text-right">
+                      <button type="button" className="flex items-center justify-end hover:text-foreground transition-colors ml-auto" onClick={() => handleSort("costPack")}>
+                        Costo conf. <SortIcon field="costPack" />
                       </button>
                     </TableHead>
                     <TableHead className="text-right">
@@ -614,6 +622,9 @@ export default function Warehouse() {
                           </TableCell>
                           <TableCell className="text-right text-muted-foreground tabular-nums">
                             {formatCurrency(p.costUnit)}
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground tabular-nums">
+                            {formatCurrency(p.costPack)}
                           </TableCell>
                           <TableCell className="text-right text-muted-foreground tabular-nums">
                             {formatCurrency(p.listUnit)}
@@ -736,6 +747,7 @@ export default function Warehouse() {
                     <TableCell></TableCell>
                     <TableCell colSpan={2}>TOTALE</TableCell>
                     <TableCell className="text-right tabular-nums">{totals.totalUnits}</TableCell>
+                    <TableCell></TableCell>
                     <TableCell></TableCell>
                     <TableCell></TableCell>
                     <TableCell className="text-right tabular-nums">{formatCurrency(totals.totalValueCost)}</TableCell>
