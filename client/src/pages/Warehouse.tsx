@@ -52,6 +52,7 @@ import {
   ChevronRight,
   Loader2,
   Package,
+  Pencil,
   Percent,
   TrendingUp,
   Truck,
@@ -75,6 +76,16 @@ type WriteOffTarget = {
   productName: string;
   expirationDate: string | null;
   maxQuantity: number;
+};
+
+type AdjustmentTarget = {
+  batchId: string;
+  locationId: string;
+  batchNumber: string;
+  productName: string;
+  expirationDate: string | null;
+  currentQuantity: number;
+  piecesPerUnit: number;
 };
 
 // ============== Currency formatter ==============
@@ -258,6 +269,46 @@ export default function Warehouse() {
       quantity: qty,
       notes: transferNotes || undefined,
       generateProforma: transferProforma && proformaAllowed,
+    });
+  };
+
+  // ============== Adjustment state (M8.5) ==============
+  const [adjustTarget, setAdjustTarget] = useState<AdjustmentTarget | null>(null);
+  const [adjustQty, setAdjustQty] = useState("");
+  const [adjustReason, setAdjustReason] = useState<string>("");
+  const [adjustNotes, setAdjustNotes] = useState("");
+
+  const adjustMutation = trpc.warehouse.adjustBatchQuantity.useMutation({
+    onSuccess: async (res) => {
+      await utils.warehouse.getStockOverview.invalidate();
+      await utils.warehouse.getValueOverview.invalidate();
+      await utils.productBatches.listByProduct.invalidate();
+      setAdjustTarget(null);
+      setAdjustQty("");
+      setAdjustReason("");
+      setAdjustNotes("");
+      import("sonner").then(({ toast }) =>
+        toast.success(`Quantit\u00e0 aggiornata: ${res.previousQuantity} \u2192 ${res.newQuantity} pezzi`),
+      );
+    },
+    onError: (err) =>
+      import("sonner").then(({ toast }) => toast.error(err.message)),
+  });
+
+  const submitAdjustment = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!adjustTarget || !adjustReason) return;
+    const qty = parseInt(adjustQty, 10);
+    if (!Number.isFinite(qty) || qty < 0) {
+      import("sonner").then(({ toast }) => toast.error("Quantit\u00e0 non valida"));
+      return;
+    }
+    adjustMutation.mutate({
+      batchId: adjustTarget.batchId,
+      locationId: adjustTarget.locationId,
+      newQuantity: qty,
+      reason: adjustReason as any,
+      notes: adjustNotes || undefined,
     });
   };
 
@@ -690,37 +741,66 @@ export default function Warehouse() {
                                         {b.quantity}
                                       </TableCell>
                                       <TableCell>
-                                        {warehouseLoc &&
-                                          isEligibleForWriteOff(
-                                            b.expirationDate,
-                                            b.quantity,
-                                          ) && (
+                                        <div className="flex items-center gap-1">
+                                          {warehouseLoc && (
                                             <Tooltip>
                                               <TooltipTrigger asChild>
                                                 <Button
                                                   variant="ghost"
                                                   size="icon"
-                                                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                                                  aria-label="Scarta lotto"
-                                                  onClick={() =>
-                                                    setWriteOffTarget({
+                                                  className="h-8 w-8 text-muted-foreground hover:text-primary"
+                                                  aria-label="Rettifica quantit\u00e0"
+                                                  onClick={() => {
+                                                    setAdjustTarget({
                                                       batchId: b.batchId,
                                                       locationId: warehouseLoc.id,
                                                       batchNumber: b.batchNumber,
                                                       productName: p.productName,
                                                       expirationDate: b.expirationDate,
-                                                      maxQuantity: b.quantity,
-                                                    })
-                                                  }
+                                                      currentQuantity: b.quantity,
+                                                      piecesPerUnit: p.ppu,
+                                                    });
+                                                    setAdjustQty(String(b.quantity));
+                                                  }}
                                                 >
-                                                  <XCircle className="h-4 w-4" />
+                                                  <Pencil className="h-4 w-4" />
                                                 </Button>
                                               </TooltipTrigger>
-                                              <TooltipContent>
-                                                Scarta (scadenza imminente o passata)
-                                              </TooltipContent>
+                                              <TooltipContent>Rettifica quantit\u00e0</TooltipContent>
                                             </Tooltip>
                                           )}
+                                          {warehouseLoc &&
+                                            isEligibleForWriteOff(
+                                              b.expirationDate,
+                                              b.quantity,
+                                            ) && (
+                                              <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                  <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                                    aria-label="Scarta lotto"
+                                                    onClick={() =>
+                                                      setWriteOffTarget({
+                                                        batchId: b.batchId,
+                                                        locationId: warehouseLoc.id,
+                                                        batchNumber: b.batchNumber,
+                                                        productName: p.productName,
+                                                        expirationDate: b.expirationDate,
+                                                        maxQuantity: b.quantity,
+                                                      })
+                                                    }
+                                                  >
+                                                    <XCircle className="h-4 w-4" />
+                                                  </Button>
+                                                </TooltipTrigger>
+                                                <TooltipContent>
+                                                  Scarta (scadenza imminente o passata)
+                                                </TooltipContent>
+                                              </Tooltip>
+                                            )}
+                                        </div>
                                       </TableCell>
                                     </TableRow>
                                   ))}
@@ -1042,6 +1122,135 @@ export default function Warehouse() {
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 )}
                 Scarta
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ====================== Dialog ADJUSTMENT (M8.5) ====================== */}
+      <Dialog
+        open={adjustTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setAdjustTarget(null);
+            setAdjustQty("");
+            setAdjustReason("");
+            setAdjustNotes("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <form onSubmit={submitAdjustment}>
+            <DialogHeader>
+              <DialogTitle>Rettifica quantit\u00e0 lotto</DialogTitle>
+              <DialogDescription>
+                Modifica la quantit\u00e0 registrata per questo lotto.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              {/* Info lotto read-only */}
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="text-muted-foreground">Prodotto</div>
+                <div className="font-medium">{adjustTarget?.productName}</div>
+                <div className="text-muted-foreground">Lotto</div>
+                <div className="font-mono">{adjustTarget?.batchNumber}</div>
+                <div className="text-muted-foreground">Scadenza</div>
+                <div>{adjustTarget?.expirationDate ? formatDate(adjustTarget.expirationDate) : "-"}</div>
+                <div className="text-muted-foreground">Quantit\u00e0 attuale</div>
+                <div className="font-semibold">{adjustTarget?.currentQuantity} pezzi</div>
+              </div>
+
+              {/* Input nuova quantit\u00e0 */}
+              <div className="grid gap-2">
+                <Label htmlFor="adjustQty">Nuova quantit\u00e0 (in pezzi singoli) *</Label>
+                <Input
+                  id="adjustQty"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={adjustQty}
+                  onChange={(e) => setAdjustQty(e.target.value)}
+                  placeholder="0"
+                />
+                {/* Helper conversione pezzi/confezioni */}
+                {adjustTarget && adjustTarget.piecesPerUnit > 1 && adjustQty && (
+                  <p className="text-xs text-muted-foreground">
+                    {(() => {
+                      const pieces = parseInt(adjustQty, 10);
+                      if (!Number.isFinite(pieces) || pieces < 0) return null;
+                      const ppu = adjustTarget.piecesPerUnit;
+                      const units = Math.floor(pieces / ppu);
+                      const remainder = pieces % ppu;
+                      if (remainder === 0) {
+                        return `${pieces} pezzi = ${units} confezioni (${ppu} pz/conf)`;
+                      }
+                      return `${pieces} pezzi = ${units} conf. + ${remainder} pz (${ppu} pz/conf)`;
+                    })()}
+                  </p>
+                )}
+              </div>
+
+              {/* Anteprima delta */}
+              {adjustTarget && adjustQty && (() => {
+                const newQ = parseInt(adjustQty, 10);
+                if (!Number.isFinite(newQ) || newQ < 0) return null;
+                const delta = newQ - adjustTarget.currentQuantity;
+                if (delta === 0) return <p className="text-sm text-muted-foreground">Nessuna modifica</p>;
+                if (delta > 0) return <p className="text-sm text-emerald-600 font-medium">+{delta} pezzi (aggiunta)</p>;
+                return <p className="text-sm text-orange-500 font-medium">{delta} pezzi (rimozione)</p>;
+              })()}
+
+              {/* Causale */}
+              <div className="grid gap-2">
+                <Label htmlFor="adjustReason">Causale rettifica *</Label>
+                <Select value={adjustReason} onValueChange={setAdjustReason}>
+                  <SelectTrigger id="adjustReason">
+                    <SelectValue placeholder="Seleziona causale" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="physical_count">Conta fisica</SelectItem>
+                    <SelectItem value="not_inventoried">Prodotto non inventariato</SelectItem>
+                    <SelectItem value="breakage">Rottura / Scarto</SelectItem>
+                    <SelectItem value="registration_error">Errore registrazione</SelectItem>
+                    <SelectItem value="other">Altro</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Note */}
+              <div className="grid gap-2">
+                <Label htmlFor="adjustNotes">Note (opzionale)</Label>
+                <Textarea
+                  id="adjustNotes"
+                  value={adjustNotes}
+                  onChange={(e) => setAdjustNotes(e.target.value)}
+                  placeholder="Dettagli aggiuntivi..."
+                  maxLength={500}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setAdjustTarget(null)}
+              >
+                Annulla
+              </Button>
+              <Button
+                type="submit"
+                disabled={
+                  adjustMutation.isPending ||
+                  !adjustReason ||
+                  adjustQty === "" ||
+                  parseInt(adjustQty, 10) === adjustTarget?.currentQuantity
+                }
+              >
+                {adjustMutation.isPending && (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                )}
+                Conferma Rettifica
               </Button>
             </DialogFooter>
           </form>

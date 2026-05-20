@@ -1041,6 +1041,103 @@ export const appRouter = router({
       const totalUnits = products.reduce((sum, p) => sum + p.totalStock, 0);
       return { totalValue, totalUnits, products };
     }),
+
+    // M8.5: Rettifica manuale quantità lotto
+    adjustBatchQuantity: staffProcedure
+      .input(z.object({
+        batchId: z.string().uuid(),
+        locationId: z.string().uuid(),
+        newQuantity: z.number().int().min(0),
+        reason: z.enum([
+          'physical_count',
+          'not_inventoried',
+          'breakage',
+          'registration_error',
+          'other',
+        ]),
+        notes: z.string().max(500).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const database = await db.getDb();
+        if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+        const { eq, and } = await import("drizzle-orm");
+        const { inventoryByBatch, productBatches, stockMovements } = await import("../drizzle/schema");
+
+        return await database.transaction(async (tx) => {
+          // 1. Lock riga inventoryByBatch
+          const invRows = await tx
+            .select()
+            .from(inventoryByBatch)
+            .where(and(
+              eq(inventoryByBatch.batchId, input.batchId),
+              eq(inventoryByBatch.locationId, input.locationId),
+            ))
+            .for("update")
+            .limit(1);
+          const inv = invRows[0] ?? null;
+
+          // 2. Recupera productId dal batch
+          const batchRows = await tx
+            .select({ productId: productBatches.productId, batchNumber: productBatches.batchNumber })
+            .from(productBatches)
+            .where(eq(productBatches.id, input.batchId))
+            .limit(1);
+          const batch = batchRows[0];
+          if (!batch) throw new TRPCError({ code: "NOT_FOUND", message: "Lotto non trovato" });
+
+          const previousQuantity = inv?.quantity ?? 0;
+          const newQuantity = input.newQuantity;
+          const delta = newQuantity - previousQuantity;
+
+          if (delta === 0) {
+            return { success: true, previousQuantity, newQuantity, delta: 0, message: "Nessuna modifica" };
+          }
+
+          // 3. Aggiorna o crea riga inventoryByBatch
+          if (inv) {
+            await tx
+              .update(inventoryByBatch)
+              .set({ quantity: newQuantity, updatedAt: new Date() })
+              .where(eq(inventoryByBatch.id, inv.id));
+          } else {
+            await tx.insert(inventoryByBatch).values({
+              batchId: input.batchId,
+              locationId: input.locationId,
+              quantity: newQuantity,
+            });
+          }
+
+          // 4. Registra movimento ADJUSTMENT
+          const reasonLabels: Record<string, string> = {
+            physical_count: 'Conta fisica',
+            not_inventoried: 'Prodotto non inventariato',
+            breakage: 'Rottura/Scarto',
+            registration_error: 'Errore registrazione',
+            other: 'Altro',
+          };
+          const reasonLabel = reasonLabels[input.reason] ?? input.reason;
+          const fullNote = input.notes
+            ? `${reasonLabel}: ${input.notes}`
+            : reasonLabel;
+
+          await tx.insert(stockMovements).values({
+            productId: batch.productId,
+            batchId: input.batchId,
+            type: 'ADJUSTMENT',
+            quantity: Math.abs(delta),
+            previousQuantity,
+            newQuantity,
+            sourceDocumentType: 'manual_adjustment',
+            sourceDocument: null,
+            notes: `${fullNote} (lotto ${batch.batchNumber})`,
+            createdBy: ctx.user?.id ?? null,
+          });
+
+          console.log(`[warehouse.adjustBatchQuantity] batchId=${input.batchId} ${previousQuantity}\u2192${newQuantity} (\u0394${delta}) reason=${input.reason}`);
+
+          return { success: true, previousQuantity, newQuantity, delta };
+        });
+      }),
   }),
 
   // ============= ALERTS =============
