@@ -27,7 +27,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { trpc } from "@/lib/trpc";
-import { Loader2, Trash2, UserPlus } from "lucide-react";
+import { Loader2, Mail, Trash2, UserPlus } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogClose,
+} from "@/components/ui/dialog";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 
@@ -38,6 +48,88 @@ const roleBadgeClass: Record<Role, string> = {
   operator: "bg-blue-500/10 text-blue-500 border-blue-500/20",
   viewer: "bg-muted text-muted-foreground",
 };
+
+function SetPasswordAllCard() {
+  const [results, setResults] = useState<Array<{ email: string; status: string }> | null>(null);
+  const [open, setOpen] = useState(false);
+
+  const mutation = trpc.users.sendSetPasswordToAll.useMutation({
+    onSuccess: (data) => {
+      setResults(data);
+      setOpen(false);
+      toast.success(`Email inviate: ${data.filter((r) => r.status === "inviato").length}/${data.length}`);
+    },
+    onError: (err) => {
+      toast.error(`Errore: ${err.message}`);
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Mail className="h-5 w-5" />
+          Gestione Password
+        </CardTitle>
+        <CardDescription>
+          Invia un'email con link per impostare la password a <strong>tutti</strong> gli
+          utenti registrati. Da usare una sola volta dopo il passaggio a login
+          email+password.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger asChild>
+            <Button variant="default" disabled={mutation.isPending}>
+              {mutation.isPending ? (
+                <><Loader2 className="h-4 w-4 animate-spin mr-2" />Invio in corso...</>
+              ) : (
+                "Invia a tutti"
+              )}
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Conferma invio</DialogTitle>
+              <DialogDescription>
+                Verranno inviate email a tutti gli utenti registrati con un link per
+                impostare la propria password. Procedere?
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button variant="outline">Annulla</Button>
+              </DialogClose>
+              <Button
+                onClick={() => mutation.mutate()}
+                disabled={mutation.isPending}
+              >
+                {mutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                ) : null}
+                Conferma invio
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {results && (
+          <div className="text-sm space-y-1 border rounded-md p-3">
+            <p className="font-medium mb-2">Risultati:</p>
+            {results.map((r, i) => (
+              <div key={i} className="flex justify-between py-0.5">
+                <span className="text-muted-foreground">{r.email}</span>
+                <span className={r.status === "inviato" ? "text-green-500 font-medium" : "text-red-500"}>
+                  {r.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function Team() {
   const { user: me } = useAuth();
@@ -147,6 +239,9 @@ export default function Team() {
             </form>
           </CardContent>
         </Card>
+
+        {/* M10: Card gestione password — solo admin */}
+        <SetPasswordAllCard />
 
         <Card>
           <CardHeader>
