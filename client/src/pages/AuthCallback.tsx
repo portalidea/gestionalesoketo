@@ -23,10 +23,17 @@ export default function AuthCallback() {
 
       const code = url.searchParams.get("code");
       if (code) {
+        // With detectSessionInUrl: true, Supabase may have already consumed the code.
         const { data, error: exchangeError } =
           await supabase.auth.exchangeCodeForSession(code);
         if (cancelled) return;
         if (exchangeError) {
+          // Code may have been already consumed by detectSessionInUrl
+          const { data: sessionData } = await supabase.auth.getSession();
+          if (sessionData.session) {
+            window.location.replace("/");
+            return;
+          }
           console.error("[Auth callback] exchange failed:", exchangeError);
           setError(exchangeError.message);
           return;
@@ -36,6 +43,13 @@ export default function AuthCallback() {
           setError("Sessione non disponibile");
           return;
         }
+        window.location.replace("/");
+        return;
+      }
+
+      // No code in URL — detectSessionInUrl may have already processed it
+      const { data: sessionCheck } = await supabase.auth.getSession();
+      if (sessionCheck.session) {
         window.location.replace("/");
         return;
       }

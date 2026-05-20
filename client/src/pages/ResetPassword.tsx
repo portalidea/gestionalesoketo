@@ -2,9 +2,8 @@
  * M10 — /reset-password
  *
  * Pagina di atterraggio dal link "reset password" inviato via email.
- * Supabase gestisce la session temporanea automaticamente (il link contiene
- * il token che viene scambiato per una session attiva).
- * L'utente imposta la nuova password e viene rediretto al login.
+ * Usa onAuthStateChange per intercettare l'evento PASSWORD_RECOVERY,
+ * che è il modo robusto di gestire il reset con Supabase PKCE.
  */
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { supabase } from "@/lib/supabase";
 import { PASSWORD_REQUIREMENTS, isPasswordValid } from "@/lib/passwordValidation";
 import { Loader2, Eye, EyeOff, Check, X } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useLocation } from "wouter";
 
 export default function ResetPassword() {
@@ -20,55 +19,72 @@ export default function ResetPassword() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [sessionReady, setSessionReady] = useState(false);
   const [status, setStatus] = useState<"loading" | "ready" | "submitting" | "error">("loading");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const resolved = useRef(false);
 
-  // Check if we have a valid session (from the reset link)
   useEffect(() => {
-    const checkSession = async () => {
+    // Supabase emette PASSWORD_RECOVERY quando il link reset viene processato
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (resolved.current) return;
+      if (event === "PASSWORD_RECOVERY" && session) {
+        resolved.current = true;
+        setSessionReady(true);
+        setStatus("ready");
+      } else if (event === "SIGNED_IN" && session) {
+        // Alcuni flussi emettono SIGNED_IN invece di PASSWORD_RECOVERY
+        resolved.current = true;
+        setSessionReady(true);
+        setStatus("ready");
+      }
+    });
+
+    // Fallback: controlla se c'è già una sessione
+    // (caso detectSessionInUrl ha già fatto il lavoro prima del mount)
+    const checkExisting = async () => {
+      // Dai tempo a detectSessionInUrl di processare l'URL
+      await new Promise((r) => setTimeout(r, 1500));
+      if (resolved.current) return;
+
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
+        resolved.current = true;
+        setSessionReady(true);
         setStatus("ready");
       } else {
-        // Try to exchange the code from URL if present
+        // Ultimo tentativo: se c'è ?code= nell'URL, proviamo exchangeCodeForSession
         const params = new URLSearchParams(window.location.search);
         const code = params.get("code");
         if (code) {
           const { error } = await supabase.auth.exchangeCodeForSession(code);
-          if (error) {
-            setStatus("error");
-            setErrorMessage("Link scaduto o non valido. Richiedi un nuovo link di reset.");
-          } else {
+          if (!error) {
+            resolved.current = true;
+            setSessionReady(true);
             setStatus("ready");
+            return;
           }
-        } else {
-          // Check hash fragment (Supabase sometimes uses hash)
-          const hash = window.location.hash;
-          if (hash && hash.includes("access_token")) {
-            // Let Supabase auto-detect handle it
-            setTimeout(async () => {
-              const { data: { session: s } } = await supabase.auth.getSession();
-              if (s) {
-                setStatus("ready");
-              } else {
-                setStatus("error");
-                setErrorMessage("Link scaduto o non valido. Richiedi un nuovo link di reset.");
-              }
-            }, 1000);
-          } else {
-            setStatus("error");
-            setErrorMessage("Link scaduto o non valido. Richiedi un nuovo link di reset.");
-          }
+        }
+        // Nessuna sessione e nessun evento recovery → link non valido
+        if (!resolved.current) {
+          setStatus("error");
+          setErrorMessage("Link scaduto o non valido. Richiedi un nuovo link di reset.");
         }
       }
     };
-    checkSession();
+    checkExisting();
+
+    return () => subscription.unsubscribe();
   }, []);
 
   const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setErrorMessage(null);
 
+    if (!sessionReady) {
+      setErrorMessage("Sessione non pronta. Ricarica la pagina dal link email.");
+      return;
+    }
     if (!isPasswordValid(password)) {
       setErrorMessage("La password non soddisfa tutti i requisiti.");
       return;
@@ -80,7 +96,15 @@ export default function ResetPassword() {
 
     setStatus("submitting");
 
-    const { error } = await supabase.auth.updateUser({ password });
+    // Verifica: la sessione deve essere attiva PRIMA di updateUser
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      setStatus("error");
+      setErrorMessage("Sessione scaduta. Richiedi un nuovo link di reset.");
+      return;
+    }
+
+    const { data, error } = await supabase.auth.updateUser({ password });
 
     if (error) {
       setStatus("ready");
@@ -92,7 +116,16 @@ export default function ResetPassword() {
       return;
     }
 
-    // Sign out to force fresh login with new password
+    // Verifica che updateUser abbia restituito l'utente aggiornato
+    if (!data?.user) {
+      setStatus("error");
+      setErrorMessage("Aggiornamento password non confermato. Riprova.");
+      return;
+    }
+
+    console.log("[ResetPassword] password updated for user:", data.user.email);
+
+    // Logout e redirect
     await supabase.auth.signOut();
     setLocation("/login?reason=password_updated");
   };
