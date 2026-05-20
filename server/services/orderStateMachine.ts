@@ -392,6 +392,7 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
       status: orders.status,
       paymentTerms: orders.paymentTerms,
       retailerId: orders.retailerId,
+      eventType: orders.eventType,
       orderNumber: orders.orderNumber,
       ficProformaId: orders.ficProformaId,
       notesInternal: orders.notesInternal,
@@ -402,25 +403,37 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
 
   if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
 
-  const allowedStatuses = ["pending", "paid", "approved_for_shipping"];
+  const isEventOrder = !!order.eventType;
+
+  const allowedStatuses = isEventOrder
+    ? ["pending"]
+    : ["pending", "paid", "approved_for_shipping"];
   if (!allowedStatuses.includes(order.status)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Modifica consentita solo per ordini in stato 'pending', 'paid' o 'approved_for_shipping'. Stato attuale: ${order.status}`,
+      message: isEventOrder
+        ? `Ordine evento modificabile solo se in stato 'pending'. Stato attuale: ${order.status}`
+        : `Modifica consentita solo per ordini in stato 'pending', 'paid' o 'approved_for_shipping'. Stato attuale: ${order.status}`,
     });
   }
 
-  if (!order.retailerId) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Ordine senza retailer non modificabile" });
+  if (!order.retailerId && !isEventOrder) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Ordine senza retailer n\u00e9 evento non modificabile" });
   }
 
   if (input.items.length === 0) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "Almeno un item richiesto" });
   }
 
-  // 2. Recalculate pricing (uses retailer's pricingPackage for discount)
-  const { calculateOrderPricing } = await import("../pricing");
-  const pricing = await calculateOrderPricing(order.retailerId, input.items);
+  // 2. Recalculate pricing
+  let pricing;
+  if (isEventOrder) {
+    const { calculateEventOrderPricing } = await import("../pricing");
+    pricing = await calculateEventOrderPricing(input.items);
+  } else {
+    const { calculateOrderPricing } = await import("../pricing");
+    pricing = await calculateOrderPricing(order.retailerId!, input.items);
+  }
 
   // 3. Transaction: diff strategy — preserve batchId on existing items
   await db.transaction(async (tx) => {
@@ -500,12 +513,12 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
   let ficUpdated = false;
   let commissionRecalculated = false;
 
-  // 4. If status >= paid: update FiC proforma
-  if ((order.status === "paid" || order.status === "approved_for_shipping") && order.ficProformaId) {
+  // 4. If status >= paid: update FiC proforma (SOLO ordini retailer)
+  if (!isEventOrder && (order.status === "paid" || order.status === "approved_for_shipping") && order.ficProformaId) {
     const [retailer] = await db
       .select({ ficClientId: retailers.ficClientId })
       .from(retailers)
-      .where(eq(retailers.id, order.retailerId))
+      .where(eq(retailers.id, order.retailerId!))
       .limit(1);
 
     if (retailer?.ficClientId) {
@@ -548,8 +561,8 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
     }
   }
 
-  // 5. If status >= paid: recalculate affiliate commission
-  if (order.status === "paid" || order.status === "approved_for_shipping") {
+  // 5. If status >= paid: recalculate affiliate commission (SOLO ordini retailer)
+  if (!isEventOrder && (order.status === "paid" || order.status === "approved_for_shipping")) {
     try {
       const { recalculateCommissionForOrder } = await import("./commissionService");
       await recalculateCommissionForOrder(input.orderId);
@@ -559,16 +572,18 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
     }
   }
 
-  // 6. Send notification email
-  sendOrderStatusEmail({
-    orderId: input.orderId,
-    orderNumber: order.orderNumber ?? "",
-    retailerId: order.retailerId,
-    newStatus: "modified" as any,
-    previousStatus: order.status as OrderStatus,
-  }).catch((err) => {
-    console.error(`[orderStateMachine.modifyOrderItems] email failed: ${err.message}`);
-  });
+  // 6. Send notification email (SOLO ordini retailer)
+  if (!isEventOrder && order.retailerId) {
+    sendOrderStatusEmail({
+      orderId: input.orderId,
+      orderNumber: order.orderNumber ?? "",
+      retailerId: order.retailerId,
+      newStatus: "modified" as any,
+      previousStatus: order.status as OrderStatus,
+    }).catch((err) => {
+      console.error(`[orderStateMachine.modifyOrderItems] email failed: ${err.message}`);
+    });
+  }
 
   console.log(
     `[orderStateMachine.modifyOrderItems] DONE (${Date.now() - t0}ms)`,
