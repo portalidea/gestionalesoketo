@@ -27,7 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { trpc } from "@/lib/trpc";
-import { Loader2, Mail, Trash2, UserPlus } from "lucide-react";
+import { KeyRound, Loader2, Mail, Trash2, UserPlus } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -48,6 +48,50 @@ const roleBadgeClass: Record<Role, string> = {
   operator: "bg-blue-500/10 text-blue-500 border-blue-500/20",
   viewer: "bg-muted text-muted-foreground",
 };
+
+function SendResetButton({ email }: { email: string }) {
+  const [open, setOpen] = useState(false);
+  const mutation = trpc.users.sendSetPasswordToUser.useMutation({
+    onSuccess: () => {
+      toast.success(`Link inviato a ${email}`);
+      setOpen(false);
+    },
+    onError: (err) => {
+      toast.error(err.message);
+    },
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm" className="gap-1">
+          <KeyRound className="w-3.5 h-3.5" />
+          Reset
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Invia link reset password</DialogTitle>
+          <DialogDescription>
+            Verrà inviata un'email a <strong>{email}</strong> con il link per
+            impostare/reimpostare la password. Procedere?
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline">Annulla</Button>
+          </DialogClose>
+          <Button
+            onClick={() => mutation.mutate({ email })}
+            disabled={mutation.isPending}
+          >
+            {mutation.isPending ? "Invio..." : "Invia link"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 function SetPasswordAllCard() {
   const [results, setResults] = useState<Array<{ email: string; status: string }> | null>(null);
@@ -292,18 +336,21 @@ export default function Team() {
                           </Select>
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            disabled={isMe}
-                            onClick={() => {
-                              if (confirm(`Rimuovere ${u.email}?`)) {
-                                deleteMutation.mutate({ id: u.id });
-                              }
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
+                          <div className="flex items-center justify-end gap-2">
+                            <SendResetButton email={u.email} />
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              disabled={isMe}
+                              onClick={() => {
+                                if (confirm(`Rimuovere ${u.email}?`)) {
+                                  deleteMutation.mutate({ id: u.id });
+                                }
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     );

@@ -172,10 +172,29 @@ export const appRouter = router({
             results.push({ email: u.email, status: `errore: ${e.message}` });
           }
         }
-        return results;
+         return results;
+      }),
+
+    /**
+     * M10: Invia link "imposta password" a un singolo utente.
+     */
+    sendSetPasswordToUser: adminProcedure
+      .input(z.object({ email: z.string().email() }))
+      .mutation(async ({ input }) => {
+        const baseUrl = ENV.publicAppUrl;
+        const { error: resetError } = await supabaseAdmin.auth.resetPasswordForEmail(
+          input.email,
+          { redirectTo: `${baseUrl}/reset-password` },
+        );
+        if (resetError) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `Errore invio a ${input.email}: ${resetError.message}`,
+          });
+        }
+        return { email: input.email, status: "inviato" };
       }),
   }),
-
   // ============= RETAILERS =============
   retailers: router({
     list: staffProcedure.query(async () => {
