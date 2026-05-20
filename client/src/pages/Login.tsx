@@ -46,7 +46,18 @@ export default function Login() {
 
     if (error) {
       setStatus("error");
-      setErrorMessage(error.message);
+      if (
+        error.message.toLowerCase().includes("not found") ||
+        error.message.toLowerCase().includes("signups not allowed") ||
+        error.message.toLowerCase().includes("user not found") ||
+        error.message.toLowerCase().includes("otp_disabled")
+      ) {
+        setErrorMessage(
+          "Email non riconosciuta. Contatta l'amministratore per ricevere un invito di accesso.",
+        );
+      } else {
+        setErrorMessage(error.message);
+      }
       return;
     }
     setStatus("sent");
