@@ -2,8 +2,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/lib/supabase";
-import { Loader2, Mail } from "lucide-react";
+import { Loader2, Eye, EyeOff } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
+import { Link } from "wouter";
 
 const REASON_MESSAGES: Record<string, string> = {
   expired: "Sessione scaduta. Accedi di nuovo.",
@@ -11,20 +12,24 @@ const REASON_MESSAGES: Record<string, string> = {
     "Account non riconosciuto. Contatta l'amministratore per ricevere un invito.",
   me_error: "Errore di connessione al server. Riprova.",
   callback_error: "Login non riuscito. Riprova.",
+  password_updated: "Password aggiornata con successo. Accedi con le nuove credenziali.",
 };
 
 export default function Login() {
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState<"idle" | "submitting" | "sent" | "error">("idle");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [status, setStatus] = useState<"idle" | "submitting" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [bounceMessage, setBounceMessage] = useState<string | null>(null);
+  const [bounceType, setBounceType] = useState<"error" | "success">("error");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const reason = params.get("reason");
     if (reason && REASON_MESSAGES[reason]) {
       setBounceMessage(REASON_MESSAGES[reason]);
-      // Pulisci il query param così un reload non rimostra il messaggio.
+      setBounceType(reason === "password_updated" ? "success" : "error");
       const clean = new URL(window.location.href);
       clean.searchParams.delete("reason");
       window.history.replaceState({}, "", clean.toString());
@@ -36,21 +41,25 @@ export default function Login() {
     setStatus("submitting");
     setErrorMessage(null);
 
-    const { error } = await supabase.auth.signInWithOtp({
+    const { error } = await supabase.auth.signInWithPassword({
       email,
-      options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
-        shouldCreateUser: false,
-      },
+      password,
     });
 
     if (error) {
       setStatus("error");
       if (
+        error.message.toLowerCase().includes("invalid login credentials") ||
+        error.message.toLowerCase().includes("invalid_credentials")
+      ) {
+        setErrorMessage("Email o password non corretti.");
+      } else if (
+        error.message.toLowerCase().includes("email not confirmed")
+      ) {
+        setErrorMessage("Email non confermata. Controlla la tua casella di posta.");
+      } else if (
         error.message.toLowerCase().includes("not found") ||
-        error.message.toLowerCase().includes("signups not allowed") ||
-        error.message.toLowerCase().includes("user not found") ||
-        error.message.toLowerCase().includes("otp_disabled")
+        error.message.toLowerCase().includes("signups not allowed")
       ) {
         setErrorMessage(
           "Email non riconosciuta. Contatta l'amministratore per ricevere un invito di accesso.",
@@ -60,14 +69,22 @@ export default function Login() {
       }
       return;
     }
-    setStatus("sent");
+
+    // Success — redirect will be handled by auth state listener
+    window.location.href = "/";
   };
 
   return (
     <div className="flex min-h-screen items-center justify-center px-4 py-8">
       <div className="w-full max-w-md space-y-8">
         {bounceMessage && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-center text-sm text-destructive">
+          <div
+            className={`rounded-md border p-3 text-center text-sm ${
+              bounceType === "success"
+                ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                : "border-destructive/30 bg-destructive/10 text-destructive"
+            }`}
+          >
             {bounceMessage}
           </div>
         )}
@@ -75,58 +92,72 @@ export default function Login() {
         <div className="space-y-2 text-center">
           <h1 className="text-2xl font-semibold tracking-tight">SoKeto Gestionale</h1>
           <p className="text-sm text-muted-foreground">
-            Accedi con il tuo indirizzo email. Ti invieremo un link magico per il login.
+            Accedi con le tue credenziali.
           </p>
         </div>
 
-        {status === "sent" ? (
-          <div className="rounded-lg border border-border bg-card p-6 text-center space-y-4">
-            <Mail className="mx-auto h-10 w-10 text-primary" />
-            <h2 className="text-lg font-medium">Controlla la tua email</h2>
-            <p className="text-sm text-muted-foreground">
-              Abbiamo inviato un link di accesso a <strong>{email}</strong>. Apri
-              l'email e clicca sul link per entrare.
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setStatus("idle");
-                setEmail("");
-              }}
-            >
-              Usa un'altra email
-            </Button>
+        <form onSubmit={onSubmit} className="space-y-4 rounded-lg border border-border bg-card p-6">
+          <div className="space-y-2">
+            <Label htmlFor="email">Email</Label>
+            <Input
+              id="email"
+              type="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="tuo@indirizzo.it"
+              disabled={status === "submitting"}
+            />
           </div>
-        ) : (
-          <form onSubmit={onSubmit} className="space-y-4 rounded-lg border border-border bg-card p-6">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+
+          <div className="space-y-2">
+            <Label htmlFor="password">Password</Label>
+            <div className="relative">
               <Input
-                id="email"
-                type="email"
-                autoComplete="email"
+                id="password"
+                type={showPassword ? "text" : "password"}
+                autoComplete="current-password"
                 required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="tuo@indirizzo.it"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
                 disabled={status === "submitting"}
+                className="pr-10"
               />
+              <button
+                type="button"
+                tabIndex={-1}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowPassword(!showPassword)}
+                aria-label={showPassword ? "Nascondi password" : "Mostra password"}
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
             </div>
+          </div>
 
-            {errorMessage ? (
-              <p className="text-sm text-destructive">{errorMessage}</p>
-            ) : null}
+          {errorMessage ? (
+            <p className="text-sm text-destructive">{errorMessage}</p>
+          ) : null}
 
-            <Button type="submit" className="w-full" disabled={status === "submitting"}>
-              {status === "submitting" ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                "Invia link di accesso"
-              )}
-            </Button>
-          </form>
-        )}
+          <Button type="submit" className="w-full" disabled={status === "submitting"}>
+            {status === "submitting" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              "Accedi"
+            )}
+          </Button>
+
+          <div className="text-center">
+            <Link
+              href="/forgot-password"
+              className="text-sm text-muted-foreground hover:text-primary underline-offset-4 hover:underline"
+            >
+              Password dimenticata?
+            </Link>
+          </div>
+        </form>
 
         <p className="text-center text-xs text-muted-foreground">
           Solo per operatori SoKeto autorizzati.

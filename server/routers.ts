@@ -147,6 +147,33 @@ export const appRouter = router({
         }
         return { success: true };
       }),
+
+    /**
+     * M10: Invia link "imposta password" a tutti gli utenti esistenti.
+     * Da usare una tantum dopo la migrazione da magic-link a email+password.
+     */
+    sendSetPasswordToAll: adminProcedure
+      .mutation(async () => {
+        const allUsers = await db.getAllUsers();
+        const results: { email: string; status: string }[] = [];
+        const baseUrl = ENV.publicAppUrl;
+        for (const u of allUsers) {
+          try {
+            const { error: resetError } = await supabaseAdmin.auth.resetPasswordForEmail(
+              u.email,
+              { redirectTo: `${baseUrl}/reset-password` },
+            );
+            if (resetError) {
+              results.push({ email: u.email, status: `errore: ${resetError.message}` });
+            } else {
+              results.push({ email: u.email, status: "inviato" });
+            }
+          } catch (e: any) {
+            results.push({ email: u.email, status: `errore: ${e.message}` });
+          }
+        }
+        return results;
+      }),
   }),
 
   // ============= RETAILERS =============

@@ -13,6 +13,9 @@ import AuthVerify from "./pages/AuthVerify";
 import Home from "./pages/Home";
 import Integrations from "./pages/Integrations";
 import Login from "./pages/Login";
+import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
+import SetPassword from "./pages/SetPassword";
 import Movements from "./pages/Movements";
 import Packages from "./pages/Packages";
 import ProducerDetail from "./pages/ProducerDetail";
@@ -89,6 +92,9 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
+      <Route path="/forgot-password" component={ForgotPassword} />
+      <Route path="/reset-password" component={ResetPassword} />
+      <Route path="/set-password" component={SetPassword} />
       <Route path="/auth/callback" component={AuthCallback} />
       <Route path="/auth/verify" component={AuthVerify} />
 
