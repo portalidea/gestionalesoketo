@@ -49,6 +49,14 @@ export const stockMovementTypeEnum = pgEnum("stock_movement_type", [
 ]);
 export const salesChannelEnum = pgEnum("sales_channel", ["shopify", "amazon", "temu", "aliexpress", "manual"]);
 export const eventTypeEnum = pgEnum("event_type_enum", ["fair", "event", "gift", "internal", "other"]);
+export const adjustmentReasonEnum = pgEnum("adjustment_reason_enum", [
+  "typo",
+  "recount",
+  "damage",
+  "loss",
+  "found",
+  "other",
+]);
 export const alertTypeEnum = pgEnum("alert_type", ["LOW_STOCK", "EXPIRING", "EXPIRED"]);
 export const alertStatusEnum = pgEnum("alert_status", ["ACTIVE", "ACKNOWLEDGED", "RESOLVED"]);
 export const syncStatusEnum = pgEnum("sync_status", ["SUCCESS", "FAILED", "PARTIAL"]);
@@ -371,6 +379,9 @@ export const stockMovements = pgTable("stockMovements", {
   ficProformaNumber: varchar("ficProformaNumber", { length: 50 }),
   // M8.1: riferimento ordine marketplace
   marketplaceOrderId: uuid("marketplaceOrderId"),
+  // M6.2.F: rettifica quantità — motivo e nota
+  adjustmentReason: adjustmentReasonEnum("adjustmentReason"),
+  adjustmentNote: text("adjustmentNote"),
 });
 
 export type StockMovement = typeof stockMovements.$inferSelect;

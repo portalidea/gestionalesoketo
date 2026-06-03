@@ -303,6 +303,10 @@ export default function Warehouse() {
       import("sonner").then(({ toast }) => toast.error("Quantit\u00e0 non valida"));
       return;
     }
+    if (adjustReason === 'other' && !adjustNotes.trim()) {
+      import("sonner").then(({ toast }) => toast.error("Note obbligatorie per motivo 'Altro'"));
+      return;
+    }
     adjustMutation.mutate({
       batchId: adjustTarget.batchId,
       locationId: adjustTarget.locationId,
@@ -1209,10 +1213,11 @@ export default function Warehouse() {
                     <SelectValue placeholder="Seleziona causale" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="physical_count">Conta fisica</SelectItem>
-                    <SelectItem value="not_inventoried">Prodotto non inventariato</SelectItem>
-                    <SelectItem value="breakage">Rottura / Scarto</SelectItem>
-                    <SelectItem value="registration_error">Errore registrazione</SelectItem>
+                    <SelectItem value="typo">Errore di digitazione</SelectItem>
+                    <SelectItem value="recount">Riconteggio fisico</SelectItem>
+                    <SelectItem value="damage">Danno / Rottura</SelectItem>
+                    <SelectItem value="loss">Smarrimento</SelectItem>
+                    <SelectItem value="found">Ritrovamento</SelectItem>
                     <SelectItem value="other">Altro</SelectItem>
                   </SelectContent>
                 </Select>

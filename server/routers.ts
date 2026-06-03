@@ -679,8 +679,30 @@ export const appRouter = router({
       }),
 
     /**
+     * M6.2.F: Controlla se un lotto con lo stesso batchNumber esiste già.
+     * Restituisce 'new', 'merge' o 'conflict'.
+     */
+    checkLotConflict: staffProcedure
+      .input(
+        z.object({
+          productId: uuid,
+          batchNumber: z.string().min(1),
+          expirationDate: dateString,
+          producerId: uuid.nullable(),
+        }),
+      )
+      .query(async ({ input }) => {
+        return await db.checkLotConflict({
+          productId: input.productId,
+          batchNumber: input.batchNumber,
+          expirationDate: input.expirationDate,
+          producerId: input.producerId,
+        });
+      }),
+    /**
      * Crea un lotto + ingresso al magazzino centrale (atomico).
      * Movimento generato: RECEIPT_FROM_PRODUCER.
+     * Se mergeWithBatchId è presente, incrementa il lotto esistente.
      */
     create: writerProcedure
       .input(
@@ -693,20 +715,56 @@ export const appRouter = router({
           initialQuantity: z.number().int().positive(),
           costPrice: z.string().optional(), // M6.2.E
           notes: z.string().optional(),
+          mergeWithBatchId: uuid.optional(), // M6.2.F: merge
         }),
       )
       .mutation(async ({ input, ctx }) => {
-        return await db.createBatchWithReceipt({
-          productId: input.productId,
-          producerId: input.producerId ?? null,
-          batchNumber: input.batchNumber,
-          expirationDate: input.expirationDate,
-          productionDate: input.productionDate ?? null,
-          initialQuantity: input.initialQuantity,
-          costPrice: input.costPrice,
-          notes: input.notes ?? null,
-          createdBy: ctx.user.id,
-        });
+        // M6.2.F: Smart merge
+        if (input.mergeWithBatchId) {
+          const conflict = await db.checkLotConflict({
+            productId: input.productId,
+            batchNumber: input.batchNumber,
+            expirationDate: input.expirationDate,
+            producerId: input.producerId ?? null,
+          });
+          if (conflict.status !== "merge" || conflict.batch.id !== input.mergeWithBatchId) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Lotto target non corrisponde. Ricarica e riprova.",
+            });
+          }
+          const result = await db.mergeBatchReceipt({
+            batchId: input.mergeWithBatchId,
+            productId: input.productId,
+            quantity: input.initialQuantity,
+            costPrice: input.costPrice,
+            notes: input.notes ?? null,
+            createdBy: ctx.user.id,
+          });
+          return { id: input.mergeWithBatchId, merged: true, newQuantity: result.newQuantity } as any;
+        }
+        // Standard flow: create new batch
+        try {
+          return await db.createBatchWithReceipt({
+            productId: input.productId,
+            producerId: input.producerId ?? null,
+            batchNumber: input.batchNumber,
+            expirationDate: input.expirationDate,
+            productionDate: input.productionDate ?? null,
+            initialQuantity: input.initialQuantity,
+            costPrice: input.costPrice,
+            notes: input.notes ?? null,
+            createdBy: ctx.user.id,
+          });
+        } catch (err: any) {
+          if (err?.code === "23505" || err?.message?.includes("unique") || err?.message?.includes("duplicate")) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "Lotto duplicato. Usa il flow di merge per aggiungere quantit\u00e0 a un lotto esistente.",
+            });
+          }
+          throw err;
+        }
       }),
 
     /**
@@ -1095,10 +1153,11 @@ export const appRouter = router({
         locationId: z.string().uuid(),
         newQuantity: z.number().int().min(0),
         reason: z.enum([
-          'physical_count',
-          'not_inventoried',
-          'breakage',
-          'registration_error',
+          'typo',
+          'recount',
+          'damage',
+          'loss',
+          'found',
           'other',
         ]),
         notes: z.string().max(500).optional(),
@@ -1108,6 +1167,11 @@ export const appRouter = router({
         if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
         const { eq, and } = await import("drizzle-orm");
         const { inventoryByBatch, productBatches, stockMovements } = await import("../drizzle/schema");
+
+        // Validate: if reason is 'other', notes are required
+        if (input.reason === 'other' && (!input.notes || input.notes.trim().length === 0)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Note obbligatorie per motivo 'Altro'" });
+        }
 
         return await database.transaction(async (tx) => {
           // 1. Lock riga inventoryByBatch
@@ -1153,12 +1217,13 @@ export const appRouter = router({
             });
           }
 
-          // 4. Registra movimento ADJUSTMENT
+          // 4. Registra movimento ADJUSTMENT con adjustmentReason + adjustmentNote
           const reasonLabels: Record<string, string> = {
-            physical_count: 'Conta fisica',
-            not_inventoried: 'Prodotto non inventariato',
-            breakage: 'Rottura/Scarto',
-            registration_error: 'Errore registrazione',
+            typo: 'Errore di digitazione',
+            recount: 'Riconteggio fisico',
+            damage: 'Danno/Rottura',
+            loss: 'Smarrimento',
+            found: 'Ritrovamento',
             other: 'Altro',
           };
           const reasonLabel = reasonLabels[input.reason] ?? input.reason;
@@ -1176,6 +1241,8 @@ export const appRouter = router({
             sourceDocumentType: 'manual_adjustment',
             sourceDocument: null,
             notes: `${fullNote} (lotto ${batch.batchNumber})`,
+            adjustmentReason: input.reason,
+            adjustmentNote: input.notes ?? null,
             createdBy: ctx.user?.id ?? null,
           });
 

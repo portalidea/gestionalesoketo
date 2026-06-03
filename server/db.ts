@@ -720,6 +720,152 @@ export async function createBatchWithReceipt(input: {
   });
 }
 
+/***
+ * M6.2.F: Controlla se un lotto con lo stesso batchNumber esiste già per quel prodotto.
+ * Restituisce:
+ * - { status: 'new' } se non esiste
+ * - { status: 'merge', batch } se esiste con stessi (productId, batchNumber, expiryDate, producerId)
+ * - { status: 'conflict', conflictingBatch, mismatchFields } se batchNumber esiste ma dati discordanti
+ */
+export async function checkLotConflict(input: {
+  productId: string;
+  batchNumber: string;
+  expirationDate: string;
+  producerId: string | null;
+}): Promise<
+  | { status: "new" }
+  | { status: "merge"; batch: { id: string; currentQuantity: number; expirationDate: string; producerId: string | null; batchNumber: string } }
+  | { status: "conflict"; conflictingBatch: { id: string; expirationDate: string; producerId: string | null; batchNumber: string }; mismatchFields: string[] }
+> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const warehouse = await getCentralWarehouseLocation();
+
+  const [existing] = await db
+    .select({
+      id: productBatches.id,
+      batchNumber: productBatches.batchNumber,
+      expirationDate: productBatches.expirationDate,
+      producerId: productBatches.producerId,
+    })
+    .from(productBatches)
+    .where(
+      and(
+        eq(productBatches.productId, input.productId),
+        eq(productBatches.batchNumber, input.batchNumber),
+      ),
+    )
+    .limit(1);
+
+  if (!existing) return { status: "new" };
+
+  // Check if all fields match for merge
+  const mismatchFields: string[] = [];
+  if (existing.expirationDate !== input.expirationDate) mismatchFields.push("expiry");
+  if ((existing.producerId ?? null) !== (input.producerId ?? null)) mismatchFields.push("producer");
+
+  if (mismatchFields.length > 0) {
+    return {
+      status: "conflict",
+      conflictingBatch: existing,
+      mismatchFields,
+    };
+  }
+
+  // All match — get current quantity for merge info
+  let currentQuantity = 0;
+  if (warehouse) {
+    const [inv] = await db
+      .select({ quantity: inventoryByBatch.quantity })
+      .from(inventoryByBatch)
+      .where(
+        and(
+          eq(inventoryByBatch.batchId, existing.id),
+          eq(inventoryByBatch.locationId, warehouse.id),
+        ),
+      )
+      .limit(1);
+    currentQuantity = inv?.quantity ?? 0;
+  }
+
+  return {
+    status: "merge",
+    batch: { ...existing, currentQuantity },
+  };
+}
+
+/**
+ * M6.2.F: Merge arrivo in un lotto esistente — incrementa inventoryByBatch
+ * e registra movimento RECEIPT_FROM_PRODUCER.
+ */
+export async function mergeBatchReceipt(input: {
+  batchId: string;
+  productId: string;
+  quantity: number;
+  costPrice?: string;
+  notes: string | null;
+  createdBy: string;
+}): Promise<{ newQuantity: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const warehouse = await getCentralWarehouseLocation();
+  if (!warehouse) throw new Error("Magazzino centrale non configurato");
+
+  return await db.transaction(async (tx) => {
+    // Increment inventoryByBatch
+    const [inv] = await tx
+      .select({ id: inventoryByBatch.id, quantity: inventoryByBatch.quantity })
+      .from(inventoryByBatch)
+      .where(
+        and(
+          eq(inventoryByBatch.batchId, input.batchId),
+          eq(inventoryByBatch.locationId, warehouse.id),
+        ),
+      )
+      .for("update")
+      .limit(1);
+
+    let newQuantity: number;
+    if (inv) {
+      newQuantity = inv.quantity + input.quantity;
+      await tx
+        .update(inventoryByBatch)
+        .set({ quantity: newQuantity, updatedAt: new Date() })
+        .where(eq(inventoryByBatch.id, inv.id));
+    } else {
+      newQuantity = input.quantity;
+      await tx.insert(inventoryByBatch).values({
+        batchId: input.batchId,
+        locationId: warehouse.id,
+        quantity: input.quantity,
+      });
+    }
+
+    // Record RECEIPT_FROM_PRODUCER movement
+    await tx.insert(stockMovements).values({
+      productId: input.productId,
+      type: "RECEIPT_FROM_PRODUCER",
+      quantity: input.quantity,
+      previousQuantity: inv?.quantity ?? 0,
+      newQuantity,
+      batchId: input.batchId,
+      toLocationId: warehouse.id,
+      createdBy: input.createdBy,
+      notes: input.notes ? `Merge: ${input.notes}` : "Merge arrivo su lotto esistente",
+    });
+
+    // Update initialQuantity on batch (additive)
+    await tx
+      .update(productBatches)
+      .set({
+        initialQuantity: sql`${productBatches.initialQuantity} + ${input.quantity}`,
+      })
+      .where(eq(productBatches.id, input.batchId));
+
+    return { newQuantity };
+  });
+}
+
 /**
  * Cancella un lotto solo se "ancora intatto": stock centrale ==
  * initialQuantity AND nessuna riga inventoryByBatch su altre location.

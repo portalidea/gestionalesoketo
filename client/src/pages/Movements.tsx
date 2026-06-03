@@ -70,7 +70,7 @@ type MovementType =
 const TYPE_LABELS: Record<MovementType, string> = {
   IN: "Entrata (legacy)",
   OUT: "Uscita (legacy)",
-  ADJUSTMENT: "Rettifica (legacy)",
+  ADJUSTMENT: "Rettifica quantit\u00e0",
   RECEIPT_FROM_PRODUCER: "Ingresso da produttore",
   TRANSFER: "Trasferimento",
   EXPIRY_WRITE_OFF: "Scarto scadenza",
@@ -226,7 +226,7 @@ function MovementBadge({ type }: { type: string }) {
       );
     case "ADJUSTMENT":
       return (
-        <Badge variant="secondary" className="text-xs">
+        <Badge variant="secondary" className="text-xs bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300">
           <RefreshCw className="h-3 w-3 mr-1" />
           Rettifica
         </Badge>
@@ -397,7 +397,7 @@ export default function Movements() {
                     </SelectItem>
                     <SelectItem value="IN">Entrata (legacy)</SelectItem>
                     <SelectItem value="OUT">Uscita (legacy)</SelectItem>
-                    <SelectItem value="ADJUSTMENT">Rettifica (legacy)</SelectItem>
+                    <SelectItem value="ADJUSTMENT">Rettifica quantit\u00e0</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

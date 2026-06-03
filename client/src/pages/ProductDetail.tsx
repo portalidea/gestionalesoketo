@@ -51,7 +51,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
 import { format } from "date-fns";
 import {
+  AlertTriangle,
   ArrowLeft,
+  GitMerge,
   Link2,
   Loader2,
   Package,
@@ -436,14 +438,35 @@ export default function ProductDetail() {
 
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
   const [batchForm, setBatchForm] = useState<BatchFormState>(EMPTY_BATCH_FORM);
+  // M6.2.F: Smart merge state
+  const [mergeConfirmed, setMergeConfirmed] = useState(false);
+  const [mergeBatchId, setMergeBatchId] = useState<string | null>(null);
+
+  // M6.2.F: Check lot conflict when batchNumber + expirationDate are filled
+  const canCheckConflict = batchForm.batchNumber.length > 0 && batchForm.expirationDate.length === 10;
+  const { data: conflictResult } = trpc.productBatches.checkLotConflict.useQuery(
+    {
+      productId,
+      batchNumber: batchForm.batchNumber,
+      expirationDate: batchForm.expirationDate,
+      producerId: batchForm.producerId !== NO_PRODUCER_VALUE ? batchForm.producerId : null,
+    },
+    { enabled: canCheckConflict && batchDialogOpen },
+  );
 
   const createBatchMutation = trpc.productBatches.create.useMutation({
-    onSuccess: async () => {
+    onSuccess: async (result: any) => {
       await utils.productBatches.listByProduct.invalidate({ productId });
       await utils.warehouse.getStockOverview.invalidate();
       setBatchDialogOpen(false);
       setBatchForm(EMPTY_BATCH_FORM);
-      toast.success("Lotto registrato in magazzino centrale");
+      setMergeConfirmed(false);
+      setMergeBatchId(null);
+      if (result?.merged) {
+        toast.success(`Quantit\u00e0 aggiunta al lotto esistente (nuovo totale: ${result.newQuantity} pz)`);
+      } else {
+        toast.success("Lotto registrato in magazzino centrale");
+      }
     },
     onError: (err) => toast.error(err.message),
   });
@@ -513,7 +536,17 @@ export default function ProductDetail() {
     e.preventDefault();
     const qty = parseInt(batchForm.initialQuantity, 10);
     if (!Number.isFinite(qty) || qty <= 0) {
-      toast.error("Quantità iniziale deve essere un numero positivo");
+      toast.error("Quantit\u00e0 iniziale deve essere un numero positivo");
+      return;
+    }
+    // M6.2.F: If merge detected but not confirmed, block
+    if (conflictResult?.status === "merge" && !mergeConfirmed) {
+      toast.error("Conferma il merge prima di procedere");
+      return;
+    }
+    // M6.2.F: If conflict detected, block
+    if (conflictResult?.status === "conflict") {
+      toast.error("Conflitto rilevato: modifica i dati del lotto");
       return;
     }
     createBatchMutation.mutate({
@@ -528,6 +561,7 @@ export default function ProductDetail() {
       initialQuantity: qty,
       notes: batchForm.notes || undefined,
       costPrice: batchForm.costPrice || undefined,
+      mergeWithBatchId: mergeConfirmed ? (mergeBatchId ?? undefined) : undefined,
     });
   };
 
@@ -1074,22 +1108,77 @@ export default function ProductDetail() {
                           </div>
                         )}
                       </div>
+                      {/* M6.2.F: Smart merge banner */}
+                      {canCheckConflict && conflictResult?.status === "merge" && (
+                        <div className="rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-4 my-2">
+                          <div className="flex items-start gap-3">
+                            <GitMerge className="h-5 w-5 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+                            <div className="flex-1">
+                              <p className="font-medium text-blue-900 dark:text-blue-200 text-sm">
+                                Lotto gi\u00e0 esistente — merge disponibile
+                              </p>
+                              <p className="text-xs text-blue-700 dark:text-blue-300 mt-1">
+                                Il lotto <strong>{conflictResult.batch.batchNumber}</strong> (scad. {conflictResult.batch.expirationDate}) esiste gi\u00e0 con <strong>{conflictResult.batch.currentQuantity} pezzi</strong> in stock.
+                                La quantit\u00e0 inserita verr\u00e0 <strong>sommata</strong> allo stock esistente.
+                              </p>
+                              <label className="flex items-center gap-2 mt-3 cursor-pointer">
+                                <Checkbox
+                                  checked={mergeConfirmed}
+                                  onCheckedChange={(checked) => {
+                                    setMergeConfirmed(!!checked);
+                                    setMergeBatchId(conflictResult.batch.id);
+                                  }}
+                                />
+                                <span className="text-sm text-blue-800 dark:text-blue-200">
+                                  Confermo: aggiungi quantit\u00e0 al lotto esistente
+                                </span>
+                              </label>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {canCheckConflict && conflictResult?.status === "conflict" && (
+                        <div className="rounded-lg border border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 p-4 my-2">
+                          <div className="flex items-start gap-3">
+                            <AlertTriangle className="h-5 w-5 text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
+                            <div className="flex-1">
+                              <p className="font-medium text-red-900 dark:text-red-200 text-sm">
+                                Conflitto: stesso numero lotto con dati diversi
+                              </p>
+                              <p className="text-xs text-red-700 dark:text-red-300 mt-1">
+                                Esiste gi\u00e0 il lotto <strong>{conflictResult.conflictingBatch.batchNumber}</strong> ma con scadenza o produttore diversi.
+                                Modifica il numero lotto o i parametri per procedere.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       <DialogFooter>
                         <Button
                           type="button"
                           variant="outline"
-                          onClick={() => setBatchDialogOpen(false)}
+                          onClick={() => {
+                            setBatchDialogOpen(false);
+                            setMergeConfirmed(false);
+                            setMergeBatchId(null);
+                          }}
                         >
                           Annulla
                         </Button>
                         <Button
                           type="submit"
-                          disabled={createBatchMutation.isPending}
+                          disabled={
+                            createBatchMutation.isPending ||
+                            (conflictResult?.status === "merge" && !mergeConfirmed) ||
+                            conflictResult?.status === "conflict"
+                          }
                         >
                           {createBatchMutation.isPending && (
                             <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                           )}
-                          Registra lotto
+                          {conflictResult?.status === "merge" && mergeConfirmed
+                            ? "Aggiungi al lotto esistente"
+                            : "Registra lotto"}
                         </Button>
                       </DialogFooter>
                     </form>
