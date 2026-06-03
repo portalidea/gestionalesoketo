@@ -737,145 +737,142 @@ export default function OrderDetail() {
           </Card>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Colonna sinistra: items + note */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Items */}
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="text-base">Righe ordine</CardTitle>
-                <div className="flex items-center gap-2">
-                  {canEditItems && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 text-xs"
-                      onClick={openEditItemsDialog}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                      Modifica Items
-                    </Button>
+        {/* Righe ordine — full width */}
+        <Card className="w-full">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base">Righe ordine</CardTitle>
+            <div className="flex items-center gap-2">
+              {canEditItems && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 text-xs"
+                  onClick={openEditItemsDialog}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  Modifica Items
+                </Button>
+              )}
+              {totalItems > 0 && (
+                <>
+                  {assignedCount > 0 && (
+                    <Badge variant="outline" className="text-xs gap-1 text-emerald-500 border-emerald-500/30">
+                      <Check className="h-3 w-3" />
+                      {assignedCount}/{totalItems} con lotto
+                    </Badge>
                   )}
-                  {totalItems > 0 && (
-                    <>
-                      {assignedCount > 0 && (
-                        <Badge variant="outline" className="text-xs gap-1 text-emerald-500 border-emerald-500/30">
-                          <Check className="h-3 w-3" />
-                          {assignedCount}/{totalItems} con lotto
-                        </Badge>
-                      )}
-                      {unassignedCount > 0 && canEditBatches && (
-                        <Badge variant="outline" className="text-xs gap-1 text-amber-500 border-amber-500/30">
-                          <AlertTriangle className="h-3 w-3" />
-                          {unassignedCount} senza lotto
-                        </Badge>
-                      )}
-                    </>
+                  {unassignedCount > 0 && canEditBatches && (
+                    <Badge variant="outline" className="text-xs gap-1 text-amber-500 border-amber-500/30">
+                      <AlertTriangle className="h-3 w-3" />
+                      {unassignedCount} senza lotto
+                    </Badge>
                   )}
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>SKU</TableHead>
-                        <TableHead>Prodotto</TableHead>
-                        <TableHead className="text-right">Qty</TableHead>
-                        <TableHead className="text-right">Prezzo unit.</TableHead>
-                        <TableHead className="text-right">Totale netto</TableHead>
-                        <TableHead>Lotto</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {order.items.map((item) => (
-                        <TableRow key={item.id}>
-                          <TableCell className="font-mono text-xs">{item.productSku}</TableCell>
-                          <TableCell className="font-medium text-sm">{item.productName}</TableCell>
-                          <TableCell className="text-right font-mono">{item.quantity}</TableCell>
-                          <TableCell className="text-right font-mono text-sm">
-                            € {parseFloat(item.unitPriceFinal).toFixed(2)}
-                            {parseFloat(item.discountPercent) > 0 && (
-                              <span className="text-xs text-muted-foreground line-through ml-1">
-                                € {parseFloat(item.unitPriceBase).toFixed(2)}
-                              </span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-sm">
-                            € {parseFloat(item.lineTotalNet).toFixed(2)}
-                          </TableCell>
-                          <TableCell>
-                            <BatchSelector
-                              item={item}
-                              canEdit={canEditBatches}
-                              orderId={order.id}
-                            />
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
+                </>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>SKU</TableHead>
+                    <TableHead>Prodotto</TableHead>
+                    <TableHead className="text-right">Qty</TableHead>
+                    <TableHead className="text-right">Prezzo unit.</TableHead>
+                    <TableHead className="text-right">Totale netto</TableHead>
+                    <TableHead>Lotto</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {order.items.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell className="font-mono text-xs">{item.productSku}</TableCell>
+                      <TableCell className="font-medium text-sm">{item.productName}</TableCell>
+                      <TableCell className="text-right font-mono">{item.quantity}</TableCell>
+                      <TableCell className="text-right font-mono text-sm">
+                        € {parseFloat(item.unitPriceFinal).toFixed(2)}
+                        {parseFloat(item.discountPercent) > 0 && (
+                          <span className="text-xs text-muted-foreground line-through ml-1">
+                            € {parseFloat(item.unitPriceBase).toFixed(2)}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-sm">
+                        € {parseFloat(item.lineTotalNet).toFixed(2)}
+                      </TableCell>
+                      <TableCell>
+                        <BatchSelector
+                          item={item}
+                          canEdit={canEditBatches}
+                          orderId={order.id}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
 
-            {/* Note */}
-            {(order.notes || order.notesInternal) && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Note</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {order.notes && (
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground mb-1">Note cliente</p>
-                      <p className="text-sm whitespace-pre-wrap">{order.notes}</p>
-                    </div>
-                  )}
-                  {order.notesInternal && (
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground mb-1">Note interne</p>
-                      <p className="text-sm whitespace-pre-wrap text-amber-500/80">{order.notesInternal}</p>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            )}
-          </div>
+        {/* Note */}
+        {(order.notes || order.notesInternal) && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Note</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {order.notes && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-1">Note cliente</p>
+                  <p className="text-sm whitespace-pre-wrap">{order.notes}</p>
+                </div>
+              )}
+              {order.notesInternal && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-1">Note interne</p>
+                  <p className="text-sm whitespace-pre-wrap text-amber-500/80">{order.notesInternal}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
-          {/* Colonna destra: riepilogo + documenti + azioni */}
-          <div className="space-y-6">
-            {/* Riepilogo totali */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Riepilogo</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="space-y-2 text-sm">
-                  {parseFloat(order.discountPercent) > 0 && (
-                    <div className="flex justify-between text-muted-foreground">
-                      <span>Sconto pacchetto</span>
-                      <span className="text-green-500">-{parseFloat(order.discountPercent).toFixed(0)}%</span>
-                    </div>
-                  )}
+        {/* Riepilogo + Documenti FiC — 2-col grid (or single col for event orders) */}
+        <div className={`grid gap-4 ${(order as any).eventType ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2'}`}>
+          {/* Riepilogo totali */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Riepilogo</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="space-y-2 text-sm">
+                {parseFloat(order.discountPercent) > 0 && (
                   <div className="flex justify-between text-muted-foreground">
-                    <span>Subtotale netto</span>
-                    <span className="font-mono">€ {parseFloat(order.subtotalNet).toFixed(2)}</span>
+                    <span>Sconto pacchetto</span>
+                    <span className="text-green-500">-{parseFloat(order.discountPercent).toFixed(0)}%</span>
                   </div>
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>IVA</span>
-                    <span className="font-mono">€ {parseFloat(order.vatAmount).toFixed(2)}</span>
-                  </div>
-                  <Separator />
-                  <div className="flex justify-between font-semibold text-lg">
-                    <span>Totale lordo</span>
-                    <span className="font-mono">€ {parseFloat(order.totalGross).toFixed(2)}</span>
-                  </div>
+                )}
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Subtotale netto</span>
+                  <span className="font-mono">€ {parseFloat(order.subtotalNet).toFixed(2)}</span>
                 </div>
-              </CardContent>
-            </Card>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>IVA</span>
+                  <span className="font-mono">€ {parseFloat(order.vatAmount).toFixed(2)}</span>
+                </div>
+                <Separator />
+                <div className="flex justify-between font-semibold text-lg">
+                  <span>Totale lordo</span>
+                  <span className="font-mono">€ {parseFloat(order.totalGross).toFixed(2)}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
-            {/* Documenti FiC */}
+          {/* Documenti FiC — hidden for event orders */}
+          {!(order as any).eventType && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
@@ -968,136 +965,87 @@ export default function OrderDetail() {
                 )}
               </CardContent>
             </Card>
+          )}
+        </div>
 
-            {/* Stato Lotti */}
-            {canEditBatches && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Package className="h-4 w-4" />
-                    Stato Lotti
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  {order.items.map((item) => {
-                    const hasBatch = !!item.batchId;
-                    return (
-                      <div
-                        key={item.id}
-                        className={`flex items-center justify-between p-2 rounded-md text-xs ${
-                          hasBatch
-                            ? "bg-emerald-500/5 border border-emerald-500/20"
-                            : "bg-amber-500/5 border border-amber-500/20"
-                        }`}
+        {/* Azioni */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Azioni</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {/* Transizioni status via state machine */}
+            {transitions.map((t) => {
+              if (t.mutation === "cancelOrder") {
+                return (
+                  <AlertDialog key={t.status}>
+                    <AlertDialogTrigger asChild>
+                      <Button
+                        variant="destructive"
+                        className="w-full justify-start gap-2"
+                        disabled={isAnyMutationPending}
                       >
-                        <div className="flex items-center gap-2 min-w-0">
-                          {hasBatch ? (
-                            <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                          ) : (
-                            <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-                          )}
-                          <span className="truncate font-medium">{item.productName}</span>
-                          <span className="text-muted-foreground">×{item.quantity}</span>
-                        </div>
-                        <div className="text-right shrink-0 ml-2">
-                          {hasBatch ? (
-                            <span className="font-mono text-emerald-600 dark:text-emerald-400">
-                              {item.batchNumber}
-                            </span>
-                          ) : (
-                            <span className="text-amber-600 dark:text-amber-400">Da assegnare</span>
-                          )}
-                        </div>
+                        <XCircle className="h-4 w-4" />
+                        {t.label}
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Annullare l'ordine?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          L'ordine verrà annullato e la proforma eliminata da FiC (se presente).
+                          Questa azione non è reversibile.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <div className="px-6">
+                        <Input
+                          placeholder="Motivo annullamento (opzionale)"
+                          value={cancelReason}
+                          onChange={(e) => setCancelReason(e.target.value)}
+                        />
                       </div>
-                    );
-                  })}
-                  {unassignedCount === 0 && (
-                    <p className="text-xs text-emerald-600 dark:text-emerald-400 text-center pt-1">
-                      Tutti i lotti assegnati
-                    </p>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel onClick={() => setCancelReason("")}>Indietro</AlertDialogCancel>
+                        <AlertDialogAction
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          onClick={() => {
+                            handleTransition("cancelOrder", order.id);
+                            setCancelReason("");
+                          }}
+                        >
+                          Conferma Annullamento
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                );
+              }
+
+              return (
+                <Button
+                  key={t.status}
+                  variant={t.variant}
+                  className="w-full justify-start gap-2"
+                  disabled={isAnyMutationPending}
+                  onClick={() => handleTransition(t.mutation, order.id)}
+                >
+                  {isAnyMutationPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Check className="h-4 w-4" />
                   )}
-                </CardContent>
-              </Card>
-            )}
+                  {t.label}
+                </Button>
+              );
+            })}
 
-            {/* Azioni */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Azioni</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {/* Transizioni status via state machine */}
-                {transitions.map((t) => {
-                  if (t.mutation === "cancelOrder") {
-                    return (
-                      <AlertDialog key={t.status}>
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            variant="destructive"
-                            className="w-full justify-start gap-2"
-                            disabled={isAnyMutationPending}
-                          >
-                            <XCircle className="h-4 w-4" />
-                            {t.label}
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Annullare l'ordine?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              L'ordine verrà annullato e la proforma eliminata da FiC (se presente).
-                              Questa azione non è reversibile.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <div className="px-6">
-                            <Input
-                              placeholder="Motivo annullamento (opzionale)"
-                              value={cancelReason}
-                              onChange={(e) => setCancelReason(e.target.value)}
-                            />
-                          </div>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel onClick={() => setCancelReason("")}>Indietro</AlertDialogCancel>
-                            <AlertDialogAction
-                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                              onClick={() => {
-                                handleTransition("cancelOrder", order.id);
-                                setCancelReason("");
-                              }}
-                            >
-                              Conferma Annullamento
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    );
-                  }
-
-                  return (
-                    <Button
-                      key={t.status}
-                      variant={t.variant}
-                      className="w-full justify-start gap-2"
-                      disabled={isAnyMutationPending}
-                      onClick={() => handleTransition(t.mutation, order.id)}
-                    >
-                      {isAnyMutationPending ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Check className="h-4 w-4" />
-                      )}
-                      {t.label}
-                    </Button>
-                  );
-                })}
-
-                {/* Deliver event order button */}
-                {(order as any).eventType && order.status === "pending" && (
-                  <Button
-                    variant="default"
-                    className="w-full justify-start gap-2"
-                    disabled={isAnyMutationPending || deliverEventOrder.isPending}
-                    onClick={() => deliverEventOrder.mutate({ orderId: order.id })}
+            {/* Deliver event order button */}
+            {(order as any).eventType && order.status === "pending" && (
+              <Button
+                variant="default"
+                className="w-full justify-start gap-2"
+                disabled={isAnyMutationPending || deliverEventOrder.isPending}
+                onClick={() => deliverEventOrder.mutate({ orderId: order.id })}
                   >
                     {deliverEventOrder.isPending ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -1107,15 +1055,13 @@ export default function OrderDetail() {
                     Consegna Ordine Evento
                   </Button>
                 )}
-                {transitions.length === 0 && !(order as any).eventType && (
-                  <p className="text-sm text-muted-foreground text-center py-2">
-                    Nessuna azione disponibile
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        </div>
+            {transitions.length === 0 && !(order as any).eventType && (
+              <p className="text-sm text-muted-foreground text-center py-2">
+                Nessuna azione disponibile
+              </p>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       {/* Edit Items Dialog */}
