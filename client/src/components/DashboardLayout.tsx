@@ -44,6 +44,7 @@ import {
   TrendingUp,
   Users,
   Warehouse,
+  Download,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import {
@@ -74,6 +75,7 @@ const baseMenuItems: MenuItem[] = [
   { icon: Euro, label: "Commissioni", path: "/affiliates/commissions" },
   { icon: Plug, label: "Marketplace", path: "/marketplace/shopify" },
   { icon: AlertTriangle, label: "Alert", path: "/alerts" },
+  { icon: Download, label: "Export Magazzino", path: "/inventory/export" },
   {
     icon: BarChart3,
     label: "Reportistica",

@@ -31,6 +31,7 @@ import { affiliatesRouter } from "./affiliates-router";
 import { affiliatePortalRouter } from "./affiliate-portal-router";
 import { shopifyRouter } from "./shopify-router";
 import { reportsRouter } from "./reports-router";
+import { inventoryExportRouter } from "./inventory-export-router";
 
 
 const uuid = z.string().uuid();
@@ -1635,6 +1636,8 @@ export const appRouter = router({
   shopify: shopifyRouter,
   // ============= M9 — REPORTS =============
   reports: reportsRouter,
+  // ============= INVENTORY EXPORT =============
+  inventoryExport: inventoryExportRouter,
 });
 
 export type AppRouter = typeof appRouter;

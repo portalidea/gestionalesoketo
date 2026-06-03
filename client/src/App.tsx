@@ -56,6 +56,7 @@ import ReportsHub from "./pages/reports/ReportsHub";
 import WarehouseReport from "./pages/reports/WarehouseReport";
 import SalesReport from "./pages/reports/SalesReport";
 import MarketplaceReport from "./pages/reports/MarketplaceReport";
+import InventoryExport from "./pages/InventoryExport";
 
 const ADMIN_ROLES = ["admin", "operator", "viewer"];
 const RETAILER_ROLES = ["retailer_admin", "retailer_user"];
@@ -208,6 +209,9 @@ function Router() {
       </Route>
       <Route path="/alerts">
         <RequireRole allowedRoles={ADMIN_ROLES}><Alerts /></RequireRole>
+      </Route>
+      <Route path="/inventory/export">
+        <RequireRole allowedRoles={ADMIN_ROLES}><InventoryExport /></RequireRole>
       </Route>
       <Route path="/reports/warehouse">
         <RequireRole allowedRoles={ADMIN_ROLES}><WarehouseReport /></RequireRole>
