@@ -598,7 +598,7 @@ export default function OrderDetail() {
 
   return (
     <DashboardLayout>
-      <div className="space-y-6 w-full">
+      <div className="space-y-6 w-full min-w-0">
         {/* Header */}
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => setLocation("/orders")}>
@@ -738,7 +738,7 @@ export default function OrderDetail() {
         )}
 
         {/* Righe ordine — full width */}
-        <Card className="w-full">
+        <Card className="w-full overflow-hidden">
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-base">Righe ordine</CardTitle>
             <div className="flex items-center gap-2">
