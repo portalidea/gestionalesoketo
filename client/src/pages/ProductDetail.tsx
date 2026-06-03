@@ -57,6 +57,7 @@ import {
   Link2,
   Loader2,
   Package,
+  Pencil,
   Plus,
   Save,
   Trash2,
@@ -521,6 +522,53 @@ export default function ProductDetail() {
       locationId: warehouseLoc.id,
       quantity: qty,
       notes: writeOffNotes || undefined,
+    });
+  };
+
+  // ============== Adjustment state (M6.2.F) ==============
+  const [adjustTarget, setAdjustTarget] = useState<{
+    batchId: string;
+    batchNumber: string;
+    expirationDate: string;
+    currentQuantity: number;
+  } | null>(null);
+  const [adjustNewQty, setAdjustNewQty] = useState("");
+  const [adjustReason, setAdjustReason] = useState("");
+  const [adjustNotes, setAdjustNotes] = useState("");
+  const adjustMutation = trpc.warehouse.adjustBatchQuantity.useMutation({
+    onSuccess: async () => {
+      await utils.productBatches.listByProduct.invalidate({ productId });
+      await utils.warehouse.getStockOverview.invalidate();
+      setAdjustTarget(null);
+      setAdjustNewQty("");
+      setAdjustReason("");
+      setAdjustNotes("");
+      toast.success("Quantità rettificata");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const submitAdjust = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!adjustTarget || !warehouseLoc) return;
+    const qty = parseInt(adjustNewQty, 10);
+    if (!Number.isFinite(qty) || qty < 0) {
+      toast.error("Quantità deve essere >= 0");
+      return;
+    }
+    if (!adjustReason) {
+      toast.error("Seleziona una causale");
+      return;
+    }
+    if (adjustReason === "other" && !adjustNotes.trim()) {
+      toast.error("Note obbligatorie per causale 'Altro'");
+      return;
+    }
+    adjustMutation.mutate({
+      batchId: adjustTarget.batchId,
+      locationId: warehouseLoc.id,
+      newQuantity: qty,
+      reason: adjustReason as any,
+      notes: adjustNotes || undefined,
     });
   };
 
@@ -1230,6 +1278,26 @@ export default function ProductDetail() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center justify-end gap-1">
+                            {warehouseLoc && (b.centralStock ?? 0) > 0 && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground hover:text-primary"
+                                aria-label="Rettifica quantità"
+                                title="Rettifica quantità lotto"
+                                onClick={() => {
+                                  setAdjustTarget({
+                                    batchId: b.id,
+                                    batchNumber: b.batchNumber,
+                                    expirationDate: b.expirationDate,
+                                    currentQuantity: b.centralStock ?? 0,
+                                  });
+                                  setAdjustNewQty(String(b.centralStock ?? 0));
+                                }}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                            )}
                             {warehouseLoc &&
                               isEligibleForWriteOff(
                                 b.expirationDate,
@@ -1384,6 +1452,115 @@ export default function ProductDetail() {
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 )}
                 Scarta
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ============== Adjustment Dialog (M6.2.F) ============== */}
+      <Dialog
+        open={!!adjustTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setAdjustTarget(null);
+            setAdjustNewQty("");
+            setAdjustReason("");
+            setAdjustNotes("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rettifica quantità lotto</DialogTitle>
+            <DialogDescription>
+              {adjustTarget && (
+                <>
+                  Lotto <strong>{adjustTarget.batchNumber}</strong> — Scad.{" "}
+                  {adjustTarget.expirationDate}
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={submitAdjust} className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">Quantità attuale (pezzi)</label>
+              <p className="text-lg font-semibold">{adjustTarget?.currentQuantity ?? 0}</p>
+              {product && (product.piecesPerUnit ?? 1) > 1 && (
+                <p className="text-xs text-muted-foreground">
+                  = {Math.floor((adjustTarget?.currentQuantity ?? 0) / (product.piecesPerUnit ?? 1))} confezioni ({product.piecesPerUnit} pz/conf)
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="text-sm font-medium">Nuova quantità (pezzi singoli)</label>
+              <input
+                type="number"
+                min="0"
+                className="mt-1 w-full rounded-md border px-3 py-2 text-sm"
+                value={adjustNewQty}
+                onChange={(e) => setAdjustNewQty(e.target.value)}
+              />
+              {product && (product.piecesPerUnit ?? 1) > 1 && adjustNewQty && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  = {Math.floor(parseInt(adjustNewQty, 10) / (product.piecesPerUnit ?? 1))} confezioni
+                </p>
+              )}
+              {adjustTarget && adjustNewQty && (() => {
+                const delta = parseInt(adjustNewQty, 10) - adjustTarget.currentQuantity;
+                if (delta === 0) return <p className="text-xs text-muted-foreground mt-1">Nessuna modifica</p>;
+                if (delta > 0) return <p className="text-xs text-green-600 mt-1">+{delta} pezzi (aggiunta)</p>;
+                return <p className="text-xs text-orange-600 mt-1">{delta} pezzi (rimozione)</p>;
+              })()}
+            </div>
+            <div>
+              <label className="text-sm font-medium">Causale *</label>
+              <Select value={adjustReason} onValueChange={setAdjustReason}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue placeholder="Seleziona causale" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="typo">Errore di digitazione</SelectItem>
+                  <SelectItem value="recount">Riconteggio fisico</SelectItem>
+                  <SelectItem value="damage">Danno / Rottura</SelectItem>
+                  <SelectItem value="loss">Smarrimento</SelectItem>
+                  <SelectItem value="found">Ritrovamento</SelectItem>
+                  <SelectItem value="other">Altro (specificare)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-sm font-medium">
+                Note {adjustReason === "other" ? "*" : "(opzionali)"}
+              </label>
+              <Textarea
+                className="mt-1"
+                value={adjustNotes}
+                onChange={(e) => setAdjustNotes(e.target.value)}
+                maxLength={500}
+                placeholder="Motivo della rettifica..."
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setAdjustTarget(null)}
+              >
+                Annulla
+              </Button>
+              <Button
+                type="submit"
+                disabled={
+                  adjustMutation.isPending ||
+                  !adjustReason ||
+                  (adjustTarget ? parseInt(adjustNewQty, 10) === adjustTarget.currentQuantity : true)
+                }
+              >
+                {adjustMutation.isPending && (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                )}
+                Conferma rettifica
               </Button>
             </DialogFooter>
           </form>
