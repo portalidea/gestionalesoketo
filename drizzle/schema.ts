@@ -31,7 +31,10 @@ import {
  */
 export const userRoleEnum = pgEnum("user_role", ["admin", "operator", "viewer", "retailer_admin", "retailer_user", "affiliate_admin", "affiliate_user"]);
 export const orderStatusEnum = pgEnum("order_status", [
-  "pending", "paid", "approved_for_shipping", "transferring", "shipped", "delivered", "paid_on_delivery", "cancelled",
+  "pending", "transferring", "shipped", "delivered", "cancelled",
+]);
+export const paymentStatusEnum = pgEnum("payment_status", [
+  "unpaid", "paid", "refunded",
 ]);
 export const paymentTermsEnum = pgEnum("payment_terms_enum", [
   "advance_transfer", "on_delivery", "credit_card", "manual",
@@ -610,6 +613,8 @@ export const orders = pgTable(
     ficInvoiceId: integer("ficInvoiceId"),
     ficInvoiceNumber: varchar("ficInvoiceNumber", { length: 50 }),
     paymentTerms: paymentTermsEnum("paymentTerms").default("advance_transfer").notNull(),
+    paymentStatus: paymentStatusEnum("paymentStatus").default("unpaid").notNull(),
+    paymentMethod: varchar("paymentMethod", { length: 50 }),
     paidAt: timestamp("paidAt", { withTimezone: true }),
     approvedForShippingAt: timestamp("approvedForShippingAt", { withTimezone: true }),
     transferringAt: timestamp("transferringAt", { withTimezone: true }),
@@ -627,7 +632,10 @@ export const orders = pgTable(
     index("orders_retailerId_idx").on(t.retailerId),
     index("orders_status_idx")
       .on(t.status)
-      .where(sql`${t.status} IN ('pending', 'paid', 'transferring')`),
+      .where(sql`${t.status} IN ('pending', 'transferring')`),
+    index("orders_payment_status_paid_at_idx")
+      .on(t.paymentStatus, t.paidAt)
+      .where(sql`${t.paymentStatus} = 'paid'`),
     index("orders_createdAt_desc_idx").on(t.createdAt),
     index("orders_status_createdAt_idx").on(t.status, t.createdAt),
   ],
@@ -713,7 +721,7 @@ export type Affiliate = typeof affiliates.$inferSelect;
 export type InsertAffiliate = typeof affiliates.$inferInsert;
 
 /**
- * Affiliate commissions — commissioni maturate per ogni ordine paid/paid_on_delivery.
+ * Affiliate commissions — commissioni maturate per ogni ordine con paymentStatus=paid.
  */
 export const affiliateCommissions = pgTable(
   "affiliate_commissions",

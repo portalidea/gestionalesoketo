@@ -32,7 +32,7 @@ export const retailerOrdersRouter = router({
   list: retailerProcedure
     .input(
       z.object({
-        status: z.enum(["pending", "paid", "transferring", "shipped", "delivered", "cancelled"]).optional(),
+        status: z.enum(["pending", "transferring", "shipped", "delivered", "cancelled"]).optional(),
         page: z.number().int().min(1).default(1),
         pageSize: z.number().int().min(1).max(100).default(20),
       }),
@@ -147,10 +147,9 @@ export const retailerOrdersRouter = router({
         .where(eq(orderItems.orderId, input.id))
         .orderBy(asc(orderItems.productName));
 
-      // Timeline
+      // Timeline (fulfillment only)
       const timeline = [
         { status: "pending", label: "Creato", date: order.createdAt },
-        { status: "paid", label: "Pagato", date: order.paidAt },
         { status: "transferring", label: "In preparazione", date: order.transferringAt },
         { status: "shipped", label: "Spedito", date: order.shippedAt },
         { status: "delivered", label: "Consegnato", date: order.deliveredAt },

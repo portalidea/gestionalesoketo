@@ -27,12 +27,9 @@ import { useLocation } from "wouter";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   pending: { label: "In attesa", color: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/30" },
-  paid: { label: "Pagato", color: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/30" },
-  approved_for_shipping: { label: "Approvato", color: "bg-cyan-500/10 text-cyan-700 dark:text-cyan-400 border-cyan-500/30" },
   transferring: { label: "In preparazione", color: "bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/30" },
   shipped: { label: "Spedito", color: "bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 border-indigo-500/30" },
   delivered: { label: "Consegnato", color: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/30" },
-  paid_on_delivery: { label: "Pagato (consegna)", color: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30" },
   cancelled: { label: "Cancellato", color: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/30" },
 };
 
@@ -42,7 +39,7 @@ export default function PartnerOrders() {
   const [page, setPage] = useState(1);
   const pageSize = 10;
 
-  type OrderStatus = "pending" | "paid" | "approved_for_shipping" | "transferring" | "shipped" | "delivered" | "paid_on_delivery" | "cancelled";
+  type OrderStatus = "pending" | "transferring" | "shipped" | "delivered" | "cancelled";
 
   const ordersQuery = trpc.retailerSelfService.ordersList.useQuery({
     limit: pageSize,
@@ -89,12 +86,9 @@ export default function PartnerOrders() {
             <SelectContent>
               <SelectItem value="all">Tutti gli stati</SelectItem>
               <SelectItem value="pending">In attesa</SelectItem>
-              <SelectItem value="paid">Pagato</SelectItem>
-              <SelectItem value="approved_for_shipping">Approvato</SelectItem>
               <SelectItem value="transferring">In preparazione</SelectItem>
               <SelectItem value="shipped">Spedito</SelectItem>
               <SelectItem value="delivered">Consegnato</SelectItem>
-              <SelectItem value="paid_on_delivery">Pagato (consegna)</SelectItem>
               <SelectItem value="cancelled">Cancellato</SelectItem>
             </SelectContent>
           </Select>

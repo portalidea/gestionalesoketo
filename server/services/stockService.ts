@@ -3,7 +3,7 @@
  *
  * Provides getAvailableStock(productIds) that returns:
  * - totalStock: qty in central warehouse
- * - reservedQty: qty reserved by orders in pending/paid/approved_for_shipping
+ * - reservedQty: qty reserved by orders in pending/transferring
  * - availableQty: totalStock - reservedQty
  *
  * Used by:
@@ -24,7 +24,7 @@ export interface ProductStockInfo {
 /**
  * Get available stock for a list of products.
  * Available = central warehouse stock - reserved by active orders.
- * Active orders = status IN (pending, paid, approved_for_shipping).
+ * Active orders = status IN (pending, transferring).
  */
 export async function getAvailableStock(
   productIds: string[],
@@ -52,13 +52,13 @@ export async function getAvailableStock(
     ]),
   );
 
-  // 2. Reserved qty from active orders (pending, paid, approved_for_shipping)
+  // 2. Reserved qty from active orders (pending, transferring)
   const reservedRows = await db.execute<{ productId: string; reservedQty: number }>(sql`
     SELECT oi."productId" AS "productId",
            COALESCE(SUM(oi."quantity"), 0)::int AS "reservedQty"
     FROM "orderItems" oi
     INNER JOIN "orders" o ON o."id" = oi."orderId"
-    WHERE o."status" IN ('pending', 'paid', 'approved_for_shipping')
+    WHERE o."status" IN ('pending', 'transferring')
       AND oi."productId" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})
     GROUP BY oi."productId"
   `);

@@ -98,6 +98,7 @@ import {
 import { ChevronsUpDown } from "lucide-react";
 import { getEventTypeLabel, getEventTypeColor } from "../../../shared/eventTypeLabels";
 
+// --- Fulfillment status config ---
 const STATUS_CONFIG: Record<
   string,
   {
@@ -108,41 +109,41 @@ const STATUS_CONFIG: Record<
   }
 > = {
   pending: { label: "In attesa", variant: "outline", icon: Clock, color: "text-muted-foreground" },
-  paid: { label: "Pagato", variant: "default", icon: CreditCard, color: "text-green-500" },
-  approved_for_shipping: { label: "Approvato per spedizione", variant: "default", icon: Check, color: "text-green-600" },
   transferring: { label: "In trasferimento", variant: "secondary", icon: Package, color: "text-blue-500" },
   shipped: { label: "Spedito", variant: "secondary", icon: Truck, color: "text-indigo-500" },
   delivered: { label: "Consegnato", variant: "default", icon: CheckCircle2, color: "text-emerald-500" },
-  paid_on_delivery: { label: "Pagato alla consegna", variant: "default", icon: CreditCard, color: "text-emerald-600" },
   cancelled: { label: "Annullato", variant: "destructive", icon: XCircle, color: "text-destructive" },
+};
+
+// --- Payment status config ---
+const PAYMENT_STATUS_CONFIG: Record<
+  string,
+  { label: string; variant: "default" | "secondary" | "destructive" | "outline"; color: string }
+> = {
+  unpaid: { label: "Non pagato", variant: "outline", color: "text-amber-500" },
+  paid: { label: "Pagato", variant: "default", color: "text-green-500" },
+  refunded: { label: "Rimborsato", variant: "destructive", color: "text-red-500" },
 };
 
 const PAYMENT_TERMS_LABELS: Record<string, string> = {
   advance_transfer: "Bonifico anticipato",
   on_delivery: "Pagamento alla consegna",
   credit_card: "Carta di credito",
+  manual: "Manuale",
 };
 
-// FSM: transizioni consentite — context-aware (dipende da paymentTerms)
-function getAllowedTransitions(status: string, paymentTerms?: string | null): { status: string; label: string; variant: "default" | "destructive" | "outline"; mutation: string }[] {
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  advance_transfer: "Bonifico",
+  on_delivery: "Alla consegna",
+  credit_card: "Carta",
+  cash: "Contanti",
+  manual: "Manuale",
+};
+
+// FSM: fulfillment transitions — payment-independent
+function getAllowedTransitions(status: string): { status: string; label: string; variant: "default" | "destructive" | "outline"; mutation: string }[] {
   switch (status) {
     case "pending":
-      if (paymentTerms === "on_delivery") {
-        return [
-          { status: "approved_for_shipping", label: "Approva per Spedizione", variant: "default", mutation: "approveForShipping" },
-          { status: "cancelled", label: "Annulla Ordine", variant: "destructive", mutation: "cancelOrder" },
-        ];
-      }
-      return [
-        { status: "paid", label: "Conferma Pagamento", variant: "default", mutation: "confirmPayment" },
-        { status: "cancelled", label: "Annulla Ordine", variant: "destructive", mutation: "cancelOrder" },
-      ];
-    case "paid":
-      return [
-        { status: "transferring", label: "Avvia Trasferimento", variant: "default", mutation: "startTransfer" },
-        { status: "cancelled", label: "Annulla Ordine", variant: "destructive", mutation: "cancelOrder" },
-      ];
-    case "approved_for_shipping":
       return [
         { status: "transferring", label: "Avvia Trasferimento", variant: "default", mutation: "startTransfer" },
         { status: "cancelled", label: "Annulla Ordine", variant: "destructive", mutation: "cancelOrder" },
@@ -150,42 +151,25 @@ function getAllowedTransitions(status: string, paymentTerms?: string | null): { 
     case "transferring":
       return [
         { status: "shipped", label: "Segna come Spedito", variant: "default", mutation: "markShipped" },
+        { status: "cancelled", label: "Annulla Ordine", variant: "destructive", mutation: "cancelOrder" },
       ];
     case "shipped":
       return [
         { status: "delivered", label: "Segna come Consegnato", variant: "default", mutation: "markDelivered" },
       ];
-    case "delivered":
-      if (paymentTerms === "on_delivery") {
-        return [
-          { status: "paid_on_delivery", label: "Conferma Pagamento alla Consegna", variant: "default", mutation: "confirmPaymentOnDelivery" },
-        ];
-      }
-      return [];
     default:
       return [];
   }
 }
 
-// Timeline steps — dynamic based on payment terms
-function getTimelineSteps(paymentTerms?: string | null) {
-  const base: { key: string; label: string; tsField: string }[] = [
+// Timeline steps — fulfillment only (4 steps)
+function getTimelineSteps() {
+  return [
     { key: "pending", label: "Creato", tsField: "createdAt" },
-  ];
-  if (paymentTerms === "on_delivery") {
-    base.push({ key: "approved_for_shipping", label: "Approvato", tsField: "approvedForShippingAt" });
-  } else {
-    base.push({ key: "paid", label: "Pagato", tsField: "paidAt" });
-  }
-  base.push(
     { key: "transferring", label: "In trasferimento", tsField: "transferringAt" },
     { key: "shipped", label: "Spedito", tsField: "shippedAt" },
     { key: "delivered", label: "Consegnato", tsField: "deliveredAt" },
-  );
-  if (paymentTerms === "on_delivery") {
-    base.push({ key: "paid_on_delivery", label: "Pagato", tsField: "paidAt" });
-  }
-  return base;
+  ];
 }
 
 /**
@@ -414,15 +398,7 @@ export default function OrderDetail() {
     { enabled: !!params.id }
   );
 
-  // State machine mutations
-  const confirmPayment = trpc.orders.confirmPayment.useMutation({
-    onSuccess: () => { toast.success("Pagamento confermato"); invalidateOrder(); },
-    onError: (err) => toast.error(err.message),
-  });
-  const approveForShipping = trpc.orders.approveForShipping.useMutation({
-    onSuccess: () => { toast.success("Ordine approvato per spedizione"); invalidateOrder(); },
-    onError: (err) => toast.error(err.message),
-  });
+  // Fulfillment mutations
   const startTransfer = trpc.orders.startTransfer.useMutation({
     onSuccess: () => { toast.success("Trasferimento avviato"); invalidateOrder(); },
     onError: (err) => toast.error(err.message),
@@ -435,16 +411,22 @@ export default function OrderDetail() {
     onSuccess: () => { toast.success("Ordine consegnato"); invalidateOrder(); },
     onError: (err) => toast.error(err.message),
   });
-  const confirmPaymentOnDelivery = trpc.orders.confirmPaymentOnDelivery.useMutation({
-    onSuccess: () => { toast.success("Pagamento alla consegna confermato"); invalidateOrder(); },
-    onError: (err) => toast.error(err.message),
-  });
   const cancelOrder = trpc.orders.cancelOrder.useMutation({
     onSuccess: () => { toast.success("Ordine annullato"); invalidateOrder(); },
     onError: (err) => toast.error(err.message),
   });
   const deliverEventOrder = trpc.orders.deliverEventOrder.useMutation({
     onSuccess: () => { toast.success("Ordine evento consegnato"); invalidateOrder(); },
+    onError: (err) => toast.error(err.message),
+  });
+
+  // Payment mutations
+  const registerPayment = trpc.orders.registerPayment.useMutation({
+    onSuccess: () => { toast.success("Pagamento registrato"); invalidateOrder(); },
+    onError: (err) => toast.error(err.message),
+  });
+  const cancelPaymentMut = trpc.orders.cancelPaymentProc.useMutation({
+    onSuccess: () => { toast.success("Pagamento annullato"); invalidateOrder(); },
     onError: (err) => toast.error(err.message),
   });
 
@@ -487,12 +469,9 @@ export default function OrderDetail() {
   }
 
   const mutationMap: Record<string, any> = {
-    confirmPayment,
-    approveForShipping,
     startTransfer,
     markShipped,
     markDelivered,
-    confirmPaymentOnDelivery,
     cancelOrder,
   };
 
@@ -537,12 +516,14 @@ export default function OrderDetail() {
   const order = orderQuery.data;
   const statusCfg = STATUS_CONFIG[order.status] ?? STATUS_CONFIG.pending;
   const StatusIcon = statusCfg.icon;
-  const transitions = getAllowedTransitions(order.status, (order as any).paymentTerms);
+  const transitions = getAllowedTransitions(order.status);
   const isCancelled = order.status === "cancelled";
   const isDelivered = order.status === "delivered";
-  const isPaidOnDelivery = order.status === "paid_on_delivery";
-  const canEditBatches = !isCancelled && !isDelivered && !isPaidOnDelivery;
-  const canEditItems = ["pending", "paid", "approved_for_shipping"].includes(order.status);
+  const canEditBatches = !isCancelled && !isDelivered;
+  const canEditItems = order.status === "pending";
+  const paymentStatus = (order as any).paymentStatus ?? "unpaid";
+  const paymentMethod = (order as any).paymentMethod ?? null;
+  const paymentStatusCfg = PAYMENT_STATUS_CONFIG[paymentStatus] ?? PAYMENT_STATUS_CONFIG.unpaid;
 
   function openEditItemsDialog() {
     // Pre-populate with current items including prices
@@ -577,8 +558,8 @@ export default function OrderDetail() {
     });
   }
 
-  // Timeline dinamica
-  const timelineSteps = getTimelineSteps((order as any).paymentTerms);
+  // Timeline dinamica (fulfillment only)
+  const timelineSteps = getTimelineSteps();
   const activeStepIndex = isCancelled
     ? -1
     : timelineSteps.findIndex((s) => s.key === order.status);
@@ -612,6 +593,10 @@ export default function OrderDetail() {
               <Badge variant={statusCfg.variant} className="gap-1">
                 <StatusIcon className="h-3 w-3" />
                 {statusCfg.label}
+              </Badge>
+              <Badge variant={paymentStatusCfg.variant} className={`gap-1 ${paymentStatusCfg.color}`}>
+                <CreditCard className="h-3 w-3" />
+                {paymentStatusCfg.label}
               </Badge>
               {(order as any).paymentTerms && (
                 <Badge variant="outline" className="text-xs">
@@ -839,8 +824,8 @@ export default function OrderDetail() {
           </Card>
         )}
 
-        {/* Riepilogo + Documenti FiC — 2-col grid (or single col for event orders) */}
-        <div className={`grid gap-4 ${(order as any).eventType ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2'}`}>
+        {/* Riepilogo + Pagamento + Documenti FiC — grid */}
+        <div className={`grid gap-4 ${(order as any).eventType ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-3'}`}>
           {/* Riepilogo totali */}
           <Card>
             <CardHeader>
@@ -868,6 +853,98 @@ export default function OrderDetail() {
                   <span className="font-mono">€ {parseFloat(order.totalGross).toFixed(2)}</span>
                 </div>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Pagamento */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <CreditCard className="h-4 w-4" />
+                Pagamento
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Stato</span>
+                  <Badge variant={paymentStatusCfg.variant} className={paymentStatusCfg.color}>
+                    {paymentStatusCfg.label}
+                  </Badge>
+                </div>
+                {(order as any).paymentTerms && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Condizioni</span>
+                    <span>{PAYMENT_TERMS_LABELS[(order as any).paymentTerms] ?? (order as any).paymentTerms}</span>
+                  </div>
+                )}
+                {paymentMethod && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Metodo</span>
+                    <span>{PAYMENT_METHOD_LABELS[paymentMethod] ?? paymentMethod}</span>
+                  </div>
+                )}
+                {order.paidAt && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Pagato il</span>
+                    <span className="font-mono text-xs">{format(new Date(order.paidAt), "dd/MM/yyyy HH:mm")}</span>
+                  </div>
+                )}
+              </div>
+              <Separator />
+              {/* Payment actions */}
+              {paymentStatus === "unpaid" && !isCancelled && (
+                <Button
+                  variant="default"
+                  className="w-full justify-start gap-2"
+                  disabled={registerPayment.isPending}
+                  onClick={() => {
+                    registerPayment.mutate({
+                      orderId: order.id,
+                      paidAt: new Date().toISOString(),
+                      paymentMethod: (order as any).paymentTerms ?? "manual",
+                    });
+                  }}
+                >
+                  {registerPayment.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Check className="h-4 w-4" />
+                  )}
+                  Registra Pagamento
+                </Button>
+              )}
+              {paymentStatus === "paid" && !isCancelled && (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start gap-2 text-destructive"
+                      disabled={cancelPaymentMut.isPending}
+                    >
+                      <XCircle className="h-4 w-4" />
+                      Annulla Pagamento
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Annullare il pagamento?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Lo stato pagamento tornerà a "Non pagato".
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Indietro</AlertDialogCancel>
+                      <AlertDialogAction
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        onClick={() => cancelPaymentMut.mutate({ orderId: order.id, reason: "Annullamento manuale" })}
+                      >
+                        Conferma
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              )}
             </CardContent>
           </Card>
 
@@ -1221,8 +1298,8 @@ export default function OrderDetail() {
             )}
           </div>
 
-          {/* WARNING SE ORDINE PAID */}
-          {order.status === "paid" && Math.abs(editTotalGross - originalTotalGross) > 0.01 && (
+          {/* WARNING SE ORDINE PAGATO */}
+          {paymentStatus === "paid" && Math.abs(editTotalGross - originalTotalGross) > 0.01 && (
             <Alert className="mt-4 border-orange-500/30">
               <AlertTriangle className="h-4 w-4" />
               <AlertTitle>Ordine già pagato</AlertTitle>

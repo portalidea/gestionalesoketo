@@ -45,12 +45,9 @@ const COLORS = ["#2D5A27", "#7AB648", "#F5A623", "#E74C3C", "#3498DB", "#9B59B6"
 
 const STATUS_LABELS: Record<string, string> = {
   pending: "In attesa",
-  paid: "Pagato",
-  approved_for_shipping: "Approvato",
   transferring: "In trasferimento",
   shipped: "Spedito",
   delivered: "Consegnato",
-  paid_on_delivery: "Pagato alla consegna",
   cancelled: "Annullato",
 };
 

@@ -26,7 +26,7 @@ import {
 import { eq, desc, and, gte, lte, sql, inArray, asc, gt } from "drizzle-orm";
 import { calculateOrderPricing, calculateEventOrderPricing, type PricingItemInput } from "./pricing";
 import { createFicProforma } from "./fic-integration";
-import { transitionOrder, modifyPaidOrder, type OrderStatus } from "./services/orderStateMachine";
+import { transitionOrder, registerPayment, cancelPayment, modifyOrderItems, type OrderStatus, type PaymentStatus } from "./services/orderStateMachine";
 import { getAvailableStock } from "./services/stockService";
 
 // --- Zod Schemas ---
@@ -38,14 +38,13 @@ const orderItemInput = z.object({
 
 const statusEnum = z.enum([
   "pending",
-  "paid",
-  "approved_for_shipping",
   "transferring",
   "shipped",
   "delivered",
-  "paid_on_delivery",
   "cancelled",
 ]);
+
+const paymentStatusEnum = z.enum(["unpaid", "paid", "refunded"]);
 
 // FSM: actual state machine is in server/services/orderStateMachine.ts
 // Legacy updateStatus procedure removed — all transitions go through transitionOrder()
@@ -60,6 +59,7 @@ export const ordersRouter = router({
     .input(
       z.object({
         status: statusEnum.optional(),
+        paymentStatus: paymentStatusEnum.optional(),
         retailerId: z.string().uuid().optional(),
         orderType: z.enum(["retailer", "event"]).optional(),
         dateFrom: z.string().optional(), // ISO date
@@ -75,6 +75,9 @@ export const ordersRouter = router({
 
       if (input.status) {
         conditions.push(eq(orders.status, input.status));
+      }
+      if (input.paymentStatus) {
+        conditions.push(eq(orders.paymentStatus, input.paymentStatus));
       }
       if (input.retailerId) {
         conditions.push(eq(orders.retailerId, input.retailerId));
@@ -106,6 +109,9 @@ export const ordersRouter = router({
             totalGross: orders.totalGross,
             discountPercent: orders.discountPercent,
             ficProformaNumber: orders.ficProformaNumber,
+            paymentStatus: orders.paymentStatus,
+            paymentMethod: orders.paymentMethod,
+            paidAt: orders.paidAt,
             eventType: orders.eventType,
             eventName: orders.eventName,
             createdAt: orders.createdAt,
@@ -160,6 +166,8 @@ export const ordersRouter = router({
           ficInvoiceId: orders.ficInvoiceId,
           ficInvoiceNumber: orders.ficInvoiceNumber,
           paymentTerms: orders.paymentTerms,
+          paymentStatus: orders.paymentStatus,
+          paymentMethod: orders.paymentMethod,
           paidAt: orders.paidAt,
           approvedForShippingAt: orders.approvedForShippingAt,
           transferringAt: orders.transferringAt,
@@ -627,10 +635,9 @@ export const ordersRouter = router({
           .where(eq(orderItems.id, input.orderItemId));
       }
 
-      // Update FiC proforma if order is paid/approved_for_shipping and has proforma
+      // Update FiC proforma if exists (proforma created at transferring)
       let ficUpdated = false;
       if (
-        ["paid", "approved_for_shipping"].includes(order.status) &&
         order.ficProformaId &&
         order.retailerId
       ) {
@@ -1006,40 +1013,49 @@ export const ordersRouter = router({
       };
     }),
 
-  // ===== M6.2.B — New admin procedures via state machine =====
+  // ===== M6.2.G — Decoupled payment + fulfillment =====
 
   /**
-   * 9. Confirm payment (pending → paid)
-   * For advance_transfer / credit_card / manual payment terms.
+   * 9. Register payment (paymentStatus: unpaid → paid)
+   * Independent from fulfillment axis.
    */
-  confirmPayment: staffProcedure
-    .input(z.object({ orderId: z.string().uuid() }))
+  registerPayment: staffProcedure
+    .input(z.object({
+      orderId: z.string().uuid(),
+      paidAt: z.string(), // ISO datetime
+      paymentMethod: z.string().min(1).max(50),
+      note: z.string().optional(),
+    }))
     .mutation(async ({ input, ctx }) => {
-      return transitionOrder({
+      return registerPayment({
         orderId: input.orderId,
-        toStatus: "paid",
         actorUserId: ctx.user.id,
+        paidAt: new Date(input.paidAt),
+        paymentMethod: input.paymentMethod,
+        note: input.note,
       });
     }),
 
   /**
-   * 10. Approve for shipping (pending → approved_for_shipping)
-   * For on_delivery payment terms.
+   * 10. Cancel payment (paymentStatus: paid → unpaid)
    */
-  approveForShipping: staffProcedure
-    .input(z.object({ orderId: z.string().uuid() }))
+  cancelPaymentProc: staffProcedure
+    .input(z.object({
+      orderId: z.string().uuid(),
+      reason: z.string().min(1),
+    }))
     .mutation(async ({ input, ctx }) => {
-      return transitionOrder({
+      return cancelPayment({
         orderId: input.orderId,
-        toStatus: "approved_for_shipping",
         actorUserId: ctx.user.id,
+        reason: input.reason,
       });
     }),
 
   /**
-   * 11. Start transfer (paid/approved_for_shipping → transferring)
+   * 11. Start transfer (pending → transferring)
    * Validates all items have batch assigned.
-   * BUG-4 FIX: After transition, decrement stock + create TRANSFER movements.
+   * After transition, decrement stock + create TRANSFER movements.
    */
   startTransfer: staffProcedure
     .input(z.object({ orderId: z.string().uuid() }))
@@ -1138,20 +1154,7 @@ export const ordersRouter = router({
     }),
 
   /**
-   * 14. Confirm payment on delivery (delivered → paid_on_delivery)
-   */
-  confirmPaymentOnDelivery: staffProcedure
-    .input(z.object({ orderId: z.string().uuid() }))
-    .mutation(async ({ input, ctx }) => {
-      return transitionOrder({
-        orderId: input.orderId,
-        toStatus: "paid_on_delivery",
-        actorUserId: ctx.user.id,
-      });
-    }),
-
-  /**
-   * 15. Cancel order (from pending/paid/approved_for_shipping)
+   * 14. Cancel order (from pending/transferring)
    * Deletes proforma from FiC if exists.
    */
   cancelOrder: staffProcedure
@@ -1232,9 +1235,9 @@ export const ordersRouter = router({
     }),
 
   /**
-   * 16. Modify order items (supports pending/paid/approved_for_shipping)
+   * 16. Modify order items (pending only)
    * Full replacement: delete old items, insert new ones with recalculated pricing.
-   * NO stock check (backorder allowed). FiC + commission updated if status >= paid.
+   * NO stock check (backorder allowed).
    */
   modifyOrderItems: staffProcedure
     .input(z.object({
@@ -1245,7 +1248,6 @@ export const ordersRouter = router({
       })).min(1),
     }))
     .mutation(async ({ input, ctx }) => {
-      const { modifyOrderItems } = await import("./services/orderStateMachine");
       return await modifyOrderItems({
         orderId: input.orderId,
         actorUserId: ctx.user.id,

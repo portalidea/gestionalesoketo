@@ -4,7 +4,7 @@ import { affiliateCommissions, affiliates, orders, retailers } from "../../drizz
 
 /**
  * M7-A: Commission service — calcola e gestisce commissioni affiliati.
- * Chiamato dalla state machine a paid/paid_on_delivery e cancelled.
+ * Chiamato dalla state machine a registerPayment (paymentStatus=paid) e cancelled/cancelPayment.
  */
 
 export async function calculateCommissionForOrder(orderId: string): Promise<void> {

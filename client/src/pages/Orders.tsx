@@ -45,19 +45,26 @@ import { getEventTypeLabel } from "../../../shared/eventTypeLabels";
 
 const STATUS_LABELS: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   pending: { label: "In attesa", variant: "outline" },
-  paid: { label: "Pagato", variant: "default" },
   transferring: { label: "In trasferimento", variant: "secondary" },
   shipped: { label: "Spedito", variant: "secondary" },
   delivered: { label: "Consegnato", variant: "default" },
   cancelled: { label: "Annullato", variant: "destructive" },
 };
 
+const PAYMENT_STATUS_LABELS: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+  unpaid: { label: "Non pagato", variant: "outline" },
+  paid: { label: "Pagato", variant: "default" },
+  refunded: { label: "Rimborsato", variant: "destructive" },
+};
+
 const ALL_STATUSES = "ALL_STATUSES";
+const ALL_PAYMENT = "ALL_PAYMENT";
 
 export default function Orders() {
   const [, setLocation] = useLocation();
   const [sort, setSort] = useState<SortConfig>(null);
   const [statusFilter, setStatusFilter] = useState<string>(ALL_STATUSES);
+  const [paymentFilter, setPaymentFilter] = useState<string>(ALL_PAYMENT);
   const [orderTypeFilter, setOrderTypeFilter] = useState<string>("ALL_TYPES");
   const [retailerFilter, setRetailerFilter] = useState<string>("ALL_RETAILERS");
   const [dateFrom, setDateFrom] = useState("");
@@ -69,6 +76,7 @@ export default function Orders() {
 
   const ordersQuery = trpc.orders.list.useQuery({
     status: statusFilter !== ALL_STATUSES ? (statusFilter as any) : undefined,
+    paymentStatus: paymentFilter !== ALL_PAYMENT ? (paymentFilter as any) : undefined,
     orderType: orderTypeFilter !== "ALL_TYPES" ? (orderTypeFilter as any) : undefined,
     retailerId: retailerFilter !== "ALL_RETAILERS" ? retailerFilter : undefined,
     dateFrom: dateFrom || undefined,
@@ -118,6 +126,21 @@ export default function Orders() {
                   <SelectContent>
                     <SelectItem value={ALL_STATUSES}>Tutti gli stati</SelectItem>
                     {Object.entries(STATUS_LABELS).map(([key, { label }]) => (
+                      <SelectItem key={key} value={key}>{label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Pagamento</Label>
+                <Select value={paymentFilter} onValueChange={(v) => { setPaymentFilter(v); setPage(0); }}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Tutti" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_PAYMENT}>Tutti</SelectItem>
+                    {Object.entries(PAYMENT_STATUS_LABELS).map(([key, { label }]) => (
                       <SelectItem key={key} value={key}>{label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -194,6 +217,7 @@ export default function Orders() {
                       <SortableTableHead sortKey="orderNumber" sort={sort} onSort={setSort}>N. Ordine</SortableTableHead>
                       <SortableTableHead sortKey="retailerName" sort={sort} onSort={setSort}>Rivenditore / Evento</SortableTableHead>
                       <SortableTableHead sortKey="status" sort={sort} onSort={setSort}>Stato</SortableTableHead>
+                      <SortableTableHead sortKey="paymentStatus" sort={sort} onSort={setSort}>Pagamento</SortableTableHead>
                       <SortableTableHead sortKey="totalGross" sort={sort} onSort={setSort} className="text-right">Totale lordo</SortableTableHead>
                       <SortableTableHead sortKey="ficProformaNumber" sort={sort} onSort={setSort}>Proforma FiC</SortableTableHead>
                       <TableHead className="text-center">Lotti</TableHead>
@@ -207,6 +231,7 @@ export default function Orders() {
                             case "orderNumber": return item.orderNumber;
                             case "retailerName": return item.retailerName;
                             case "status": return item.status;
+                            case "paymentStatus": return (item as any).paymentStatus ?? "";
                             case "totalGross": return parseFloat(item.totalGross);
                             case "ficProformaNumber": return item.ficProformaNumber ?? "";
                             case "createdAt": return item.createdAt ? new Date(item.createdAt) : null;
@@ -239,6 +264,12 @@ export default function Orders() {
                           </TableCell>
                           <TableCell>
                             <Badge variant={st.variant}>{st.label}</Badge>
+                          </TableCell>
+                          <TableCell>
+                            {(() => {
+                              const ps = PAYMENT_STATUS_LABELS[(order as any).paymentStatus] ?? { label: (order as any).paymentStatus ?? "—", variant: "outline" as const };
+                              return <Badge variant={ps.variant}>{ps.label}</Badge>;
+                            })()}
                           </TableCell>
                           <TableCell className="text-right font-mono">
                             € {parseFloat(order.totalGross).toFixed(2)}

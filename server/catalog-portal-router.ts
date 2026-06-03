@@ -3,7 +3,7 @@
  *
  * Procedure retailer per catalogo prodotti con:
  * - Prezzi base + scontati (pacchetto retailer)
- * - Stock disponibile = totale magazzino centrale - prenotato pending/paid altri ordini
+ * - Stock disponibile = totale magazzino centrale - prenotato pending/transferring altri ordini
  * - Dettaglio prodotto con breakdown lotti FEFO
  */
 import { TRPCError } from "@trpc/server";
@@ -27,9 +27,9 @@ export const catalogPortalRouter = router({
    * 1. catalogPortal.list — catalogo prodotti per retailer
    *
    * Stock disponibile = SUM(inventoryByBatch.quantity) nel magazzino centrale
-   *   MINUS SUM(orderItems.quantity) dove ordine in (pending, paid) e ordine != mio pending
+   *   MINUS SUM(orderItems.quantity) dove ordine in (pending, transferring) e ordine != mio pending
    *
-   * Per semplicità: sottraiamo TUTTI i pending/paid (inclusi i miei).
+   * Per semplicità: sottraiamo TUTTI i pending/transferring (inclusi i miei).
    * stockReserved = quantità nei MIEI ordini pending.
    */
   list: retailerProcedure
@@ -135,13 +135,13 @@ export const catalogPortalRouter = router({
         ]),
       );
 
-      // 6. Quantità prenotata da TUTTI gli ordini pending/paid (per ogni prodotto)
+      // 6. Quantità prenotata da TUTTI gli ordini pending/transferring (per ogni prodotto)
       const reservedRows = await db.execute<{ productId: string; reservedQty: number }>(sql`
         SELECT oi."productId" AS "productId",
                COALESCE(SUM(oi."quantity"), 0)::int AS "reservedQty"
         FROM "orderItems" oi
         INNER JOIN "orders" o ON o."id" = oi."orderId"
-        WHERE o."status" IN ('pending', 'paid')
+        WHERE o."status" IN ('pending', 'transferring')
           AND oi."productId" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})
         GROUP BY oi."productId"
       `);
@@ -293,7 +293,7 @@ export const catalogPortalRouter = router({
         SELECT COALESCE(SUM(oi."quantity"), 0)::int AS "reservedQty"
         FROM "orderItems" oi
         INNER JOIN "orders" o ON o."id" = oi."orderId"
-        WHERE o."status" IN ('pending', 'paid')
+        WHERE o."status" IN ('pending', 'transferring')
           AND oi."productId" = ${input.productId}::uuid
       `);
       const totalReserved = (reservedRows as unknown as Array<{ reservedQty: number }>)[0]?.reservedQty ?? 0;

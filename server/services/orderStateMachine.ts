@@ -1,14 +1,13 @@
 /**
- * M6.2.B — Order State Machine Service
+ * M6.2.G — Order State Machine Service (refactored)
  *
- * Centralizes all order status transitions with:
- * - State validation (canTransition)
- * - Payment terms compatibility checks
- * - Side effects (FiC document lifecycle, stock, email)
- * - Audit logging
+ * Two independent axes:
+ * 1. Fulfillment: pending → transferring → shipped → delivered | cancelled
+ * 2. Payment: unpaid → paid | refunded
  *
- * All transitions go through transitionOrder(). No direct UPDATE on orders.status
- * should happen outside this module.
+ * transitionFulfillment() handles axis 1.
+ * registerPayment() / cancelPayment() handle axis 2.
+ * modifyOrderItems() remains unchanged (operates on pending orders).
  */
 import { TRPCError } from "@trpc/server";
 import { eq, and, sql } from "drizzle-orm";
@@ -19,36 +18,18 @@ import { sendOrderStatusEmail } from "./orderEmailService";
 
 // --- Types ---
 
-export type OrderStatus =
-  | "pending"
-  | "paid"
-  | "approved_for_shipping"
-  | "transferring"
-  | "shipped"
-  | "delivered"
-  | "paid_on_delivery"
-  | "cancelled";
-
+export type OrderStatus = "pending" | "transferring" | "shipped" | "delivered" | "cancelled";
+export type PaymentStatus = "unpaid" | "paid" | "refunded";
 export type PaymentTerms = "advance_transfer" | "on_delivery" | "credit_card" | "manual";
 
-// --- State Machine Definition ---
+// --- Fulfillment State Machine ---
 
 const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
-  pending: ["paid", "approved_for_shipping", "cancelled"],
-  paid: ["transferring", "cancelled"],
-  approved_for_shipping: ["transferring", "cancelled"],
-  transferring: ["shipped"],
+  pending: ["transferring", "cancelled"],
+  transferring: ["shipped", "cancelled"],
   shipped: ["delivered"],
-  delivered: ["paid_on_delivery"],
-  paid_on_delivery: [],
-  cancelled: [],
-};
-
-// Payment terms constraints
-const PAYMENT_TERMS_CONSTRAINTS: Partial<Record<OrderStatus, PaymentTerms[]>> = {
-  paid: ["advance_transfer", "credit_card", "manual"],
-  approved_for_shipping: ["on_delivery"],
-  paid_on_delivery: ["on_delivery"],
+  delivered: [], // terminal
+  cancelled: [], // terminal
 };
 
 export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
@@ -58,16 +39,13 @@ export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
 // --- Timestamp mapping ---
 
 const TIMESTAMP_MAP: Partial<Record<OrderStatus, string>> = {
-  paid: "paidAt",
-  approved_for_shipping: "approvedForShippingAt",
   transferring: "transferringAt",
   shipped: "shippedAt",
   delivered: "deliveredAt",
-  paid_on_delivery: "paidAt", // reuse paidAt for on_delivery final payment
   cancelled: "cancelledAt",
 };
 
-// --- Main transition function ---
+// --- Fulfillment transition ---
 
 export interface TransitionInput {
   orderId: string;
@@ -98,6 +76,7 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
     .select({
       id: orders.id,
       status: orders.status,
+      paymentStatus: orders.paymentStatus,
       paymentTerms: orders.paymentTerms,
       retailerId: orders.retailerId,
       orderNumber: orders.orderNumber,
@@ -118,7 +97,7 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
   const currentStatus = order.status as OrderStatus;
   const paymentTerms = order.paymentTerms as PaymentTerms;
 
-  // 2. Validate transition
+  // 2. Validate transition — NO payment gate
   if (!canTransition(currentStatus, toStatus)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -126,16 +105,7 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
     });
   }
 
-  // 3. Validate payment terms compatibility
-  const allowedTerms = PAYMENT_TERMS_CONSTRAINTS[toStatus];
-  if (allowedTerms && !allowedTerms.includes(paymentTerms)) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `Transizione ${currentStatus} → ${toStatus} non consentita per payment_terms='${paymentTerms}'. Richiesto: ${allowedTerms.join(" o ")}`,
-    });
-  }
-
-  // 4. Execute side effects
+  // 3. Execute side effects
   let ficProformaId = order.ficProformaId;
   let ficProformaNumber = order.ficProformaNumber;
   let ficInvoiceId: number | undefined;
@@ -144,72 +114,7 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
   const transitionKey = `${currentStatus}→${toStatus}`;
 
   switch (transitionKey) {
-    case "pending→paid":
-    case "pending→approved_for_shipping": {
-      // M7-A: Calculate commission if transition is to paid (advance_transfer/credit_card)
-      if (toStatus === "paid") {
-        try {
-          const { calculateCommissionForOrder } = await import("./commissionService");
-          await calculateCommissionForOrder(orderId);
-        } catch (e: any) {
-          console.error(`[orderStateMachine] commission calculate failed: ${e.message}`);
-        }
-      }
-      // Create proforma on FiC
-      const [retailer] = await db
-        .select({ ficClientId: retailers.ficClientId, name: retailers.name })
-        .from(retailers)
-        .where(eq(retailers.id, order.retailerId!))
-        .limit(1);
-
-      if (!retailer?.ficClientId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Retailer non ha ficClientId — configura prima l'anagrafica FiC",
-        });
-      }
-
-      // Load order items with batch info
-      const items = await db
-        .select({
-          productName: orderItems.productName,
-          productSku: orderItems.productSku,
-          quantity: orderItems.quantity,
-          unitPriceFinal: orderItems.unitPriceFinal,
-          vatRate: orderItems.vatRate,
-          batchId: orderItems.batchId,
-          batchNumber: productBatches.batchNumber,
-          expirationDate: productBatches.expirationDate,
-        })
-        .from(orderItems)
-        .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
-        .where(eq(orderItems.orderId, orderId));
-
-      const proforma = await ficDocService.createProforma({
-        orderId,
-        orderNumber: order.orderNumber ?? "",
-        retailerFicClientId: retailer.ficClientId,
-        items: items.map((it) => ({
-          productName: it.productName,
-          quantity: it.quantity,
-          unitPrice: parseFloat(it.unitPriceFinal),
-          vatRate: parseFloat(it.vatRate),
-          batchNumber: it.batchNumber ?? undefined,
-          expiryDate: it.expirationDate ?? undefined,
-          sku: it.productSku ?? undefined,
-        })),
-        paymentTerms,
-        totalGross: order.totalGross ? parseFloat(order.totalGross) : undefined,
-        notes: order.notesInternal ?? undefined,
-      });
-
-      ficProformaId = proforma.ficDocumentId;
-      ficProformaNumber = proforma.ficNumber;
-      break;
-    }
-
-    case "paid→transferring":
-    case "approved_for_shipping→transferring": {
+    case "pending→transferring": {
       // Validate all items have batches assigned
       const items = await db
         .select({ id: orderItems.id, batchId: orderItems.batchId, productName: orderItems.productName })
@@ -223,65 +128,82 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
           message: `Impossibile trasferire: ${unassigned.length} item(s) senza lotto assegnato (${unassigned.map((u) => u.productName).join(", ")})`,
         });
       }
-      // NOTE: actual stock decrement + TRANSFER movement creation is handled
-      // by the calling procedure (orders-router.ts transfer logic).
-      // The state machine only validates and transitions.
+
+      // Create proforma on FiC if not already created and it's a retailer order
+      if (!ficProformaId && order.retailerId) {
+        const [retailer] = await db
+          .select({ ficClientId: retailers.ficClientId, name: retailers.name })
+          .from(retailers)
+          .where(eq(retailers.id, order.retailerId))
+          .limit(1);
+
+        if (retailer?.ficClientId) {
+          const ficItems = await db
+            .select({
+              productName: orderItems.productName,
+              productSku: orderItems.productSku,
+              quantity: orderItems.quantity,
+              unitPriceFinal: orderItems.unitPriceFinal,
+              vatRate: orderItems.vatRate,
+              batchId: orderItems.batchId,
+              batchNumber: productBatches.batchNumber,
+              expirationDate: productBatches.expirationDate,
+            })
+            .from(orderItems)
+            .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
+            .where(eq(orderItems.orderId, orderId));
+
+          try {
+            const proforma = await ficDocService.createProforma({
+              orderId,
+              orderNumber: order.orderNumber ?? "",
+              retailerFicClientId: retailer.ficClientId,
+              items: ficItems.map((it) => ({
+                productName: it.productName,
+                quantity: it.quantity,
+                unitPrice: parseFloat(it.unitPriceFinal),
+                vatRate: parseFloat(it.vatRate),
+                batchNumber: it.batchNumber ?? undefined,
+                expiryDate: it.expirationDate ?? undefined,
+                sku: it.productSku ?? undefined,
+              })),
+              paymentTerms,
+              totalGross: order.totalGross ? parseFloat(order.totalGross) : undefined,
+              notes: order.notesInternal ?? undefined,
+            });
+            ficProformaId = proforma.ficDocumentId;
+            ficProformaNumber = proforma.ficNumber;
+          } catch (e: any) {
+            console.error(`[orderStateMachine] createProforma failed: ${e.message}`);
+            // Don't block transition
+          }
+        }
+      }
       break;
     }
 
     case "shipped→delivered": {
-      // DECISIONE-1: Transform proforma → invoice ONLY for advance_transfer/credit_card/manual
-      // For on_delivery, transform happens at delivered→paid_on_delivery (incasso effettivo)
-      if (ficProformaId && paymentTerms !== "on_delivery") {
+      // Transform proforma → invoice when payment is already done
+      if (ficProformaId && order.paymentStatus === "paid") {
         try {
           const invoice = await ficDocService.transformProformaToInvoice(ficProformaId);
           ficInvoiceId = invoice.ficInvoiceId;
           ficInvoiceNumber = invoice.ficInvoiceNumber;
         } catch (e: any) {
           console.error(`[orderStateMachine] transformToInvoice failed: ${e.message}`);
-          // Don't block the transition, but log the failure
-          // Admin can manually transform later
         }
       }
       break;
     }
 
-    case "delivered→paid_on_delivery": {
-      // M7-A: Calculate commission at actual payment (on_delivery)
-      try {
-        const { calculateCommissionForOrder } = await import("./commissionService");
-        await calculateCommissionForOrder(orderId);
-      } catch (e: any) {
-        console.error(`[orderStateMachine] commission calculate (on_delivery) failed: ${e.message}`);
-      }
-      // DECISIONE-1: For on_delivery, transform proforma → invoice at payment confirmation
-      if (ficProformaId) {
-        try {
-          const invoice = await ficDocService.transformProformaToInvoice(ficProformaId);
-          ficInvoiceId = invoice.ficInvoiceId;
-          ficInvoiceNumber = invoice.ficInvoiceNumber;
-        } catch (e: any) {
-          console.error(`[orderStateMachine] transformToInvoice (on_delivery) failed: ${e.message}`);
-          // Don't block the transition
-        }
-      }
-      break;
-    }
-
-    case "pending→cancelled": {
-      // No proforma to cancel (pending has no proforma)
-      break;
-    }
-
-    case "paid→cancelled":
-    case "approved_for_shipping→cancelled": {
+    case "pending→cancelled":
+    case "transferring→cancelled": {
       // Delete proforma from FiC
       if (ficProformaId) {
         try {
           await ficDocService.deleteProforma(ficProformaId);
         } catch (e: any) {
           console.error(`[orderStateMachine] deleteProforma failed: ${e.message}`);
-          // Don't block cancellation
         }
       }
       // M7-A: Void commission if exists
@@ -295,7 +217,7 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
     }
   }
 
-  // 5. Update order status + timestamps
+  // 4. Update order status + timestamps
   const updateData: Record<string, any> = {
     status: toStatus,
     updatedAt: new Date(),
@@ -316,7 +238,6 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
   }
   if (toStatus === "cancelled") {
     updateData.cancelledReason = reason ?? null;
-    // Clear proforma reference on cancel
     if (ficProformaId) {
       updateData.ficProformaId = null;
       updateData.ficProformaNumber = null;
@@ -325,7 +246,7 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
 
   await db.update(orders).set(updateData).where(eq(orders.id, orderId));
 
-  // 6. Send email notification (async, don't block)
+  // 5. Send email notification (async, don't block)
   sendOrderStatusEmail({
     orderId,
     orderNumber: order.orderNumber ?? "",
@@ -352,6 +273,181 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
   };
 }
 
+// --- Payment axis ---
+
+export interface RegisterPaymentInput {
+  orderId: string;
+  actorUserId: string;
+  paidAt: Date;
+  paymentMethod: string;
+  note?: string;
+}
+
+export interface RegisterPaymentResult {
+  paymentStatus: PaymentStatus;
+  paidAt: Date;
+  paymentMethod: string;
+  ficInvoiceId?: number;
+  ficInvoiceNumber?: string;
+}
+
+export async function registerPayment(input: RegisterPaymentInput): Promise<RegisterPaymentResult> {
+  const t0 = Date.now();
+  console.log(`[orderStateMachine] registerPayment orderId=${input.orderId}`);
+
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+  const [order] = await db
+    .select({
+      id: orders.id,
+      status: orders.status,
+      paymentStatus: orders.paymentStatus,
+      paymentTerms: orders.paymentTerms,
+      retailerId: orders.retailerId,
+      orderNumber: orders.orderNumber,
+      ficProformaId: orders.ficProformaId,
+      totalGross: orders.totalGross,
+    })
+    .from(orders)
+    .where(eq(orders.id, input.orderId))
+    .limit(1);
+
+  if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
+
+  if (order.paymentStatus !== "unpaid") {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `Pagamento già registrato (stato: ${order.paymentStatus})` });
+  }
+  if (order.status === "cancelled") {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Impossibile registrare pagamento su ordine annullato" });
+  }
+
+  // Update payment fields
+  const updateData: Record<string, any> = {
+    paymentStatus: "paid",
+    paidAt: input.paidAt,
+    paymentMethod: input.paymentMethod,
+    updatedAt: new Date(),
+  };
+
+  // If note provided, append to notesInternal
+  if (input.note) {
+    const existingNotes = order.orderNumber; // we'll read notesInternal separately
+    const [orderFull] = await db
+      .select({ notesInternal: orders.notesInternal })
+      .from(orders)
+      .where(eq(orders.id, input.orderId))
+      .limit(1);
+    const existing = orderFull?.notesInternal ?? "";
+    updateData.notesInternal = existing
+      ? `${existing}\n[Pagamento] ${input.note}`
+      : `[Pagamento] ${input.note}`;
+  }
+
+  await db.update(orders).set(updateData).where(eq(orders.id, input.orderId));
+
+  // M7-A: Calculate commission
+  try {
+    const { calculateCommissionForOrder } = await import("./commissionService");
+    await calculateCommissionForOrder(input.orderId);
+  } catch (e: any) {
+    console.error(`[orderStateMachine] commission calculate failed: ${e.message}`);
+  }
+
+  // Transform proforma → invoice if order is already delivered
+  let ficInvoiceId: number | undefined;
+  let ficInvoiceNumber: string | undefined;
+  if (order.ficProformaId && order.status === "delivered") {
+    try {
+      const invoice = await ficDocService.transformProformaToInvoice(order.ficProformaId);
+      ficInvoiceId = invoice.ficInvoiceId;
+      ficInvoiceNumber = invoice.ficInvoiceNumber;
+      await db.update(orders).set({ ficInvoiceId, ficInvoiceNumber }).where(eq(orders.id, input.orderId));
+    } catch (e: any) {
+      console.error(`[orderStateMachine] transformToInvoice on payment failed: ${e.message}`);
+    }
+  }
+
+  // Send email "Pagamento ricevuto"
+  if (order.retailerId) {
+    sendOrderStatusEmail({
+      orderId: input.orderId,
+      orderNumber: order.orderNumber ?? "",
+      retailerId: order.retailerId,
+      newStatus: "payment_received",
+      previousStatus: order.status as string,
+      ficInvoiceNumber,
+    }).catch((err) => {
+      console.error(`[orderStateMachine] payment email failed: ${err.message}`);
+    });
+  }
+
+  console.log(`[orderStateMachine] registerPayment DONE (${Date.now() - t0}ms)`);
+
+  return {
+    paymentStatus: "paid",
+    paidAt: input.paidAt,
+    paymentMethod: input.paymentMethod,
+    ficInvoiceId,
+    ficInvoiceNumber,
+  };
+}
+
+export interface CancelPaymentInput {
+  orderId: string;
+  actorUserId: string;
+  reason: string;
+}
+
+export async function cancelPayment(input: CancelPaymentInput): Promise<{ paymentStatus: PaymentStatus }> {
+  const t0 = Date.now();
+  console.log(`[orderStateMachine] cancelPayment orderId=${input.orderId}`);
+
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+  const [order] = await db
+    .select({
+      id: orders.id,
+      paymentStatus: orders.paymentStatus,
+      orderNumber: orders.orderNumber,
+      notesInternal: orders.notesInternal,
+    })
+    .from(orders)
+    .where(eq(orders.id, input.orderId))
+    .limit(1);
+
+  if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
+
+  if (order.paymentStatus !== "paid") {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `Pagamento non annullabile (stato: ${order.paymentStatus})` });
+  }
+
+  const existingNotes = order.notesInternal ?? "";
+  const newNotes = existingNotes
+    ? `${existingNotes}\n[Annullo pagamento] ${input.reason}`
+    : `[Annullo pagamento] ${input.reason}`;
+
+  await db.update(orders).set({
+    paymentStatus: "unpaid",
+    paidAt: null,
+    paymentMethod: null,
+    notesInternal: newNotes,
+    updatedAt: new Date(),
+  }).where(eq(orders.id, input.orderId));
+
+  // Void commission
+  try {
+    const { voidCommissionForOrder } = await import("./commissionService");
+    await voidCommissionForOrder(input.orderId, `Pagamento annullato: ${input.reason}`);
+  } catch (e: any) {
+    console.error(`[orderStateMachine] commission void on cancelPayment failed: ${e.message}`);
+  }
+
+  console.log(`[orderStateMachine] cancelPayment DONE (${Date.now() - t0}ms)`);
+  return { paymentStatus: "unpaid" };
+}
+
 // --- Modify order items (full replacement: add/remove/update) ---
 
 export interface ModifyOrderItemsInput {
@@ -373,10 +469,9 @@ export interface ModifyOrderItemsResult {
 }
 
 /**
- * Unified modify order items — supports pending, paid, approved_for_shipping.
+ * Unified modify order items — supports pending status only now.
  * Does a full delete+re-insert with recalculated pricing.
  * NO stock check (backorder allowed — stock is checked only at transfer time).
- * If status >= paid: updates FiC proforma + recalculates affiliate commission.
  */
 export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<ModifyOrderItemsResult> {
   const t0 = Date.now();
@@ -405,20 +500,17 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
 
   const isEventOrder = !!order.eventType;
 
-  const allowedStatuses = isEventOrder
-    ? ["pending"]
-    : ["pending", "paid", "approved_for_shipping"];
+  // M6.2.G: items can be modified only in pending status
+  const allowedStatuses = ["pending"];
   if (!allowedStatuses.includes(order.status)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: isEventOrder
-        ? `Ordine evento modificabile solo se in stato 'pending'. Stato attuale: ${order.status}`
-        : `Modifica consentita solo per ordini in stato 'pending', 'paid' o 'approved_for_shipping'. Stato attuale: ${order.status}`,
+      message: `Modifica consentita solo per ordini in stato 'pending'. Stato attuale: ${order.status}`,
     });
   }
 
   if (!order.retailerId && !isEventOrder) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Ordine senza retailer n\u00e9 evento non modificabile" });
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Ordine senza retailer né evento non modificabile" });
   }
 
   if (input.items.length === 0) {
@@ -437,26 +529,22 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
 
   // 3. Transaction: diff strategy — preserve batchId on existing items
   await db.transaction(async (tx) => {
-    // Load existing items to preserve batchId
     const existingItems = await tx
       .select({ id: orderItems.id, productId: orderItems.productId, batchId: orderItems.batchId })
       .from(orderItems)
       .where(eq(orderItems.orderId, input.orderId));
 
-    // Build a map of existing items by productId for fast lookup
     const existingByProduct = new Map<string, typeof existingItems[0]>();
     for (const ei of existingItems) {
       existingByProduct.set(ei.productId, ei);
     }
 
-    // Track which existing items are matched (to delete unmatched ones)
     const matchedExistingIds = new Set<string>();
 
     for (const pi of pricing.items) {
       const existing = existingByProduct.get(pi.productId);
 
       if (existing) {
-        // UPDATE: change pricing/quantity, PRESERVE batchId
         matchedExistingIds.add(existing.id);
         await tx
           .update(orderItems)
@@ -473,7 +561,6 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
           })
           .where(eq(orderItems.id, existing.id));
       } else {
-        // INSERT: new item, batchId = null (will be assigned later)
         await tx.insert(orderItems).values({
           orderId: input.orderId,
           productId: pi.productId,
@@ -491,13 +578,11 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
       }
     }
 
-    // DELETE: items that were removed by admin
     const removedItems = existingItems.filter((ei) => !matchedExistingIds.has(ei.id));
     for (const removed of removedItems) {
       await tx.delete(orderItems).where(eq(orderItems.id, removed.id));
     }
 
-    // Update order totals
     await tx
       .update(orders)
       .set({
@@ -513,12 +598,12 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
   let ficUpdated = false;
   let commissionRecalculated = false;
 
-  // 4. If status >= paid: update FiC proforma (SOLO ordini retailer)
-  if (!isEventOrder && (order.status === "paid" || order.status === "approved_for_shipping") && order.ficProformaId) {
+  // 4. Update FiC proforma if exists (SOLO ordini retailer)
+  if (!isEventOrder && order.ficProformaId && order.retailerId) {
     const [retailer] = await db
       .select({ ficClientId: retailers.ficClientId })
       .from(retailers)
-      .where(eq(retailers.id, order.retailerId!))
+      .where(eq(retailers.id, order.retailerId))
       .limit(1);
 
     if (retailer?.ficClientId) {
@@ -561,18 +646,7 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
     }
   }
 
-  // 5. If status >= paid: recalculate affiliate commission (SOLO ordini retailer)
-  if (!isEventOrder && (order.status === "paid" || order.status === "approved_for_shipping")) {
-    try {
-      const { recalculateCommissionForOrder } = await import("./commissionService");
-      await recalculateCommissionForOrder(input.orderId);
-      commissionRecalculated = true;
-    } catch (e: any) {
-      console.error(`[orderStateMachine.modifyOrderItems] commission recalc failed: ${e.message}`);
-    }
-  }
-
-  // 6. Send notification email (SOLO ordini retailer)
+  // 5. Send notification email (SOLO ordini retailer)
   if (!isEventOrder && order.retailerId) {
     sendOrderStatusEmail({
       orderId: input.orderId,

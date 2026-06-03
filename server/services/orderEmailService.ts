@@ -21,15 +21,13 @@ export interface OrderEmailInput {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  pending: "In attesa di pagamento",
-  paid: "Pagamento confermato",
-  approved_for_shipping: "Approvato per spedizione",
+  pending: "In attesa",
   transferring: "In preparazione",
   shipped: "Spedito",
   delivered: "Consegnato",
-  paid_on_delivery: "Pagato alla consegna",
   cancelled: "Annullato",
   modified: "Ordine modificato",
+  payment_received: "Pagamento ricevuto",
 };
 
 /**
@@ -114,17 +112,10 @@ function buildStatusEmailHtml(params: {
   let bodyContent = "";
 
   switch (newStatus) {
-    case "paid":
+    case "payment_received":
       bodyContent = `
         <p>Il pagamento per l'ordine <strong>${orderNumber}</strong> è stato confermato.</p>
-        <p>Il tuo ordine è ora in fase di preparazione. Ti invieremo un aggiornamento quando sarà pronto per la spedizione.</p>
-      `;
-      break;
-
-    case "approved_for_shipping":
-      bodyContent = `
-        <p>L'ordine <strong>${orderNumber}</strong> è stato approvato per la spedizione.</p>
-        <p>Stiamo preparando il tuo ordine. Il pagamento avverrà alla consegna.</p>
+        <p>Grazie! Ti invieremo un aggiornamento quando l'ordine sarà pronto per la spedizione.</p>
       `;
       break;
 
@@ -147,13 +138,6 @@ function buildStatusEmailHtml(params: {
         <p>L'ordine <strong>${orderNumber}</strong> è stato consegnato con successo.</p>
         ${ficInvoiceNumber ? `<p>Fattura n. <strong>${ficInvoiceNumber}</strong> disponibile su Fatture in Cloud.</p>` : ""}
         <p>Grazie per il tuo ordine!</p>
-      `;
-      break;
-
-    case "paid_on_delivery":
-      bodyContent = `
-        <p>Il pagamento alla consegna per l'ordine <strong>${orderNumber}</strong> è stato registrato.</p>
-        <p>Grazie!</p>
       `;
       break;
 

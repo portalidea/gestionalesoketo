@@ -390,7 +390,7 @@ export const retailerSelfServiceRouter = router({
   ordersList: retailerProcedure
     .input(
       z.object({
-        status: z.array(z.enum(["pending", "paid", "approved_for_shipping", "transferring", "shipped", "delivered", "paid_on_delivery", "cancelled"])).optional(),
+        status: z.array(z.enum(["pending", "transferring", "shipped", "delivered", "cancelled"])).optional(),
         dateFrom: z.string().optional(),
         dateTo: z.string().optional(),
         search: z.string().optional(),
@@ -441,6 +441,7 @@ export const retailerSelfServiceRouter = router({
           createdAt: orders.createdAt,
           status: orders.status,
           paymentTerms: orders.paymentTerms,
+          paymentStatus: orders.paymentStatus,
           totalGross: orders.totalGross,
           paidAt: orders.paidAt,
         })
@@ -466,19 +467,17 @@ export const retailerSelfServiceRouter = router({
       }
 
       const result = orderRows.map((o) => {
-        let paymentStatus: string;
-        if (o.status === "paid" || o.status === "paid_on_delivery") paymentStatus = "Pagato";
-        else if (o.status === "cancelled") paymentStatus = "Annullato";
-        else if (o.status === "delivered" && o.paymentTerms === "on_delivery") paymentStatus = "Da pagare";
-        else if (o.paidAt) paymentStatus = "Pagato";
-        else paymentStatus = "Da pagare";
+        let paymentStatusLabel: string;
+        if (o.status === "cancelled") paymentStatusLabel = "Annullato";
+        else if (o.paymentStatus === "paid" || o.paidAt) paymentStatusLabel = "Pagato";
+        else paymentStatusLabel = "Da pagare";
 
         return {
           id: o.id,
           orderNumber: o.orderNumber,
           createdAt: o.createdAt,
           status: o.status,
-          paymentStatus,
+          paymentStatus: paymentStatusLabel,
           totalAmount: o.totalGross,
           itemCount: itemCounts.get(o.id) ?? 0,
         };
@@ -506,7 +505,7 @@ export const retailerSelfServiceRouter = router({
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
 
       // Get items with optional batch info
-      const showBatchInfo = ["paid", "approved_for_shipping", "transferring", "shipped", "delivered", "paid_on_delivery"].includes(order.status);
+      const showBatchInfo = ["transferring", "shipped", "delivered"].includes(order.status);
 
       const items = await database
         .select({
@@ -532,8 +531,7 @@ export const retailerSelfServiceRouter = router({
       // Build status history from timestamps
       const statusHistory: Array<{ status: string; timestamp: Date | null }> = [];
       statusHistory.push({ status: "pending", timestamp: order.createdAt });
-      if (order.paidAt) statusHistory.push({ status: "paid", timestamp: order.paidAt });
-      if (order.approvedForShippingAt) statusHistory.push({ status: "approved_for_shipping", timestamp: order.approvedForShippingAt });
+      if (order.paidAt) statusHistory.push({ status: "payment_received", timestamp: order.paidAt });
       if (order.transferringAt) statusHistory.push({ status: "transferring", timestamp: order.transferringAt });
       if (order.shippedAt) statusHistory.push({ status: "shipped", timestamp: order.shippedAt });
       if (order.deliveredAt) statusHistory.push({ status: "delivered", timestamp: order.deliveredAt });
