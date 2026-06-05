@@ -145,7 +145,7 @@ con grep prima di committare. La fase di test deve essere accurata.
 - `pnpm exec drizzle-kit generate` → genera `drizzle/0000_initial_pg.sql`.
 - Verificare che corrisponda allo schema atteso (col types, enum,
   constraints).
-- `pnpm exec drizzle-kit migrate` contro Supabase Free.
+- Applicare il file SQL generato manualmente via Supabase SQL Editor (BEGIN...COMMIT).
 - Verificare in Supabase Studio che le 7 tabelle siano presenti.
 
 **Come testare:** query manuale da Supabase Studio: `SELECT

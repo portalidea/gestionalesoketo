@@ -6,7 +6,7 @@
  *
  * Disaster recovery procedure:
  *   1. Crea nuovo progetto Supabase
- *   2. Applica drizzle migrations (`pnpm exec drizzle-kit migrate`)
+ *   2. Applica migration SQL manualmente via Supabase SQL Editor (in ordine numerico, BEGIN...COMMIT)
  *   3. Applica questo dump:  psql $DATABASE_URL < backups/migration-final-YYYY-MM-DD.sql
  *
  * Uso: pnpm exec tsx scripts/dump-data.ts [output-path]

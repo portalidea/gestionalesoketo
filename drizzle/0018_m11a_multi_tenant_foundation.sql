@@ -1,49 +1,71 @@
+-- ============================================================
 -- M11.A — Multi-tenant Foundation
--- Adds companies, userCompanyAccess tables and companyId columns to business tables.
--- IMPORTANT: Run the data migration script AFTER this DDL migration.
+-- ============================================================
+-- ISTRUZIONI:
+-- Applicare manualmente in Supabase SQL Editor dentro una
+-- transazione BEGIN ... COMMIT, con SELECT di verifica PRIMA
+-- del COMMIT. NON usare pnpm db:push né drizzle-kit push in
+-- nessuna circostanza.
+-- ============================================================
 
--- 1. Create companies table
+BEGIN;
+
+-- ============================================================
+-- 1. DDL: Nuove tabelle
+-- ============================================================
+
 CREATE TABLE IF NOT EXISTS "companies" (
   "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "name" TEXT NOT NULL,
-  "slug" TEXT NOT NULL UNIQUE,
-  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
-  "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+  "vatNumber" VARCHAR(20),
+  "fiscalCode" VARCHAR(20),
+  "isActive" BOOLEAN NOT NULL DEFAULT true,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 2. Create userCompanyAccess table
 CREATE TABLE IF NOT EXISTS "userCompanyAccess" (
   "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  "userId" UUID NOT NULL REFERENCES "users"("id"),
-  "companyId" UUID NOT NULL REFERENCES "companies"("id"),
-  "role" TEXT NOT NULL DEFAULT 'member',
+  "userId" UUID NOT NULL,
+  "companyId" UUID NOT NULL REFERENCES "companies"("id") ON DELETE CASCADE,
   "isDefault" BOOLEAN NOT NULL DEFAULT false,
   "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT "userCompanyAccess_user_company_unique" UNIQUE ("userId", "companyId")
 );
 
--- 3. Add companyId to retailers (nullable first, then backfill, then NOT NULL)
-ALTER TABLE "retailers" ADD COLUMN IF NOT EXISTS "companyId" UUID REFERENCES "companies"("id");
+CREATE INDEX IF NOT EXISTS "user_company_access_user_idx"
+  ON "userCompanyAccess" ("userId");
 
--- 4. Add companyId to orders
-ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "companyId" UUID REFERENCES "companies"("id");
-CREATE INDEX IF NOT EXISTS "orders_company_idx" ON "orders" ("companyId");
+-- ============================================================
+-- 2. DDL: Aggiunta colonne companyId (nullable inizialmente)
+-- ============================================================
 
--- 5. Add companyId to productBatches
-ALTER TABLE "productBatches" ADD COLUMN IF NOT EXISTS "companyId" UUID REFERENCES "companies"("id");
+ALTER TABLE "retailers"
+  ADD COLUMN IF NOT EXISTS "companyId" UUID REFERENCES "companies"("id");
 
--- 6. Add companyId to locations
-ALTER TABLE "locations" ADD COLUMN IF NOT EXISTS "companyId" UUID REFERENCES "companies"("id");
+ALTER TABLE "orders"
+  ADD COLUMN IF NOT EXISTS "companyId" UUID REFERENCES "companies"("id");
 
--- 7. Add companyId to inventoryByBatch
-ALTER TABLE "inventoryByBatch" ADD COLUMN IF NOT EXISTS "companyId" UUID REFERENCES "companies"("id");
+ALTER TABLE "productBatches"
+  ADD COLUMN IF NOT EXISTS "companyId" UUID REFERENCES "companies"("id");
 
--- 8. Add companyId to stockMovements
-ALTER TABLE "stockMovements" ADD COLUMN IF NOT EXISTS "companyId" UUID REFERENCES "companies"("id");
+ALTER TABLE "locations"
+  ADD COLUMN IF NOT EXISTS "companyId" UUID REFERENCES "companies"("id");
 
--- 9. Add paymentStatus and paymentMethod to orders (M6.2.G — if not already present)
+ALTER TABLE "inventoryByBatch"
+  ADD COLUMN IF NOT EXISTS "companyId" UUID REFERENCES "companies"("id");
+
+ALTER TABLE "stockMovements"
+  ADD COLUMN IF NOT EXISTS "companyId" UUID REFERENCES "companies"("id");
+
+-- ============================================================
+-- 3. DDL: paymentStatus e paymentMethod su orders (M6.2.G)
+-- ============================================================
+
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='paymentStatus') THEN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'orders' AND column_name = 'paymentStatus'
+  ) THEN
     CREATE TYPE "paymentStatusEnum" AS ENUM ('unpaid', 'paid', 'refunded');
     ALTER TABLE "orders" ADD COLUMN "paymentStatus" "paymentStatusEnum" NOT NULL DEFAULT 'unpaid';
     ALTER TABLE "orders" ADD COLUMN "paymentMethod" TEXT;
@@ -51,33 +73,247 @@ DO $$ BEGIN
 END $$;
 
 -- ============================================================
--- DATA MIGRATION (run manually or via script after DDL above)
+-- 4. SEED: Creazione delle due company con UUID fissi
 -- ============================================================
--- Step A: Create the default company
--- INSERT INTO "companies" ("id", "name", "slug") VALUES ('YOUR-UUID', 'SoKeto', 'soketo');
---
--- Step B: Backfill companyId on all existing rows
--- UPDATE "retailers" SET "companyId" = 'YOUR-UUID' WHERE "companyId" IS NULL;
--- UPDATE "orders" SET "companyId" = 'YOUR-UUID' WHERE "companyId" IS NULL;
--- UPDATE "productBatches" SET "companyId" = 'YOUR-UUID' WHERE "companyId" IS NULL;
--- UPDATE "locations" SET "companyId" = 'YOUR-UUID' WHERE "companyId" IS NULL;
--- UPDATE "inventoryByBatch" SET "companyId" = 'YOUR-UUID' WHERE "companyId" IS NULL;
--- UPDATE "stockMovements" SET "companyId" = 'YOUR-UUID' WHERE "companyId" IS NULL;
---
--- Step C: Make companyId NOT NULL (after backfill)
--- ALTER TABLE "retailers" ALTER COLUMN "companyId" SET NOT NULL;
--- ALTER TABLE "orders" ALTER COLUMN "companyId" SET NOT NULL;
--- ALTER TABLE "productBatches" ALTER COLUMN "companyId" SET NOT NULL;
--- ALTER TABLE "locations" ALTER COLUMN "companyId" SET NOT NULL;
--- ALTER TABLE "inventoryByBatch" ALTER COLUMN "companyId" SET NOT NULL;
--- ALTER TABLE "stockMovements" ALTER COLUMN "companyId" SET NOT NULL;
---
--- Step D: Grant all existing staff users access to the default company
--- INSERT INTO "userCompanyAccess" ("userId", "companyId", "role", "isDefault")
--- SELECT "id", 'YOUR-UUID', 'member', true FROM "users"
--- WHERE "role" IN ('admin', 'operator', 'viewer');
---
--- Step E: Update unique constraints (optional, for multi-tenant uniqueness)
--- DROP INDEX IF EXISTS "locations_central_singleton";
--- CREATE UNIQUE INDEX "locations_central_singleton" ON "locations" ("companyId", "type")
---   WHERE "type" = 'central_warehouse';
+
+INSERT INTO "companies" ("id", "name", "vatNumber", "fiscalCode")
+VALUES
+  ('00000000-0000-0000-0000-000000000001', 'E-Keto Food Srls', 'IT04864130408', 'IT04864130408'),
+  ('00000000-0000-0000-0000-000000000002', 'SoKeto Srl', NULL, NULL)
+ON CONFLICT ("id") DO NOTHING;
+
+-- ============================================================
+-- 5. BACKFILL: Tutti i dati esistenti → E-Keto Food (company 1)
+-- ============================================================
+
+UPDATE "retailers"
+  SET "companyId" = '00000000-0000-0000-0000-000000000001'
+  WHERE "companyId" IS NULL;
+
+UPDATE "orders"
+  SET "companyId" = '00000000-0000-0000-0000-000000000001'
+  WHERE "companyId" IS NULL;
+
+UPDATE "productBatches"
+  SET "companyId" = '00000000-0000-0000-0000-000000000001'
+  WHERE "companyId" IS NULL;
+
+UPDATE "locations"
+  SET "companyId" = '00000000-0000-0000-0000-000000000001'
+  WHERE "companyId" IS NULL;
+
+UPDATE "inventoryByBatch"
+  SET "companyId" = '00000000-0000-0000-0000-000000000001'
+  WHERE "companyId" IS NULL;
+
+UPDATE "stockMovements"
+  SET "companyId" = '00000000-0000-0000-0000-000000000001'
+  WHERE "companyId" IS NULL;
+
+-- ============================================================
+-- 6. DDL: SET NOT NULL dopo backfill
+-- ============================================================
+
+ALTER TABLE "retailers" ALTER COLUMN "companyId" SET NOT NULL;
+ALTER TABLE "orders" ALTER COLUMN "companyId" SET NOT NULL;
+ALTER TABLE "productBatches" ALTER COLUMN "companyId" SET NOT NULL;
+ALTER TABLE "locations" ALTER COLUMN "companyId" SET NOT NULL;
+ALTER TABLE "inventoryByBatch" ALTER COLUMN "companyId" SET NOT NULL;
+ALTER TABLE "stockMovements" ALTER COLUMN "companyId" SET NOT NULL;
+
+-- ============================================================
+-- 7. INDEXES su companyId
+-- ============================================================
+
+CREATE INDEX IF NOT EXISTS "retailers_company_idx" ON "retailers" ("companyId");
+CREATE INDEX IF NOT EXISTS "orders_company_idx" ON "orders" ("companyId");
+CREATE INDEX IF NOT EXISTS "productBatches_company_idx" ON "productBatches" ("companyId");
+CREATE INDEX IF NOT EXISTS "locations_company_idx" ON "locations" ("companyId");
+CREATE INDEX IF NOT EXISTS "inventoryByBatch_company_idx" ON "inventoryByBatch" ("companyId");
+CREATE INDEX IF NOT EXISTS "stockMovements_company_idx" ON "stockMovements" ("companyId");
+
+-- ============================================================
+-- 8. UNIQUE CONSTRAINTS: aggiornamento per multi-tenant
+-- ============================================================
+
+-- 8a. productBatches: (productId, batchNumber) → (companyId, productId, batchNumber)
+ALTER TABLE "productBatches"
+  DROP CONSTRAINT IF EXISTS "productBatches_product_batch_unique";
+ALTER TABLE "productBatches"
+  ADD CONSTRAINT "productBatches_product_batch_company_unique"
+  UNIQUE ("companyId", "productId", "batchNumber");
+
+-- 8b. locations: central_singleton → per-company
+DROP INDEX IF EXISTS "locations_central_singleton";
+CREATE UNIQUE INDEX "locations_central_singleton"
+  ON "locations" ("companyId", "type")
+  WHERE "type" = 'central_warehouse';
+
+-- ============================================================
+-- 9. SEED: userCompanyAccess
+-- ============================================================
+
+-- Alessandro e Ilira: accesso a entrambe le company, default su E-Keto Food
+WITH alessandro AS (
+  SELECT id FROM "users" WHERE email = 'alessandro@soketo.it'
+), ilira AS (
+  SELECT id FROM "users" WHERE email = 'ilira@soketo.it'
+)
+INSERT INTO "userCompanyAccess" ("userId", "companyId", "isDefault")
+SELECT alessandro.id, '00000000-0000-0000-0000-000000000001'::uuid, true FROM alessandro
+UNION ALL
+SELECT alessandro.id, '00000000-0000-0000-0000-000000000002'::uuid, false FROM alessandro
+UNION ALL
+SELECT ilira.id, '00000000-0000-0000-0000-000000000001'::uuid, true FROM ilira
+UNION ALL
+SELECT ilira.id, '00000000-0000-0000-0000-000000000002'::uuid, false FROM ilira
+ON CONFLICT ("userId", "companyId") DO NOTHING;
+
+-- Tutti gli altri utenti esistenti: accesso solo a E-Keto Food
+INSERT INTO "userCompanyAccess" ("userId", "companyId", "isDefault")
+SELECT u.id, '00000000-0000-0000-0000-000000000001'::uuid, true
+FROM "users" u
+WHERE u.email NOT IN ('alessandro@soketo.it', 'ilira@soketo.it')
+  AND NOT EXISTS (
+    SELECT 1 FROM "userCompanyAccess" uca
+    WHERE uca."userId" = u.id
+      AND uca."companyId" = '00000000-0000-0000-0000-000000000001'::uuid
+  );
+
+-- ============================================================
+-- 10. RLS: Policy RESTRICTIVE per company isolation
+-- ============================================================
+
+-- Abilita RLS sulle 6 tabelle business (se non già attivo)
+ALTER TABLE "retailers" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "orders" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "productBatches" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "locations" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "inventoryByBatch" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "stockMovements" ENABLE ROW LEVEL SECURITY;
+
+-- Policy RESTRICTIVE: ogni utente vede solo le company a cui ha accesso
+CREATE POLICY "retailers_company_isolation" ON "retailers"
+  AS RESTRICTIVE FOR ALL TO authenticated
+  USING (
+    "companyId" IN (
+      SELECT "companyId" FROM "userCompanyAccess"
+      WHERE "userId" = auth.uid()
+    )
+  )
+  WITH CHECK (
+    "companyId" IN (
+      SELECT "companyId" FROM "userCompanyAccess"
+      WHERE "userId" = auth.uid()
+    )
+  );
+
+CREATE POLICY "orders_company_isolation" ON "orders"
+  AS RESTRICTIVE FOR ALL TO authenticated
+  USING (
+    "companyId" IN (
+      SELECT "companyId" FROM "userCompanyAccess"
+      WHERE "userId" = auth.uid()
+    )
+  )
+  WITH CHECK (
+    "companyId" IN (
+      SELECT "companyId" FROM "userCompanyAccess"
+      WHERE "userId" = auth.uid()
+    )
+  );
+
+CREATE POLICY "productBatches_company_isolation" ON "productBatches"
+  AS RESTRICTIVE FOR ALL TO authenticated
+  USING (
+    "companyId" IN (
+      SELECT "companyId" FROM "userCompanyAccess"
+      WHERE "userId" = auth.uid()
+    )
+  )
+  WITH CHECK (
+    "companyId" IN (
+      SELECT "companyId" FROM "userCompanyAccess"
+      WHERE "userId" = auth.uid()
+    )
+  );
+
+CREATE POLICY "locations_company_isolation" ON "locations"
+  AS RESTRICTIVE FOR ALL TO authenticated
+  USING (
+    "companyId" IN (
+      SELECT "companyId" FROM "userCompanyAccess"
+      WHERE "userId" = auth.uid()
+    )
+  )
+  WITH CHECK (
+    "companyId" IN (
+      SELECT "companyId" FROM "userCompanyAccess"
+      WHERE "userId" = auth.uid()
+    )
+  );
+
+CREATE POLICY "inventoryByBatch_company_isolation" ON "inventoryByBatch"
+  AS RESTRICTIVE FOR ALL TO authenticated
+  USING (
+    "companyId" IN (
+      SELECT "companyId" FROM "userCompanyAccess"
+      WHERE "userId" = auth.uid()
+    )
+  )
+  WITH CHECK (
+    "companyId" IN (
+      SELECT "companyId" FROM "userCompanyAccess"
+      WHERE "userId" = auth.uid()
+    )
+  );
+
+CREATE POLICY "stockMovements_company_isolation" ON "stockMovements"
+  AS RESTRICTIVE FOR ALL TO authenticated
+  USING (
+    "companyId" IN (
+      SELECT "companyId" FROM "userCompanyAccess"
+      WHERE "userId" = auth.uid()
+    )
+  )
+  WITH CHECK (
+    "companyId" IN (
+      SELECT "companyId" FROM "userCompanyAccess"
+      WHERE "userId" = auth.uid()
+    )
+  );
+
+-- ============================================================
+-- 11. VERIFICA PRE-COMMIT
+-- ============================================================
+-- Eseguire queste SELECT per verificare che tutto sia corretto
+-- PRIMA di fare COMMIT:
+
+SELECT 'companies' AS tbl, count(*) FROM "companies";
+-- Atteso: 2
+
+SELECT 'userCompanyAccess' AS tbl, count(*) FROM "userCompanyAccess";
+-- Atteso: >= 4 (2 per Alessandro + 2 per Ilira + N per altri utenti)
+
+SELECT 'retailers_null_check' AS tbl, count(*) FROM "retailers" WHERE "companyId" IS NULL;
+-- Atteso: 0
+
+SELECT 'orders_null_check' AS tbl, count(*) FROM "orders" WHERE "companyId" IS NULL;
+-- Atteso: 0
+
+SELECT 'productBatches_null_check' AS tbl, count(*) FROM "productBatches" WHERE "companyId" IS NULL;
+-- Atteso: 0
+
+SELECT 'locations_null_check' AS tbl, count(*) FROM "locations" WHERE "companyId" IS NULL;
+-- Atteso: 0
+
+SELECT 'inventoryByBatch_null_check' AS tbl, count(*) FROM "inventoryByBatch" WHERE "companyId" IS NULL;
+-- Atteso: 0
+
+SELECT 'stockMovements_null_check' AS tbl, count(*) FROM "stockMovements" WHERE "companyId" IS NULL;
+-- Atteso: 0
+
+-- Se tutto OK:
+COMMIT;
+-- Se qualcosa non torna:
+-- ROLLBACK;

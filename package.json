@@ -13,7 +13,8 @@
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run",
-    "db:push": "drizzle-kit generate && drizzle-kit migrate"
+    "db:generate": "drizzle-kit generate",
+    "db:push": "echo 'ERROR: NON usare db:push. Applicare migration manualmente via Supabase SQL Editor.' && exit 1"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.2",

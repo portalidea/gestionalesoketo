@@ -180,7 +180,7 @@ preferire sempre l'ordine migration-first.
 
 Disaster recovery DB:
 1. Crea nuovo progetto Supabase (regione `eu-central-1`)
-2. Apply migrations: `pnpm exec drizzle-kit migrate`
+2. Apply migrations: applicare manualmente ogni file SQL in `drizzle/` via Supabase SQL Editor (in ordine numerico, dentro BEGIN...COMMIT)
 3. Apply data dump: `psql $DATABASE_URL < backups/migration-final-YYYY-MM-DD.sql`
 4. Aggiorna env vars Vercel
 5. Bootstrap admin: `pnpm exec tsx scripts/create-admin.ts info@soketo.it`
@@ -250,7 +250,8 @@ pnpm dlx vercel inspect <url> --logs
 
 # DB schema (Drizzle)
 pnpm exec drizzle-kit generate    # genera migration da schema.ts
-pnpm exec drizzle-kit migrate     # applica migration
+# Applicare migration manualmente via Supabase SQL Editor (BEGIN...COMMIT)
+# NON usare drizzle-kit push/migrate in nessuna circostanza
 ```
 
 ---
