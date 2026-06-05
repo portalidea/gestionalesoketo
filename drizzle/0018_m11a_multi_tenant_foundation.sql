@@ -1,5 +1,5 @@
 -- ============================================================
--- M11.A — Multi-tenant Foundation
+-- M11.A — Multi-tenant Foundation (v2)
 -- ============================================================
 -- ISTRUZIONI:
 -- Applicare manualmente in Supabase SQL Editor dentro una
@@ -58,22 +58,7 @@ ALTER TABLE "stockMovements"
   ADD COLUMN IF NOT EXISTS "companyId" UUID REFERENCES "companies"("id");
 
 -- ============================================================
--- 3. DDL: paymentStatus e paymentMethod su orders (M6.2.G)
--- ============================================================
-
-DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'orders' AND column_name = 'paymentStatus'
-  ) THEN
-    CREATE TYPE "paymentStatusEnum" AS ENUM ('unpaid', 'paid', 'refunded');
-    ALTER TABLE "orders" ADD COLUMN "paymentStatus" "paymentStatusEnum" NOT NULL DEFAULT 'unpaid';
-    ALTER TABLE "orders" ADD COLUMN "paymentMethod" TEXT;
-  END IF;
-END $$;
-
--- ============================================================
--- 4. SEED: Creazione delle due company con UUID fissi
+-- 3. SEED: Creazione delle due company con UUID fissi
 -- ============================================================
 
 INSERT INTO "companies" ("id", "name", "vatNumber", "fiscalCode")
@@ -83,7 +68,7 @@ VALUES
 ON CONFLICT ("id") DO NOTHING;
 
 -- ============================================================
--- 5. BACKFILL: Tutti i dati esistenti → E-Keto Food (company 1)
+-- 4. BACKFILL: Tutti i dati esistenti → E-Keto Food (company 1)
 -- ============================================================
 
 UPDATE "retailers"
@@ -111,7 +96,7 @@ UPDATE "stockMovements"
   WHERE "companyId" IS NULL;
 
 -- ============================================================
--- 6. DDL: SET NOT NULL dopo backfill
+-- 5. DDL: SET NOT NULL dopo backfill
 -- ============================================================
 
 ALTER TABLE "retailers" ALTER COLUMN "companyId" SET NOT NULL;
@@ -122,7 +107,7 @@ ALTER TABLE "inventoryByBatch" ALTER COLUMN "companyId" SET NOT NULL;
 ALTER TABLE "stockMovements" ALTER COLUMN "companyId" SET NOT NULL;
 
 -- ============================================================
--- 7. INDEXES su companyId
+-- 6. INDEXES su companyId
 -- ============================================================
 
 CREATE INDEX IF NOT EXISTS "retailers_company_idx" ON "retailers" ("companyId");
@@ -133,31 +118,31 @@ CREATE INDEX IF NOT EXISTS "inventoryByBatch_company_idx" ON "inventoryByBatch" 
 CREATE INDEX IF NOT EXISTS "stockMovements_company_idx" ON "stockMovements" ("companyId");
 
 -- ============================================================
--- 8. UNIQUE CONSTRAINTS: aggiornamento per multi-tenant
+-- 7. UNIQUE CONSTRAINTS: aggiornamento per multi-tenant
 -- ============================================================
 
--- 8a. productBatches: (productId, batchNumber) → (companyId, productId, batchNumber)
+-- 7a. productBatches: (productId, batchNumber) → (companyId, productId, batchNumber)
 ALTER TABLE "productBatches"
   DROP CONSTRAINT IF EXISTS "productBatches_product_batch_unique";
 ALTER TABLE "productBatches"
   ADD CONSTRAINT "productBatches_product_batch_company_unique"
   UNIQUE ("companyId", "productId", "batchNumber");
 
--- 8b. locations: central_singleton → per-company
+-- 7b. locations: central_singleton → per-company
 DROP INDEX IF EXISTS "locations_central_singleton";
 CREATE UNIQUE INDEX "locations_central_singleton"
   ON "locations" ("companyId", "type")
   WHERE "type" = 'central_warehouse';
 
 -- ============================================================
--- 9. SEED: userCompanyAccess
+-- 8. SEED: userCompanyAccess (fonte: auth.users)
 -- ============================================================
 
 -- Alessandro e Ilira: accesso a entrambe le company, default su E-Keto Food
 WITH alessandro AS (
-  SELECT id FROM "users" WHERE email = 'alessandro@soketo.it'
+  SELECT id FROM auth.users WHERE email = 'alessandro@soketo.it'
 ), ilira AS (
-  SELECT id FROM "users" WHERE email = 'ilira@soketo.it'
+  SELECT id FROM auth.users WHERE email = 'ilira@soketo.it'
 )
 INSERT INTO "userCompanyAccess" ("userId", "companyId", "isDefault")
 SELECT alessandro.id, '00000000-0000-0000-0000-000000000001'::uuid, true FROM alessandro
@@ -172,7 +157,7 @@ ON CONFLICT ("userId", "companyId") DO NOTHING;
 -- Tutti gli altri utenti esistenti: accesso solo a E-Keto Food
 INSERT INTO "userCompanyAccess" ("userId", "companyId", "isDefault")
 SELECT u.id, '00000000-0000-0000-0000-000000000001'::uuid, true
-FROM "users" u
+FROM auth.users u
 WHERE u.email NOT IN ('alessandro@soketo.it', 'ilira@soketo.it')
   AND NOT EXISTS (
     SELECT 1 FROM "userCompanyAccess" uca
@@ -181,7 +166,7 @@ WHERE u.email NOT IN ('alessandro@soketo.it', 'ilira@soketo.it')
   );
 
 -- ============================================================
--- 10. RLS: Policy RESTRICTIVE per company isolation
+-- 9. RLS: Policy RESTRICTIVE per company isolation
 -- ============================================================
 
 -- Abilita RLS sulle 6 tabelle business (se non già attivo)
@@ -284,7 +269,7 @@ CREATE POLICY "stockMovements_company_isolation" ON "stockMovements"
   );
 
 -- ============================================================
--- 11. VERIFICA PRE-COMMIT
+-- 10. VERIFICA PRE-COMMIT
 -- ============================================================
 -- Eseguire queste SELECT per verificare che tutto sia corretto
 -- PRIMA di fare COMMIT:
