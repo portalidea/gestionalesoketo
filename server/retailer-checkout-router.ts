@@ -92,10 +92,11 @@ export const retailerCheckoutRouter = router({
       }
 
       // 3. Auto-assegnazione FEFO lotti (stessa logica di orders.create in M6.2.A)
+      // M11.A: filtro companyId per multi-tenant
       const [warehouse] = await db
         .select({ id: locations.id })
         .from(locations)
-        .where(eq(locations.type, "central_warehouse"))
+        .where(and(eq(locations.type, "central_warehouse"), eq(locations.companyId, ctx.activeCompanyId)))
         .limit(1);
 
       type BatchAllocation = {

@@ -218,11 +218,11 @@ export const retailerOrdersRouter = router({
         });
       }
 
-      // Auto-FEFO
+      // Auto-FEFO (M11.A: filtro companyId)
       const [warehouse] = await db
         .select({ id: locations.id })
         .from(locations)
-        .where(eq(locations.type, "central_warehouse"))
+        .where(and(eq(locations.type, "central_warehouse"), eq(locations.companyId, ctx.activeCompanyId)))
         .limit(1);
 
       type BatchAllocation = {

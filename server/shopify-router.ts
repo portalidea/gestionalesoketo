@@ -436,17 +436,15 @@ export const shopifyRouter = router({
           financialStatus: z.enum(["paid", "any"]).default("paid"),
         }),
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
-
         // Get active store
-        const [store] = await db
+         const [store] = await db
           .select()
           .from(salesStores)
           .where(and(eq(salesStores.channel, "shopify"), eq(salesStores.isActive, true)))
           .limit(1);
-
         if (!store)
           throw new TRPCError({ code: "NOT_FOUND", message: "Nessuno store Shopify configurato" });
         if (!(store.apiCredentials as any)?.accessToken)
@@ -501,9 +499,10 @@ export const shopifyRouter = router({
 
             imported++;
 
-            // Process stock
+            // Process stock (M11.A: pass companyId)
             const stockResult = await processStockForMarketplaceOrder(
               importResult.marketplaceOrderId,
+              ctx.activeCompanyId,
             );
 
             if (stockResult.status === "processed") {
@@ -683,17 +682,16 @@ export const shopifyRouter = router({
 
     retry: staffProcedure
       .input(z.object({ marketplaceOrderId: uuid }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
-
         // Reset error before retry
         await db
           .update(marketplaceOrders)
           .set({ stockProcessingError: null, updatedAt: new Date() })
           .where(eq(marketplaceOrders.id, input.marketplaceOrderId));
 
-        const result = await processStockForMarketplaceOrder(input.marketplaceOrderId);
+        const result = await processStockForMarketplaceOrder(input.marketplaceOrderId, ctx.activeCompanyId);
 
         return {
           success: result.status === "processed",
@@ -716,17 +714,15 @@ export const shopifyRouter = router({
           productIds: z.array(z.string().uuid()).optional(),
         }),
       )
-      .mutation(async ({ input }) => {
+       .mutation(async ({ input, ctx }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
-
         // Get active store
         const [store] = await db
           .select()
           .from(salesStores)
           .where(and(eq(salesStores.channel, "shopify"), eq(salesStores.isActive, true)))
           .limit(1);
-
         if (!store)
           throw new TRPCError({ code: "NOT_FOUND", message: "Nessuno store Shopify configurato" });
         if (!(store.apiCredentials as any)?.accessToken)
@@ -741,7 +737,7 @@ export const shopifyRouter = router({
         const [warehouse] = await db
           .select({ id: locations.id })
           .from(locations)
-          .where(eq(locations.type, "central_warehouse"))
+          .where(and(eq(locations.type, "central_warehouse"), eq(locations.companyId, ctx.activeCompanyId)))
           .limit(1);
 
         if (!warehouse)
@@ -807,7 +803,7 @@ export const shopifyRouter = router({
 
           try {
             // Use computeVariantAvailableStock for both simple and bundle variants
-            const available = await computeVariantAvailableStock(variant.id);
+            const available = await computeVariantAvailableStock(variant.id, ctx.activeCompanyId);
 
             // TODO: Store inventory_item_id in channel_variants for direct access
             await client.updateInventoryLevel(

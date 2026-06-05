@@ -222,6 +222,7 @@ export async function syncVariantsFromShopify(
  */
 export async function computeVariantAvailableStock(
   variantId: string,
+  companyId?: string,
 ): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
@@ -240,11 +241,13 @@ export async function computeVariantAvailableStock(
 
   if (!variant) return 0;
 
-  // 2. Get central warehouse
+  // 2. Get central warehouse (M11.A: filtro companyId)
+  const warehouseConditions: any[] = [eq(locations.type, "central_warehouse")];
+  if (companyId) warehouseConditions.push(eq(locations.companyId, companyId));
   const [warehouse] = await db
     .select({ id: locations.id })
     .from(locations)
-    .where(eq(locations.type, "central_warehouse"))
+    .where(and(...warehouseConditions))
     .limit(1);
 
   if (!warehouse) return 0;

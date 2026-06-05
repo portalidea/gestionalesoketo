@@ -621,11 +621,11 @@ export const ddtImportsRouter = router({
         });
       }
 
-      // Trova location magazzino centrale
+      // Trova location magazzino centrale (M11.A: filtro companyId)
       const [centralLocation] = await db
         .select()
         .from(locations)
-        .where(eq(locations.type, "central_warehouse"))
+        .where(and(eq(locations.type, "central_warehouse"), eq(locations.companyId, ctx.activeCompanyId)))
         .limit(1);
 
       if (!centralLocation) {

@@ -32,7 +32,7 @@ export const affiliatesRouter = router({
         status: z.enum(["active", "inactive"]).optional(),
       }).optional(),
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const { page = 1, limit = 20, search, status } = input ?? {};
       const db = (await getDb())!;
       const offset = (page - 1) * limit;
@@ -62,13 +62,15 @@ export const affiliatesRouter = router({
         db.select({ total: count() }).from(affiliates).where(whereClause),
       ]);
 
-      // For each affiliate, get summary stats
+      // For each affiliate, get summary stats (M11.A: filter retailers by company)
       const itemsWithStats = await Promise.all(
         items.map(async (aff) => {
+          const retailerConditions: any[] = [eq(retailers.affiliateId, aff.id)];
+          if (ctx.activeCompanyId) retailerConditions.push(eq(retailers.companyId, ctx.activeCompanyId));
           const [{ retailerCount }] = await db
             .select({ retailerCount: count() })
             .from(retailers)
-            .where(eq(retailers.affiliateId, aff.id));
+            .where(and(...retailerConditions));
 
           const [{ totalCommissions, pendingAmount }] = await db
             .select({
@@ -92,18 +94,20 @@ export const affiliatesRouter = router({
 
   getById: staffProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = (await getDb())!;
       const affiliate = await db.select().from(affiliates).where(eq(affiliates.id, input.id)).limit(1).then(r => r[0]);
       if (!affiliate) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Affiliato non trovato" });
       }
 
-      // Get retailers assigned
+      // Get retailers assigned (M11.A: filter by company)
+      const retailerConditions: any[] = [eq(retailers.affiliateId, input.id)];
+      if (ctx.activeCompanyId) retailerConditions.push(eq(retailers.companyId, ctx.activeCompanyId));
       const assignedRetailers = await db
         .select({ id: retailers.id, name: retailers.name, city: retailers.city, affiliateAssignedAt: retailers.affiliateAssignedAt, createdAt: retailers.createdAt })
         .from(retailers)
-        .where(eq(retailers.affiliateId, input.id))
+        .where(and(...retailerConditions))
         .orderBy(desc(retailers.createdAt));
 
       // Get commission stats

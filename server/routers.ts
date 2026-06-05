@@ -199,14 +199,14 @@ export const appRouter = router({
   }),
   // ============= RETAILERS =============
   retailers: router({
-    list: staffProcedure.query(async () => {
-      return await db.getAllRetailers();
+    list: staffProcedure.query(async ({ ctx }) => {
+      return await db.getAllRetailers(ctx.activeCompanyId);
     }),
 
     getById: staffProcedure
       .input(z.object({ id: uuid }))
-      .query(async ({ input }) => {
-        return await db.getRetailerById(input.id);
+      .query(async ({ input, ctx }) => {
+        return await db.getRetailerById(input.id, ctx.activeCompanyId);
       }),
 
     /**
@@ -222,11 +222,11 @@ export const appRouter = router({
      */
     getDetails: staffProcedure
       .input(z.object({ id: uuid }))
-      .query(async ({ input }) => {
+      .query(async ({ input, ctx }) => {
         // M3.0.8 perf timing: timestamp ogni step. Log solo se total >500ms.
         const tAll = Date.now();
         const t0 = Date.now();
-        const retailer = await db.getRetailerById(input.id);
+        const retailer = await db.getRetailerById(input.id, ctx.activeCompanyId);
         const tRetailer = Date.now() - t0;
         if (!retailer) return null;
 
@@ -1009,12 +1009,12 @@ export const appRouter = router({
 
   // ============= LOCATIONS (Phase B M1) =============
   locations: router({
-    list: staffProcedure.query(async () => {
-      return await db.getAllLocations();
+    list: staffProcedure.query(async ({ ctx }) => {
+      return await db.getAllLocations(ctx.activeCompanyId);
     }),
 
-    getCentralWarehouse: staffProcedure.query(async () => {
-      return (await db.getCentralWarehouseLocation()) ?? null;
+    getCentralWarehouse: staffProcedure.query(async ({ ctx }) => {
+      return (await db.getCentralWarehouseLocation(ctx.activeCompanyId)) ?? null;
     }),
 
     getByRetailer: staffProcedure
@@ -1041,8 +1041,8 @@ export const appRouter = router({
 
   // ============= WAREHOUSE OVERVIEW (Phase B M1) =============
   warehouse: router({
-    getStockOverview: staffProcedure.query(async () => {
-      return await db.getWarehouseStockOverview();
+    getStockOverview: staffProcedure.query(async ({ ctx }) => {
+      return await db.getWarehouseStockOverview(ctx.activeCompanyId);
     }),
     /**
      * M8.2: Valore magazzino overview — stat cards.
@@ -1050,11 +1050,12 @@ export const appRouter = router({
      * costPrice = products.costPrice (costo unitario standard IVA esclusa)
      * listPrice = products.unitPrice (varchar, prezzo base catalogo)
      */
-    getValueOverview: staffProcedure.query(async () => {
+    getValueOverview: staffProcedure.query(async ({ ctx }) => {
       const startTime = Date.now();
       const database = await db.getDb();
       if (!database) return null;
       const { sql } = await import("drizzle-orm");
+      const companyFilter = ctx.activeCompanyId ? sql` AND l."companyId" = ${ctx.activeCompanyId}::uuid` : sql``;
       const rows = await database.execute(sql`
         SELECT
           COALESCE(SUM(ibb."quantity"), 0)::int AS "totalUnits",
@@ -1067,7 +1068,7 @@ export const appRouter = router({
         FROM "inventoryByBatch" ibb
         INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
         INNER JOIN "products" p ON p."id" = pb."productId"
-        INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'central_warehouse'
+        INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'central_warehouse'${companyFilter}
         WHERE ibb."quantity" > 0
       `);
 
@@ -1078,7 +1079,7 @@ export const appRouter = router({
         FROM "inventoryByBatch" ibb
         INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
         INNER JOIN "products" p ON p."id" = pb."productId"
-        INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'central_warehouse'
+        INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'central_warehouse'${companyFilter}
         WHERE ibb."quantity" > 0
           AND pb."expirationDate" IS NOT NULL
           AND pb."expirationDate" < NOW() + INTERVAL '30 days'
@@ -1115,10 +1116,11 @@ export const appRouter = router({
      * Calcola valore totale stock centrale usando costPrice dei lotti
      * (fallback su costPrice prodotto se lotto ha costPrice = 0).
      */
-    getValuation: adminProcedure.query(async () => {
+    getValuation: adminProcedure.query(async ({ ctx }) => {
       const database = await db.getDb();
       if (!database) return { totalValue: "0", totalUnits: 0, products: [] };
       const { sql } = await import("drizzle-orm");
+      const companyFilter = ctx.activeCompanyId ? sql` AND l."companyId" = ${ctx.activeCompanyId}::uuid` : sql``;
       const rows = await database.execute(sql`
         SELECT
           p."id" AS "productId",
@@ -1135,7 +1137,7 @@ export const appRouter = router({
         FROM "products" p
         INNER JOIN "productBatches" pb ON pb."productId" = p."id"
         INNER JOIN "inventoryByBatch" ibb ON ibb."batchId" = pb."id"
-        INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'central_warehouse'
+        INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'central_warehouse'${companyFilter}
         WHERE ibb."quantity" > 0
         GROUP BY p."id", p."name", p."sku", p."costPrice"
         ORDER BY "value" DESC
@@ -1309,21 +1311,21 @@ export const appRouter = router({
   // ============= DASHBOARD STATS =============
   // Cache TTL 2 min implementata in db.ts per mantenere i tipi tRPC
   dashboard: router({
-    getStats: staffProcedure.query(async () => {
+    getStats: staffProcedure.query(async ({ ctx }) => {
       console.time("[dashboard.getStats]");
-      const result = await db.getDashboardStats();
+      const result = await db.getDashboardStats(ctx.activeCompanyId);
       console.timeEnd("[dashboard.getStats]");
       return result;
     }),
-    getStockAlerts: staffProcedure.query(async () => {
+    getStockAlerts: staffProcedure.query(async ({ ctx }) => {
       console.time("[dashboard.getStockAlerts]");
-      const result = await db.getProductsUnderThreshold(20);
+      const result = await db.getProductsUnderThreshold(20, ctx.activeCompanyId);
       console.timeEnd("[dashboard.getStockAlerts]");
       return result;
     }),
-    getExpiringBatches: staffProcedure.query(async () => {
+    getExpiringBatches: staffProcedure.query(async ({ ctx }) => {
       console.time("[dashboard.getExpiringBatches]");
-      const result = await db.getExpiringBatches(20);
+      const result = await db.getExpiringBatches(20, ctx.activeCompanyId);
       console.timeEnd("[dashboard.getExpiringBatches]");
       return result;
     }),

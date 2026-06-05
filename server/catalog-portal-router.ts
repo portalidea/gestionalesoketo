@@ -281,6 +281,7 @@ export const catalogPortalRouter = router({
           and(
             eq(productBatches.productId, input.productId),
             eq(locations.type, "central_warehouse"),
+            eq(locations.companyId, ctx.activeCompanyId), // M11.A
             gt(inventoryByBatch.quantity, 0),
           ),
         )

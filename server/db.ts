@@ -112,7 +112,7 @@ export async function deleteUser(id: string) {
 
 // ============= RETAILERS =============
 
-export async function getAllRetailers() {
+export async function getAllRetailers(companyId?: string) {
   const db = await getDb();
   if (!db) return [];
   // Phase B M2.5: arricchito con stats per la vista tabellare /retailers.
@@ -145,7 +145,7 @@ export async function getAllRetailers() {
     WHERE l."retailerId" = "retailers"."id"
   ), 0)::text`;
 
-  return db
+  const baseSelect = db
     .select({
       id: retailers.id,
       name: retailers.name,
@@ -174,14 +174,19 @@ export async function getAllRetailers() {
       totalStock: totalStockExpr,
       inventoryValue: inventoryValueExpr,
     })
-    .from(retailers)
-    .orderBy(retailers.name);
+    .from(retailers);
+  if (companyId) {
+    return baseSelect.where(eq(retailers.companyId, companyId)).orderBy(retailers.name);
+  }
+  return baseSelect.orderBy(retailers.name);
 }
 
-export async function getRetailerById(id: string) {
+export async function getRetailerById(id: string, companyId?: string) {
   const db = await getDb();
   if (!db) return undefined;
-  const result = await db.select().from(retailers).where(eq(retailers.id, id)).limit(1);
+  const conditions: any[] = [eq(retailers.id, id)];
+  if (companyId) conditions.push(eq(retailers.companyId, companyId));
+  const result = await db.select().from(retailers).where(and(...conditions)).limit(1);
   if (!result[0]) return undefined;
   // Enrich with affiliate info if assigned
   if (result[0].affiliateId) {
@@ -585,19 +590,26 @@ export async function deleteProducer(id: string) {
 
 // ============= LOCATIONS (Phase B M1) =============
 
-export async function getAllLocations() {
+export async function getAllLocations(companyId?: string) {
   const db = await getDb();
   if (!db) return [];
+  if (companyId) {
+    return db.select().from(locations).where(eq(locations.companyId, companyId)).orderBy(locations.type, locations.name);
+  }
   return db.select().from(locations).orderBy(locations.type, locations.name);
 }
 
-export async function getCentralWarehouseLocation(): Promise<Location | undefined> {
+export async function getCentralWarehouseLocation(companyId?: string): Promise<Location | undefined> {
   const db = await getDb();
   if (!db) return undefined;
+  const conditions: SQL[] = [eq(locations.type, "central_warehouse")];
+  if (companyId) {
+    conditions.push(eq(locations.companyId, companyId));
+  }
   const [row] = await db
     .select()
     .from(locations)
-    .where(eq(locations.type, "central_warehouse"))
+    .where(and(...conditions))
     .limit(1);
   return row;
 }
@@ -1268,11 +1280,11 @@ export async function getInventoryByBatchByRetailer(retailerId: string) {
  *
  * Nessun lotto = prodotto omesso dalla vista.
  */
-export async function getWarehouseStockOverview() {
+export async function getWarehouseStockOverview(companyId?: string) {
   const db = await getDb();
   if (!db) return [];
 
-  const warehouse = await getCentralWarehouseLocation();
+  const warehouse = await getCentralWarehouseLocation(companyId);
   if (!warehouse) return [];
 
   const rows = await db
@@ -1726,18 +1738,22 @@ function cachedDashboard<T>(key: string, ttlMs: number, fetcher: () => Promise<T
 }
 const CACHE_TTL = 2 * 60 * 1000; // 2 min
 
-export function getDashboardStats() {
-  return cachedDashboard("stats", CACHE_TTL, _getDashboardStatsImpl);
+export function getDashboardStats(companyId?: string) {
+  const cacheKey = companyId ? `stats:${companyId}` : "stats";
+  return cachedDashboard(cacheKey, CACHE_TTL, () => _getDashboardStatsImpl(companyId));
 }
-async function _getDashboardStatsImpl() {
+async function _getDashboardStatsImpl(companyId?: string) {
   const db = await getDb();
   if (!db) return EMPTY_DASHBOARD_STATS;
 
   try {
     console.time("[getDashboardStats] counts");
+    const retailerQuery = companyId
+      ? db.select({ c: sql<number>`count(*)::int` }).from(retailers).where(eq(retailers.companyId, companyId))
+      : db.select({ c: sql<number>`count(*)::int` }).from(retailers);
     const [retailerCountRows, productCountRows, alertCountRows] =
       await Promise.all([
-        db.select({ c: sql<number>`count(*)::int` }).from(retailers),
+        retailerQuery,
         db.select({ c: sql<number>`count(*)::int` }).from(products),
         db
           .select({ c: sql<number>`count(*)::int` })
@@ -1748,6 +1764,7 @@ async function _getDashboardStatsImpl() {
 
     // Singola query aggregata SQL per inventoryValue, lowStock, expiring
     // Evita fetch di tutte le righe inventoryByBatch + loop JS
+    const companyFilter = companyId ? sql` AND l."companyId" = ${companyId}::uuid` : sql``;
     console.time("[getDashboardStats] inventory-aggregate");
     const aggRows = await db.execute(sql`
       SELECT
@@ -1761,7 +1778,7 @@ async function _getDashboardStatsImpl() {
       FROM "inventoryByBatch" ibb
       INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
       INNER JOIN "products" p ON p."id" = pb."productId"
-      INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'retailer'
+      INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'retailer'${companyFilter}
     `);
     console.timeEnd("[getDashboardStats] inventory-aggregate");
 
@@ -1775,7 +1792,7 @@ async function _getDashboardStatsImpl() {
         FROM "inventoryByBatch" ibb
         INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
         INNER JOIN "products" p ON p."id" = pb."productId"
-        INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'retailer'
+        INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'retailer'${companyFilter}
         WHERE p."minStockThreshold" IS NOT NULL AND p."minStockThreshold" > 0
         GROUP BY ibb."locationId", pb."productId"
         HAVING SUM(ibb."quantity") < MAX(p."minStockThreshold")
@@ -2296,13 +2313,15 @@ export async function getRetailerDashboardStats(retailerId: string) {
  * Dashboard: prodotti con stock totale (magazzino centrale) sotto soglia minima.
  * Ritorna solo prodotti con minStockThreshold > 0 e stock < soglia.
  */
-export function getProductsUnderThreshold(limit = 20) {
-  return cachedDashboard(`stockAlerts:${limit}`, CACHE_TTL, () => _getProductsUnderThresholdImpl(limit));
+export function getProductsUnderThreshold(limit = 20, companyId?: string) {
+  const cacheKey = companyId ? `stockAlerts:${limit}:${companyId}` : `stockAlerts:${limit}`;
+  return cachedDashboard(cacheKey, CACHE_TTL, () => _getProductsUnderThresholdImpl(limit, companyId));
 }
-async function _getProductsUnderThresholdImpl(limit = 20) {
+async function _getProductsUnderThresholdImpl(limit = 20, companyId?: string) {
   const db = await getDb();
   if (!db) return [];
 
+  const companyFilter = companyId ? sql` AND l."companyId" = ${companyId}::uuid` : sql``;
   const rows = await db.execute(sql`
     SELECT
       p."id",
@@ -2314,7 +2333,7 @@ async function _getProductsUnderThresholdImpl(limit = 20) {
     FROM "products" p
     LEFT JOIN "productBatches" pb ON pb."productId" = p."id"
     LEFT JOIN "inventoryByBatch" ibb ON ibb."batchId" = pb."id"
-      AND ibb."locationId" IN (SELECT l."id" FROM "locations" l WHERE l."type" = 'central_warehouse')
+      AND ibb."locationId" IN (SELECT l."id" FROM "locations" l WHERE l."type" = 'central_warehouse'${companyFilter})
     WHERE p."minStockThreshold" IS NOT NULL AND p."minStockThreshold" > 0
     GROUP BY p."id", p."name", p."sku", p."minStockThreshold", p."piecesPerUnit"
     HAVING COALESCE(SUM(ibb."quantity"), 0) < p."minStockThreshold"
@@ -2336,13 +2355,15 @@ async function _getProductsUnderThresholdImpl(limit = 20) {
  * Dashboard: lotti con scadenza imminente (entro expiryWarningDays del prodotto).
  * Ritorna solo lotti con stock > 0 nel magazzino centrale.
  */
-export function getExpiringBatches(limit = 20) {
-  return cachedDashboard(`expiringBatches:${limit}`, CACHE_TTL, () => _getExpiringBatchesImpl(limit));
+export function getExpiringBatches(limit = 20, companyId?: string) {
+  const cacheKey = companyId ? `expiringBatches:${limit}:${companyId}` : `expiringBatches:${limit}`;
+  return cachedDashboard(cacheKey, CACHE_TTL, () => _getExpiringBatchesImpl(limit, companyId));
 }
-async function _getExpiringBatchesImpl(limit = 20) {
+async function _getExpiringBatchesImpl(limit = 20, companyId?: string) {
   const db = await getDb();
   if (!db) return [];
 
+  const companyFilter = companyId ? sql` AND l."companyId" = ${companyId}::uuid` : sql``;
   const rows = await db.execute(sql`
     SELECT
       pb."id" AS "batchId",
@@ -2357,7 +2378,7 @@ async function _getExpiringBatchesImpl(limit = 20) {
     FROM "productBatches" pb
     INNER JOIN "products" p ON p."id" = pb."productId"
     INNER JOIN "inventoryByBatch" ibb ON ibb."batchId" = pb."id"
-    INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'central_warehouse'
+    INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'central_warehouse'${companyFilter}
     WHERE
       pb."expirationDate" IS NOT NULL
       AND (pb."expirationDate"::date - CURRENT_DATE) <= COALESCE(p."expiryWarningDays", 30)

@@ -147,6 +147,7 @@ export async function importShopifyOrder(
 
 export async function processStockForMarketplaceOrder(
   marketplaceOrderId: string,
+  companyId?: string,
 ): Promise<{ status: "processed" | "partial" | "failed"; errors: string[] }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -174,11 +175,13 @@ export async function processStockForMarketplaceOrder(
     .from(marketplaceOrderItems)
     .where(eq(marketplaceOrderItems.marketplaceOrderId, marketplaceOrderId));
 
-  // 4. Find central warehouse
+  // 4. Find central warehouse (M11.A: filtro companyId)
+  const warehouseConditions: any[] = [eq(locations.type, "central_warehouse")];
+  if (companyId) warehouseConditions.push(eq(locations.companyId, companyId));
   const [warehouse] = await db
     .select({ id: locations.id })
     .from(locations)
-    .where(eq(locations.type, "central_warehouse"))
+    .where(and(...warehouseConditions))
     .limit(1);
 
   if (!warehouse) {
