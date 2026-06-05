@@ -9,7 +9,7 @@
 import { TRPCError } from "@trpc/server";
 import { eq, and } from "drizzle-orm";
 import { getDb } from "../db";
-import { userCompanyAccess } from "../../drizzle/schema";
+import { userCompanyAccess, companies } from "../../drizzle/schema";
 import { initTRPC } from "@trpc/server";
 import type { TrpcContext } from "./context";
 
@@ -46,6 +46,21 @@ export async function resolveActiveCompanyId(
         message: `User has no access to company ${headerCompanyId}`,
       });
     }
+
+    // M11.B: isActive guard
+    const [company] = await db
+      .select({ isActive: companies.isActive })
+      .from(companies)
+      .where(eq(companies.id, headerCompanyId))
+      .limit(1);
+
+    if (company && !company.isActive) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `L'azienda selezionata è disattivata. Contatta l'amministratore.`,
+      });
+    }
+
     return headerCompanyId;
   }
 
@@ -76,6 +91,20 @@ export async function resolveActiveCompanyId(
       });
     }
     return anyAccess.companyId;
+  }
+
+  // M11.B: isActive guard for default company
+  const [defaultCompany] = await db
+    .select({ isActive: companies.isActive })
+    .from(companies)
+    .where(eq(companies.id, defaultAccess.companyId))
+    .limit(1);
+
+  if (defaultCompany && !defaultCompany.isActive) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `La tua azienda default è disattivata. Contatta l'amministratore.`,
+    });
   }
 
   return defaultAccess.companyId;

@@ -57,6 +57,7 @@ import WarehouseReport from "./pages/reports/WarehouseReport";
 import SalesReport from "./pages/reports/SalesReport";
 import MarketplaceReport from "./pages/reports/MarketplaceReport";
 import InventoryExport from "./pages/InventoryExport";
+import Companies from "./pages/Companies";
 
 const ADMIN_ROLES = ["admin", "operator", "viewer"];
 const RETAILER_ROLES = ["retailer_admin", "retailer_user"];
@@ -233,6 +234,9 @@ function Router() {
       </Route>
       <Route path="/settings/integrations">
         <RequireRole allowedRoles={["admin"]}><Integrations /></RequireRole>
+      </Route>
+      <Route path="/settings/companies">
+        <RequireRole allowedRoles={["admin"]}><Companies /></RequireRole>
       </Route>
       {/* ═══════════════════════════════════════════════════════════
           Marketplace Shopify routes (M8.1)

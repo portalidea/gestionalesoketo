@@ -23,10 +23,12 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useIsMobile } from "@/hooks/useMobile";
+import { CompanySwitcher } from "@/components/CompanySwitcher";
 import {
   AlertTriangle,
   ArrowLeftRight,
   BarChart3,
+  Building2,
   ChevronDown,
   Euro,
   Factory,
@@ -91,6 +93,7 @@ const baseMenuItems: MenuItem[] = [
 const adminMenuItems: MenuItem[] = [
   { icon: Tag, label: "Pacchetti", path: "/settings/packages" },
   { icon: Users, label: "Team", path: "/settings/team" },
+  { icon: Building2, label: "Aziende", path: "/settings/companies" },
   { icon: Plug, label: "Integrazioni", path: "/settings/integrations" },
 ];
 
@@ -327,18 +330,19 @@ function DashboardLayoutContent({
       </div>
 
       <SidebarInset>
-        {isMobile && (
-          <div className="flex border-b h-14 items-center justify-between bg-background/95 px-2 backdrop-blur supports-[backdrop-filter]:backdrop-blur sticky top-0 z-40">
+        {isMobile ? (
+          <div className="flex border-b h-12 items-center justify-between bg-background/95 px-2 backdrop-blur supports-[backdrop-filter]:backdrop-blur sticky top-0 z-40">
             <div className="flex items-center gap-2">
               <SidebarTrigger className="h-9 w-9 rounded-lg bg-background" />
-              <div className="flex items-center gap-3">
-                <div className="flex flex-col gap-1">
-                  <span className="tracking-tight text-foreground">
-                    {activeMenuItem?.label ?? "Menu"}
-                  </span>
-                </div>
-              </div>
+              <span className="tracking-tight text-foreground text-sm">
+                {activeMenuItem?.label ?? "Menu"}
+              </span>
             </div>
+            <CompanySwitcher />
+          </div>
+        ) : (
+          <div className="flex border-b h-11 items-center justify-end bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:backdrop-blur sticky top-0 z-40">
+            <CompanySwitcher />
           </div>
         )}
         <main className="flex-1 p-4 min-w-0 overflow-x-hidden">{children}</main>
