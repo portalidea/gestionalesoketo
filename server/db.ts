@@ -207,6 +207,7 @@ export async function createRetailer(data: InsertRetailer) {
     type: "retailer",
     name: row.name,
     retailerId: row.id,
+    companyId: row.companyId, // M11.A
   });
   return row;
 }
@@ -397,6 +398,7 @@ export async function createProductExtended(input: {
     producerId: string;
   };
   createdBy: string;
+  companyId: string; // M11.A
 }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -429,6 +431,7 @@ export async function createProductExtended(input: {
           initialQuantity: ib.quantity,
           ...(ib.costPrice ? { costPrice: ib.costPrice } : {}),
           notes: "Lotto iniziale aggiunto in creazione prodotto",
+          companyId: input.companyId, // M11.A
         })
         .returning();
 
@@ -436,6 +439,7 @@ export async function createProductExtended(input: {
         locationId: ib.locationId,
         batchId: batch.id,
         quantity: ib.quantity,
+        companyId: input.companyId, // M11.A
       });
 
       await tx.insert(stockMovements).values({
@@ -448,6 +452,7 @@ export async function createProductExtended(input: {
         toLocationId: ib.locationId,
         createdBy: input.createdBy,
         notesInternal: "Lotto iniziale aggiunto in creazione prodotto",
+        companyId: input.companyId, // M11.A
       });
     }
 
@@ -674,6 +679,7 @@ export async function createBatchWithReceipt(input: {
   costPrice?: string; // M6.2.E: costo unitario lotto
   notes: string | null;
   createdBy: string;
+  companyId: string; // M11.A
 }): Promise<ProductBatch> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -695,6 +701,7 @@ export async function createBatchWithReceipt(input: {
         initialQuantity: input.initialQuantity,
         ...(input.costPrice ? { costPrice: input.costPrice } : {}),
         notes: input.notes,
+        companyId: input.companyId, // M11.A
       })
       .returning();
 
@@ -702,6 +709,7 @@ export async function createBatchWithReceipt(input: {
       locationId: warehouse.id,
       batchId: batch.id,
       quantity: input.initialQuantity,
+      companyId: input.companyId, // M11.A
     });
 
     await tx.insert(stockMovements).values({
@@ -714,6 +722,7 @@ export async function createBatchWithReceipt(input: {
       toLocationId: warehouse.id,
       createdBy: input.createdBy,
       notes: input.notes,
+      companyId: input.companyId, // M11.A
     });
 
     return batch;
@@ -805,6 +814,7 @@ export async function mergeBatchReceipt(input: {
   costPrice?: string;
   notes: string | null;
   createdBy: string;
+  companyId: string; // M11.A
 }): Promise<{ newQuantity: number }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -838,6 +848,7 @@ export async function mergeBatchReceipt(input: {
         batchId: input.batchId,
         locationId: warehouse.id,
         quantity: input.quantity,
+        companyId: input.companyId, // M11.A
       });
     }
 
@@ -852,6 +863,7 @@ export async function mergeBatchReceipt(input: {
       toLocationId: warehouse.id,
       createdBy: input.createdBy,
       notes: input.notes ? `Merge: ${input.notes}` : "Merge arrivo su lotto esistente",
+      companyId: input.companyId, // M11.A
     });
 
     // Update initialQuantity on batch (additive)
@@ -977,6 +989,7 @@ export async function transferBatchToRetailer(input: {
   quantity: number;
   notes: string | null;
   createdBy: string;
+  companyId: string; // M11.A
 }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -1038,6 +1051,7 @@ export async function transferBatchToRetailer(input: {
         locationId: retailerLoc.id,
         batchId: input.batchId,
         quantity: input.quantity,
+        companyId: input.companyId, // M11.A
       });
     }
 
@@ -1078,6 +1092,7 @@ export async function transferBatchToRetailer(input: {
         notes: input.notes,
         notesInternal: auditNote,
         createdBy: input.createdBy,
+        companyId: input.companyId, // M11.A
       })
       .returning();
 
@@ -1097,6 +1112,7 @@ export async function expiryWriteOff(input: {
   quantity: number;
   notes: string | null;
   createdBy: string;
+  companyId: string; // M11.A
 }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -1159,6 +1175,7 @@ export async function expiryWriteOff(input: {
         notes: input.notes,
         notesInternal: auditNote,
         createdBy: input.createdBy,
+        companyId: input.companyId, // M11.A
       })
       .returning();
 

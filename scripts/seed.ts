@@ -106,6 +106,7 @@ async function main() {
         syncEnabled: r.syncEnabled,
         createdAt: ts,
         updatedAt: ts,
+        companyId: "00000000-0000-0000-0000-000000000001", // M11.A seed default
       })
       .returning({ id: retailers.id });
     retailerIdMap.set(r.oldId, row.id);

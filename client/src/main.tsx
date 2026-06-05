@@ -45,7 +45,12 @@ const trpcClient = trpc.createClient({
       async headers() {
         const { data } = await supabase.auth.getSession();
         const token = data.session?.access_token;
-        return token ? { Authorization: `Bearer ${token}` } : {};
+        const headers: Record<string, string> = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
+        // M11.A: inject active company ID
+        const companyId = localStorage.getItem("activeCompanyId");
+        if (companyId) headers["x-active-company-id"] = companyId;
+        return headers;
       },
     }),
   ],

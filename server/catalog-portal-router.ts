@@ -117,7 +117,7 @@ export const catalogPortalRouter = router({
 
       const productIds = productRows.map((p) => p.id);
 
-      // 5. Stock totale magazzino centrale per prodotto
+      // 5. Stock totale magazzino centrale per prodotto (M11.A: filtro companyId)
       const stockRows = await db.execute<{ productId: string; totalQty: number }>(sql`
         SELECT pb."productId" AS "productId",
                COALESCE(SUM(ibb."quantity"), 0)::int AS "totalQty"
@@ -125,6 +125,7 @@ export const catalogPortalRouter = router({
         INNER JOIN "locations" l ON l."id" = ibb."locationId"
         INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
         WHERE l."type" = 'central_warehouse'
+          AND l."companyId" = ${ctx.activeCompanyId}::uuid
           AND pb."productId" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})
         GROUP BY pb."productId"
       `);
@@ -135,13 +136,14 @@ export const catalogPortalRouter = router({
         ]),
       );
 
-      // 6. Quantità prenotata da TUTTI gli ordini pending/transferring (per ogni prodotto)
+      // 6. Quantità prenotata da TUTTI gli ordini pending/transferring (per ogni prodotto) (M11.A)
       const reservedRows = await db.execute<{ productId: string; reservedQty: number }>(sql`
         SELECT oi."productId" AS "productId",
                COALESCE(SUM(oi."quantity"), 0)::int AS "reservedQty"
         FROM "orderItems" oi
         INNER JOIN "orders" o ON o."id" = oi."orderId"
         WHERE o."status" IN ('pending', 'transferring')
+          AND o."companyId" = ${ctx.activeCompanyId}::uuid
           AND oi."productId" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})
         GROUP BY oi."productId"
       `);
@@ -294,6 +296,7 @@ export const catalogPortalRouter = router({
         FROM "orderItems" oi
         INNER JOIN "orders" o ON o."id" = oi."orderId"
         WHERE o."status" IN ('pending', 'transferring')
+          AND o."companyId" = ${ctx.activeCompanyId}::uuid
           AND oi."productId" = ${input.productId}::uuid
       `);
       const totalReserved = (reservedRows as unknown as Array<{ reservedQty: number }>)[0]?.reservedQty ?? 0;

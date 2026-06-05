@@ -34,7 +34,7 @@ export const retailerCheckoutRouter = router({
   preview: retailerProcedure
     .input(z.object({ items: z.array(cartItemSchema).min(1) }))
     .query(async ({ input, ctx }) => {
-      const pricing = await calculateOrderPricing(ctx.retailerId, input.items);
+      const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
       return pricing;
     }),
 
@@ -57,7 +57,7 @@ export const retailerCheckoutRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
       // 1. Calcola pricing
-      const pricing = await calculateOrderPricing(ctx.retailerId, input.items);
+      const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
 
       // 2. M8.4: Verifica stock — allow backorder, reject only unavailable
       // Get isBackorderable for each product
@@ -168,8 +168,9 @@ export const retailerCheckoutRouter = router({
             totalGross: pricing.totalGross,
             discountPercent: pricing.discountPercent,
             notes: input.notes ?? null,
-            notesInternal: `Ordine da portale partner — ${ctx.user.email}`,
-            createdBy: ctx.user.id,
+            notesInternal: `Ordine da portale partner — ${ctx.user!.email}`,
+            createdBy: ctx.user!.id,
+            companyId: ctx.activeCompanyId, // M11.A
           })
           .returning();
 

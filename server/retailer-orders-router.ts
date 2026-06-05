@@ -200,7 +200,7 @@ export const retailerOrdersRouter = router({
       }
 
       // Ricalcola pricing
-      const pricing = await calculateOrderPricing(ctx.retailerId, input.items);
+      const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
 
       // Verifica stock
       const stockErrors: string[] = [];

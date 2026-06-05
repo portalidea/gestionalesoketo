@@ -2,6 +2,7 @@ import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from "@shared/const";
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
+import { resolveActiveCompanyId } from "./companyContext";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -30,6 +31,32 @@ const withTimeout = t.middleware(async ({ next, path, type }) => {
     ),
   );
   return Promise.race([next(), timeoutPromise]);
+});
+
+// ═══════════════════════════════════════════════════════════
+// Company context middleware (defined early so all procedures can use it)
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * M11.A: Company context middleware.
+ * Resolves activeCompanyId from header or user's default company.
+ * Applied AFTER auth middleware so ctx.user is guaranteed.
+ */
+const withCompanyContext = t.middleware(async (opts) => {
+  const { ctx, next } = opts;
+
+  // ctx.user is guaranteed by the preceding auth middleware
+  const user = ctx.user!;
+  const headerCompanyId = ctx.req.headers["x-active-company-id"] as string | undefined;
+
+  const activeCompanyId = await resolveActiveCompanyId(user.id, headerCompanyId);
+
+  return next({
+    ctx: {
+      ...ctx,
+      activeCompanyId,
+    },
+  });
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -78,8 +105,9 @@ const requireWriter = t.middleware(async (opts) => {
 
 /**
  * Per mutazioni che richiedono ruolo admin o operator (esclude viewer).
+ * M11.A: includes company context.
  */
-export const writerProcedure = t.procedure.use(withTimeout).use(requireWriter);
+export const writerProcedure = t.procedure.use(withTimeout).use(requireWriter).use(withCompanyContext);
 
 const requireAdmin = t.middleware(async (opts) => {
   const { ctx, next } = opts;
@@ -99,7 +127,10 @@ const requireAdmin = t.middleware(async (opts) => {
   });
 });
 
-export const adminProcedure = t.procedure.use(withTimeout).use(requireAdmin);
+/**
+ * M11.A: includes company context.
+ */
+export const adminProcedure = t.procedure.use(withTimeout).use(requireAdmin).use(withCompanyContext);
 
 /**
  * M6.1: Per utenti retailer (retailer_admin o retailer_user).
@@ -124,11 +155,33 @@ const requireRetailer = t.middleware(async (opts) => {
     });
   }
 
+  // M11.A: resolve companyId from retailer record
+  const { getDb } = await import("../db");
+  const db = await getDb();
+  let retailerCompanyId: string | null = null;
+  if (db) {
+    const { retailers } = await import("../../drizzle/schema");
+    const { eq } = await import("drizzle-orm");
+    const [ret] = await db
+      .select({ companyId: retailers.companyId })
+      .from(retailers)
+      .where(eq(retailers.id, ctx.user.retailerId))
+      .limit(1);
+    retailerCompanyId = ret?.companyId ?? null;
+  }
+  if (!retailerCompanyId) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Retailer senza companyId associato.",
+    });
+  }
+
   return next({
     ctx: {
       ...ctx,
       user: ctx.user,
       retailerId: ctx.user.retailerId,
+      activeCompanyId: retailerCompanyId, // M11.A
     },
   });
 });
@@ -161,14 +214,18 @@ const requireStaff = t.middleware(async (opts) => {
   });
 });
 
-export const staffProcedure = t.procedure.use(withTimeout).use(requireStaff);
+/**
+ * Staff procedure with company context.
+ * All business queries MUST use ctx.activeCompanyId for filtering.
+ */
+export const staffProcedure = t.procedure.use(withTimeout).use(requireStaff).use(withCompanyContext);
 
 /**
  * M8.1: Staff procedure WITHOUT the 8s timeout middleware.
  * For long-running operations like Shopify sync (needs up to 45s).
- * Still enforces staff auth.
+ * Still enforces staff auth + company context.
  */
-export const staffProcedureLongRunning = t.procedure.use(requireStaff);
+export const staffProcedureLongRunning = t.procedure.use(requireStaff).use(withCompanyContext);
 
 /**
  * M7-B: Per utenti affiliato (affiliate_admin o affiliate_user).

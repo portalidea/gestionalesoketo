@@ -32,6 +32,7 @@ import { affiliatePortalRouter } from "./affiliate-portal-router";
 import { shopifyRouter } from "./shopify-router";
 import { reportsRouter } from "./reports-router";
 import { inventoryExportRouter } from "./inventory-export-router";
+import { companiesRouter } from "./companies-router";
 
 
 const uuid = z.string().uuid();
@@ -128,7 +129,7 @@ export const appRouter = router({
     updateRole: adminProcedure
       .input(z.object({ id: uuid, role: userRoleSchema }))
       .mutation(async ({ input, ctx }) => {
-        if (ctx.user.id === input.id && input.role !== "admin") {
+        if (ctx.user!.id === input.id && input.role !== "admin") {
           throw new Error("Cannot demote yourself from admin");
         }
         await db.updateUserRole(input.id, input.role);
@@ -138,7 +139,7 @@ export const appRouter = router({
     delete: adminProcedure
       .input(z.object({ id: uuid }))
       .mutation(async ({ input, ctx }) => {
-        if (ctx.user.id === input.id) {
+        if (ctx.user!.id === input.id) {
           throw new Error("Cannot delete yourself");
         }
         // Cancellando da auth.users, il CASCADE rimuove anche public.users.
@@ -312,9 +313,9 @@ export const appRouter = router({
           affiliateId: z.string().uuid().optional(),
         }),
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
         // Se affiliateId è presente, setta anche affiliateAssignedAt
-        const createData: any = { ...input };
+        const createData: any = { ...input, companyId: ctx.activeCompanyId }; // M11.A
         if (input.affiliateId) {
           createData.affiliateAssignedAt = new Date();
         }
@@ -578,7 +579,8 @@ export const appRouter = router({
                 locationId: warehouseId,
               }
             : undefined,
-          createdBy: ctx.user.id,
+          createdBy: ctx.user!.id,
+          companyId: ctx.activeCompanyId, // M11.A
         });
       }),
 
@@ -740,7 +742,8 @@ export const appRouter = router({
             quantity: input.initialQuantity,
             costPrice: input.costPrice,
             notes: input.notes ?? null,
-            createdBy: ctx.user.id,
+            createdBy: ctx.user!.id,
+            companyId: ctx.activeCompanyId, // M11.A
           });
           return { id: input.mergeWithBatchId, merged: true, newQuantity: result.newQuantity } as any;
         }
@@ -755,7 +758,8 @@ export const appRouter = router({
             initialQuantity: input.initialQuantity,
             costPrice: input.costPrice,
             notes: input.notes ?? null,
-            createdBy: ctx.user.id,
+            createdBy: ctx.user!.id,
+            companyId: ctx.activeCompanyId, // M11.A
           });
         } catch (err: any) {
           if (err?.code === "23505" || err?.message?.includes("unique") || err?.message?.includes("duplicate")) {
@@ -853,7 +857,8 @@ export const appRouter = router({
           retailerId: input.retailerId,
           quantity: input.quantity,
           notes: input.notes ?? null,
-          createdBy: ctx.user.id,
+          createdBy: ctx.user!.id,
+          companyId: ctx.activeCompanyId, // M11.A
         });
 
         if (!input.generateProforma || !retailer || !retailer.ficClientId) {
@@ -935,7 +940,8 @@ export const appRouter = router({
           locationId: input.locationId,
           quantity: input.quantity,
           notes: input.notes ?? null,
-          createdBy: ctx.user.id,
+          createdBy: ctx.user!.id,
+          companyId: ctx.activeCompanyId, // M11.A
         });
       }),
 
@@ -1215,6 +1221,7 @@ export const appRouter = router({
               batchId: input.batchId,
               locationId: input.locationId,
               quantity: newQuantity,
+              companyId: ctx.activeCompanyId, // M11.A
             });
           }
 
@@ -1245,6 +1252,7 @@ export const appRouter = router({
             adjustmentReason: input.reason,
             adjustmentNote: input.notes ?? null,
             createdBy: ctx.user?.id ?? null,
+            companyId: ctx.activeCompanyId, // M11.A
           });
 
           console.log(`[warehouse.adjustBatchQuantity] batchId=${input.batchId} ${previousQuantity}\u2192${newQuantity} (\u0394${delta}) reason=${input.reason}`);
@@ -1293,7 +1301,7 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ input, ctx }) => {
-        await db.updateAlertStatus(input.id, input.status, ctx.user.id);
+        await db.updateAlertStatus(input.id, input.status, ctx.user!.id);
         return { success: true };
       }),
   }),
@@ -1638,6 +1646,8 @@ export const appRouter = router({
   reports: reportsRouter,
   // ============= INVENTORY EXPORT =============
   inventoryExport: inventoryExportRouter,
+  // ============= M11.A — COMPANIES =============
+  companies: companiesRouter,
 });
 
 export type AppRouter = typeof appRouter;

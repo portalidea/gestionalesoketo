@@ -50,10 +50,11 @@ function parseDateRange(input: { dateFrom?: string; dateTo?: string }) {
 const warehouseRouter = router({
   getOverview: staffProcedure
     .input(dateRangeInput)
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       console.log("[reports.warehouse.getOverview]", input);
       const db = await getDb();
       if (!db) throw new Error("DB non disponibile");
+      const companyId = ctx.activeCompanyId; // M11.A
 
       const { dateFrom, dateTo } = parseDateRange(input);
       const prev = getPreviousPeriod(dateFrom, dateTo);
@@ -77,6 +78,7 @@ const warehouseRouter = router({
         INNER JOIN "products" p ON p."id" = pb."productId"
         INNER JOIN "locations" l ON l."id" = ibb."locationId"
         WHERE l."type" = 'central_warehouse' AND ibb."quantity" > 0
+          AND l."companyId" = ${companyId}
       `);
 
       const snapshotData = (snapshot as any) ?? { totalValueAtCost: 0, totalValueAtListPrice: 0, totalUnits: 0, uniqueSkus: 0, totalBatches: 0 };
@@ -103,6 +105,7 @@ const warehouseRouter = router({
           AND pb."expirationDate" IS NOT NULL
           AND pb."expirationDate"::date - CURRENT_DATE <= 90
           AND pb."expirationDate"::date >= CURRENT_DATE
+          AND l."companyId" = ${companyId}
         GROUP BY "bucket"
       `);
 
@@ -124,6 +127,7 @@ const warehouseRouter = router({
         INNER JOIN "products" p ON p."id" = sm."productId"
         WHERE sm."timestamp" >= ${dateFrom.toISOString()}::timestamptz
           AND sm."timestamp" <= ${dateTo.toISOString()}::timestamptz
+          AND sm."companyId" = ${companyId}
       `);
 
       // Period movements (previous)
@@ -137,6 +141,7 @@ const warehouseRouter = router({
         INNER JOIN "products" p ON p."id" = sm."productId"
         WHERE sm."timestamp" >= ${prev.dateFrom.toISOString()}::timestamptz
           AND sm."timestamp" <= ${prev.dateTo.toISOString()}::timestamptz
+          AND sm."companyId" = ${companyId}
       `);
 
       // Time series
@@ -148,6 +153,7 @@ const warehouseRouter = router({
         FROM "stockMovements" sm
         WHERE sm."timestamp" >= ${dateFrom.toISOString()}::timestamptz
           AND sm."timestamp" <= ${dateTo.toISOString()}::timestamptz
+          AND sm."companyId" = ${companyId}
         GROUP BY DATE(sm."timestamp")
         ORDER BY DATE(sm."timestamp")
       `);
@@ -164,7 +170,7 @@ const warehouseRouter = router({
           FROM "inventoryByBatch" ibb2
           INNER JOIN "productBatches" pb ON pb."id" = ibb2."batchId"
           INNER JOIN "locations" l ON l."id" = ibb2."locationId"
-          WHERE l."type" = 'central_warehouse' AND ibb2."quantity" > 0
+          WHERE l."type" = 'central_warehouse' AND ibb2."quantity" > 0 AND l."companyId" = ${companyId}
           GROUP BY pb."productId"
         ) ibb
         INNER JOIN "products" p ON p."id" = ibb."productId"
@@ -191,6 +197,7 @@ const warehouseRouter = router({
           AND ibb."quantity" > 0
           AND pb."expirationDate" IS NOT NULL
           AND pb."expirationDate"::date >= CURRENT_DATE
+          AND l."companyId" = ${companyId}
         GROUP BY "bucket"
         ORDER BY MIN(pb."expirationDate"::date - CURRENT_DATE)
       `);
@@ -224,7 +231,7 @@ const warehouseRouter = router({
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       console.log("[reports.warehouse.getMovementsTable]", input);
       const db = await getDb();
       if (!db) throw new Error("DB non disponibile");
@@ -234,6 +241,7 @@ const warehouseRouter = router({
       const conditions: string[] = [
         `sm."timestamp" >= '${dateFrom.toISOString()}'::timestamptz`,
         `sm."timestamp" <= '${dateTo.toISOString()}'::timestamptz`,
+        `sm."companyId" = '${ctx.activeCompanyId}'`, // M11.A
       ];
       if (input.productId) conditions.push(`sm."productId" = '${input.productId}'::uuid`);
       if (input.type) conditions.push(`sm."type" = '${input.type}'`);
@@ -286,7 +294,7 @@ const warehouseRouter = router({
       daysThreshold: z.number().int().min(1).default(90),
       limit: z.number().int().min(1).max(200).default(50),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       console.log("[reports.warehouse.getExpiringBatches]", input);
       const db = await getDb();
       if (!db) throw new Error("DB non disponibile");
@@ -310,6 +318,7 @@ const warehouseRouter = router({
           AND pb."expirationDate" IS NOT NULL
           AND pb."expirationDate"::date >= CURRENT_DATE
           AND (pb."expirationDate"::date - CURRENT_DATE) <= ${input.daysThreshold}
+          AND l."companyId" = ${ctx.activeCompanyId}
         ORDER BY pb."expirationDate" ASC
         LIMIT ${input.limit}
       `);
@@ -327,10 +336,11 @@ const warehouseRouter = router({
 const salesRouter = router({
   getOverview: staffProcedure
     .input(dateRangeInput)
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       console.log("[reports.sales.getOverview]", input);
       const db = await getDb();
       if (!db) throw new Error("DB non disponibile");
+      const companyId = ctx.activeCompanyId; // M11.A
 
       const { dateFrom, dateTo } = parseDateRange(input);
       const prev = getPreviousPeriod(dateFrom, dateTo);
@@ -347,6 +357,7 @@ const salesRouter = router({
         WHERE o."createdAt" >= ${dateFrom.toISOString()}::timestamptz
           AND o."createdAt" <= ${dateTo.toISOString()}::timestamptz
           AND o."status" NOT IN ('cancelled')
+          AND o."companyId" = ${companyId}
       `);
 
       // Revenue previous period
@@ -361,6 +372,7 @@ const salesRouter = router({
         WHERE o."createdAt" >= ${prev.dateFrom.toISOString()}::timestamptz
           AND o."createdAt" <= ${prev.dateTo.toISOString()}::timestamptz
           AND o."status" NOT IN ('cancelled')
+          AND o."companyId" = ${companyId}
       `);
 
       // Orders by type
@@ -372,6 +384,7 @@ const salesRouter = router({
         WHERE o."createdAt" >= ${dateFrom.toISOString()}::timestamptz
           AND o."createdAt" <= ${dateTo.toISOString()}::timestamptz
           AND o."status" NOT IN ('cancelled')
+          AND o."companyId" = ${companyId}
       `);
 
       // Status distribution
@@ -383,6 +396,7 @@ const salesRouter = router({
         FROM "orders" o
         WHERE o."createdAt" >= ${dateFrom.toISOString()}::timestamptz
           AND o."createdAt" <= ${dateTo.toISOString()}::timestamptz
+          AND o."companyId" = ${companyId}
         GROUP BY o."status"
         ORDER BY "count" DESC
       `);
@@ -400,6 +414,7 @@ const salesRouter = router({
           AND o."createdAt" <= ${dateTo.toISOString()}::timestamptz
           AND o."status" NOT IN ('cancelled')
           AND o."retailerId" IS NOT NULL
+          AND o."companyId" = ${companyId}
         GROUP BY r."id", r."name"
         ORDER BY "revenue" DESC
         LIMIT 10
@@ -416,6 +431,7 @@ const salesRouter = router({
         WHERE o."createdAt" >= ${dateFrom.toISOString()}::timestamptz
           AND o."createdAt" <= ${dateTo.toISOString()}::timestamptz
           AND o."status" NOT IN ('cancelled')
+          AND o."companyId" = ${companyId}
         GROUP BY DATE(o."createdAt")
         ORDER BY DATE(o."createdAt")
       `);
@@ -432,6 +448,7 @@ const salesRouter = router({
         WHERE o."createdAt" >= ${dateFrom.toISOString()}::timestamptz
           AND o."createdAt" <= ${dateTo.toISOString()}::timestamptz
           AND o."status" NOT IN ('cancelled')
+          AND o."companyId" = ${companyId}
         GROUP BY oi."productId", oi."productName"
         ORDER BY "revenue" DESC
         LIMIT 10
@@ -449,6 +466,7 @@ const salesRouter = router({
         WHERE o."createdAt" >= ${dateFrom.toISOString()}::timestamptz
           AND o."createdAt" <= ${dateTo.toISOString()}::timestamptz
           AND o."status" NOT IN ('cancelled')
+          AND o."companyId" = ${companyId}
         GROUP BY oi."productId", oi."productName"
         ORDER BY "units" DESC
         LIMIT 10
@@ -496,7 +514,7 @@ const salesRouter = router({
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       console.log("[reports.sales.getOrdersTable]", input);
       const db = await getDb();
       if (!db) throw new Error("DB non disponibile");
@@ -506,6 +524,7 @@ const salesRouter = router({
       const conditions: string[] = [
         `o."createdAt" >= '${dateFrom.toISOString()}'::timestamptz`,
         `o."createdAt" <= '${dateTo.toISOString()}'::timestamptz`,
+        `o."companyId" = '${ctx.activeCompanyId}'`, // M11.A
       ];
       if (input.status) conditions.push(`o."status" = '${input.status}'`);
       if (input.retailerId) conditions.push(`o."retailerId" = '${input.retailerId}'::uuid`);
@@ -546,10 +565,11 @@ const salesRouter = router({
       dateTo: z.string().optional(),
       limit: z.number().int().min(1).max(100).default(20),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       console.log("[reports.sales.getRetailerBreakdown]", input);
       const db = await getDb();
       if (!db) throw new Error("DB non disponibile");
+      const companyId = ctx.activeCompanyId; // M11.A
 
       const { dateFrom, dateTo } = parseDateRange(input);
 
@@ -566,6 +586,7 @@ const salesRouter = router({
           AND o."createdAt" >= ${dateFrom.toISOString()}::timestamptz
           AND o."createdAt" <= ${dateTo.toISOString()}::timestamptz
           AND o."status" NOT IN ('cancelled')
+          AND o."companyId" = ${companyId}
         GROUP BY r."id", r."name"
         HAVING COUNT(o."id") > 0
         ORDER BY "totalRevenue" DESC
@@ -588,10 +609,11 @@ const marketplaceRouter = router({
       dateTo: z.string().optional(),
       channel: z.enum(["shopify", "amazon"]).optional(),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       console.log("[reports.marketplace.getOverview]", input);
       const db = await getDb();
       if (!db) throw new Error("DB non disponibile");
+      const companyId = ctx.activeCompanyId; // M11.A
 
       const { dateFrom, dateTo } = parseDateRange(input);
       const prev = getPreviousPeriod(dateFrom, dateTo);
@@ -722,6 +744,7 @@ const marketplaceRouter = router({
             WHERE o."createdAt" >= '${dateFrom.toISOString()}'::timestamptz
               AND o."createdAt" <= '${dateTo.toISOString()}'::timestamptz
               AND o."status" NOT IN ('cancelled')
+              AND o."companyId" = '${companyId}'
             UNION
             SELECT DATE(mo."orderDate") AS "date" FROM "marketplace_orders" mo
             WHERE mo."orderDate" >= '${dateFrom.toISOString()}'::timestamptz
@@ -733,6 +756,7 @@ const marketplaceRouter = router({
             WHERE o."createdAt" >= '${dateFrom.toISOString()}'::timestamptz
               AND o."createdAt" <= '${dateTo.toISOString()}'::timestamptz
               AND o."status" NOT IN ('cancelled')
+              AND o."companyId" = '${companyId}'
             GROUP BY DATE(o."createdAt")
           ) r ON r."date" = d."date"
           LEFT JOIN (
@@ -778,7 +802,7 @@ const marketplaceRouter = router({
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       console.log("[reports.marketplace.getOrdersTable]", input);
       const db = await getDb();
       if (!db) throw new Error("DB non disponibile");
@@ -835,10 +859,11 @@ const exportRouter = router({
       dateFrom: z.string().optional(),
       dateTo: z.string().optional(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       console.log("[reports.export.toCsv]", input);
       const db = await getDb();
       if (!db) throw new Error("DB non disponibile");
+      const companyId = ctx.activeCompanyId; // M11.A
 
       const { dateFrom, dateTo } = parseDateRange(input);
       let csvContent = "";
@@ -864,6 +889,7 @@ const exportRouter = router({
             LEFT JOIN "locations" tl ON tl."id" = sm."toLocationId"
             WHERE sm."timestamp" >= '${dateFrom.toISOString()}'::timestamptz
               AND sm."timestamp" <= '${dateTo.toISOString()}'::timestamptz
+              AND sm."companyId" = '${companyId}'
             ORDER BY sm."timestamp" DESC
           `)
         );
@@ -888,6 +914,7 @@ const exportRouter = router({
             LEFT JOIN "retailers" r ON r."id" = o."retailerId"
             WHERE o."createdAt" >= '${dateFrom.toISOString()}'::timestamptz
               AND o."createdAt" <= '${dateTo.toISOString()}'::timestamptz
+              AND o."companyId" = '${companyId}'
             ORDER BY o."createdAt" DESC
           `)
         );
@@ -909,6 +936,7 @@ const exportRouter = router({
             AND o."createdAt" >= ${dateFrom.toISOString()}::timestamptz
             AND o."createdAt" <= ${dateTo.toISOString()}::timestamptz
             AND o."status" NOT IN ('cancelled')
+            AND o."companyId" = ${companyId}
           GROUP BY r."id", r."name"
           HAVING COUNT(o."id") > 0
           ORDER BY "fatturato" DESC

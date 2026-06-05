@@ -20,7 +20,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { eq, sql } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { staffProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
 import {
@@ -43,11 +43,11 @@ export const inventoryExportRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
-      // 1) Identificare magazzino centrale
+      // 1) Identificare magazzino centrale (M11.A: filter by company)
       const centralLocations = await db
         .select({ id: locations.id, name: locations.name })
         .from(locations)
-        .where(eq(locations.type, "central_warehouse"));
+        .where(and(eq(locations.type, "central_warehouse"), eq(locations.companyId, ctx.activeCompanyId)));
 
       if (centralLocations.length === 0) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Nessun magazzino centrale trovato" });

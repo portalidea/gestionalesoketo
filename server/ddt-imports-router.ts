@@ -693,6 +693,7 @@ export const ddtImportsRouter = router({
               batchNumber,
               expirationDate,
               initialQuantity: item.quantityPieces,
+              companyId: ctx.activeCompanyId, // M11.A
             })
             .returning({ id: productBatches.id });
 
@@ -702,6 +703,7 @@ export const ddtImportsRouter = router({
             batchId,
             locationId: centralLocation.id,
             quantity: item.quantityPieces,
+            companyId: ctx.activeCompanyId, // M11.A
           });
 
           // Aggiorna item con createdBatchId
@@ -718,8 +720,9 @@ export const ddtImportsRouter = router({
           type: "RECEIPT_FROM_PRODUCER",
           quantity: item.quantityPieces,
           toLocationId: centralLocation.id,
-          createdBy: ctx.user.id,
+          createdBy: ctx.user!.id,
           notesInternal: `DDT ${importRow.ddtNumber ?? input.id} - ${item.productNameExtracted}`,
+          companyId: ctx.activeCompanyId, // M11.A
         });
       }
 
@@ -730,7 +733,7 @@ export const ddtImportsRouter = router({
           producerId: input.producerId,
           status: "confirmed",
           confirmedAt: new Date(),
-          confirmedBy: ctx.user.id,
+          confirmedBy: ctx.user!.id,
           updatedAt: new Date(),
         })
         .where(eq(ddtImports.id, input.id));
@@ -739,7 +742,7 @@ export const ddtImportsRouter = router({
       try {
         const { sendEmail } = await import("./email");
         await sendEmail({
-          to: ctx.user.email ?? "",
+          to: ctx.user!.email ?? "",
           subject: `DDT ${importRow.ddtNumber ?? importRow.pdfFileName} confermato`,
           html: `<h2>DDT Confermato</h2>
             <p><strong>File:</strong> ${importRow.pdfFileName}</p>

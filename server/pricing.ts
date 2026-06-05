@@ -53,6 +53,7 @@ export interface PricingResult {
 export async function calculateOrderPricing(
   retailerId: string,
   items: PricingItemInput[],
+  companyId?: string, // M11.A — optional for backward compat
 ): Promise<PricingResult> {
   const db = await getDb();
   if (!db) throw new Error("Database non disponibile");
@@ -111,6 +112,7 @@ export async function calculateOrderPricing(
     INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
     WHERE l."type" = 'central_warehouse'
       AND pb."productId" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})
+      ${companyId ? sql`AND l."companyId" = ${companyId}` : sql``}
     GROUP BY pb."productId"
   `);
 
@@ -192,6 +194,7 @@ export async function calculateOrderPricing(
  */
 export async function calculateEventOrderPricing(
   items: PricingItemInput[],
+  companyId?: string, // M11.A — optional for backward compat
 ): Promise<PricingResult> {
   const db = await getDb();
   if (!db) throw new Error("Database non disponibile");
@@ -215,6 +218,7 @@ export async function calculateEventOrderPricing(
     INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
     WHERE l."type" = 'central_warehouse'
       AND pb."productId" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})
+      ${companyId ? sql`AND l."companyId" = ${companyId}` : sql``}
     GROUP BY pb."productId"
   `);
   const stockMap = new Map(

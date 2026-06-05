@@ -295,7 +295,7 @@ export const retailerSelfServiceRouter = router({
       if (!retailer) throw new TRPCError({ code: "NOT_FOUND", message: "Retailer non trovato" });
 
       // Calculate pricing
-      const pricing = await calculateOrderPricing(ctx.retailerId, input.items);
+      const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
 
       // Create order in transaction (same logic as orders.create but for retailer)
       const result = await database.transaction(async (tx) => {
@@ -311,6 +311,7 @@ export const retailerSelfServiceRouter = router({
             discountPercent: pricing.discountPercent,
             notes: input.notes ?? null,
             createdBy: ctx.user.id,
+            companyId: ctx.activeCompanyId, // M11.A
           })
           .returning();
 

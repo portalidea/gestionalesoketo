@@ -68,10 +68,12 @@ export const ordersRouter = router({
         offset: z.number().int().min(0).default(0),
       }),
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
-      const conditions: any[] = [];
+      const conditions: any[] = [
+        eq(orders.companyId, ctx.activeCompanyId), // M11.A
+      ];
 
       if (input.status) {
         conditions.push(eq(orders.status, input.status));
@@ -144,7 +146,7 @@ export const ordersRouter = router({
    */
   getById: staffProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -185,7 +187,7 @@ export const ordersRouter = router({
         })
         .from(orders)
         .leftJoin(retailers, eq(orders.retailerId, retailers.id))
-        .where(eq(orders.id, input.id))
+        .where(and(eq(orders.id, input.id), eq(orders.companyId, ctx.activeCompanyId)))
         .limit(1);
 
       if (!order) {
@@ -228,8 +230,8 @@ export const ordersRouter = router({
         items: z.array(orderItemInput).min(1),
       }),
     )
-    .mutation(async ({ input }) => {
-      return calculateOrderPricing(input.retailerId, input.items);
+    .mutation(async ({ input, ctx }) => {
+      return calculateOrderPricing(input.retailerId, input.items, ctx.activeCompanyId);
     }),
 
   /**
@@ -259,14 +261,14 @@ export const ordersRouter = router({
       const resolvedPaymentTerms = input.paymentTerms ?? retailerForPT?.paymentTerms ?? 'advance_transfer';
 
       // Calcola pricing
-      const pricing = await calculateOrderPricing(input.retailerId, input.items);
+      const pricing = await calculateOrderPricing(input.retailerId, input.items, ctx.activeCompanyId);
 
       // --- Auto-assegnazione FEFO lotti ---
-      // Trova magazzino centrale
+      // Trova magazzino centrale per la company attiva (M11.A)
       const [warehouse] = await db
         .select({ id: locations.id })
         .from(locations)
-        .where(eq(locations.type, "central_warehouse"))
+        .where(and(eq(locations.type, "central_warehouse"), eq(locations.companyId, ctx.activeCompanyId)))
         .limit(1);
 
       // Per ogni item, alloca lotti FEFO dal magazzino centrale
@@ -352,7 +354,8 @@ export const ordersRouter = router({
             discountPercent: pricing.discountPercent,
             notes: input.notes ?? null,
             notesInternal: input.notesInternal ?? null,
-            createdBy: ctx.user.id,
+            createdBy: ctx.user!.id,
+            companyId: ctx.activeCompanyId, // M11.A
           })
           .returning();
 
@@ -462,15 +465,15 @@ export const ordersRouter = router({
         notesInternal: z.string().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
-      // Verifica ordine pending
+      // Verifica ordine pending (M11.A: company filter)
       const [order] = await db
         .select({ id: orders.id, status: orders.status, retailerId: orders.retailerId })
         .from(orders)
-        .where(eq(orders.id, input.orderId))
+        .where(and(eq(orders.id, input.orderId), eq(orders.companyId, ctx.activeCompanyId)))
         .limit(1);
 
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
@@ -482,7 +485,7 @@ export const ordersRouter = router({
       }
 
       // Ricalcola pricing
-      const pricing = await calculateOrderPricing(order.retailerId!, input.items);
+      const pricing = await calculateOrderPricing(order.retailerId!, input.items, ctx.activeCompanyId);
 
       await db.transaction(async (tx) => {
         // Elimina vecchi items
@@ -1029,7 +1032,7 @@ export const ordersRouter = router({
     .mutation(async ({ input, ctx }) => {
       return registerPayment({
         orderId: input.orderId,
-        actorUserId: ctx.user.id,
+        actorUserId: ctx.user!.id,
         paidAt: new Date(input.paidAt),
         paymentMethod: input.paymentMethod,
         note: input.note,
@@ -1047,7 +1050,7 @@ export const ordersRouter = router({
     .mutation(async ({ input, ctx }) => {
       return cancelPayment({
         orderId: input.orderId,
-        actorUserId: ctx.user.id,
+        actorUserId: ctx.user!.id,
         reason: input.reason,
       });
     }),
@@ -1064,7 +1067,7 @@ export const ordersRouter = router({
       const result = await transitionOrder({
         orderId: input.orderId,
         toStatus: "transferring",
-        actorUserId: ctx.user.id,
+        actorUserId: ctx.user!.id,
       });
 
       // 2. Execute stock movements for each order item with batch
@@ -1111,7 +1114,8 @@ export const ordersRouter = router({
             retailerId: order.retailerId!,
             quantity: piecesToTransfer,
             notes: `Ordine ${input.orderId} — ${item.quantity} conf. × ${ppu} = ${piecesToTransfer} pezzi`,
-            createdBy: ctx.user.id,
+            createdBy: ctx.user!.id,
+            companyId: ctx.activeCompanyId, // M11.A
           });
           transferResults.push(`${item.productName}: ${item.quantity} conf. (${piecesToTransfer} pezzi) trasferite`);
         } catch (e: any) {
@@ -1135,7 +1139,7 @@ export const ordersRouter = router({
       return transitionOrder({
         orderId: input.orderId,
         toStatus: "shipped",
-        actorUserId: ctx.user.id,
+        actorUserId: ctx.user!.id,
       });
     }),
 
@@ -1149,7 +1153,7 @@ export const ordersRouter = router({
       return transitionOrder({
         orderId: input.orderId,
         toStatus: "delivered",
-        actorUserId: ctx.user.id,
+        actorUserId: ctx.user!.id,
       });
     }),
 
@@ -1166,7 +1170,7 @@ export const ordersRouter = router({
       return transitionOrder({
         orderId: input.orderId,
         toStatus: "cancelled",
-        actorUserId: ctx.user.id,
+        actorUserId: ctx.user!.id,
         reason: input.reason,
       });
     }),
@@ -1250,7 +1254,7 @@ export const ordersRouter = router({
     .mutation(async ({ input, ctx }) => {
       return await modifyOrderItems({
         orderId: input.orderId,
-        actorUserId: ctx.user.id,
+        actorUserId: ctx.user!.id,
         items: input.items,
       });
     }),
@@ -1273,12 +1277,12 @@ export const ordersRouter = router({
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
-      const pricing = await calculateEventOrderPricing(input.items);
+      const pricing = await calculateEventOrderPricing(input.items, ctx.activeCompanyId);
       // FEFO allocation
       const [warehouse] = await db
         .select({ id: locations.id })
         .from(locations)
-        .where(eq(locations.type, "central_warehouse"))
+        .where(and(eq(locations.type, "central_warehouse"), eq(locations.companyId, ctx.activeCompanyId)))
         .limit(1);
       type BatchAllocation = { productId: string; batchId: string; quantity: number; batchNumber: string; expirationDate: string; };
       const allAllocations: (typeof pricing.items[0] & { allocations: BatchAllocation[] })[] = [];
@@ -1327,7 +1331,8 @@ export const ordersRouter = router({
           discountPercent: "0.00",
           notes: input.notes ?? null,
           notesInternal: input.notesInternal ?? null,
-          createdBy: ctx.user.id,
+          createdBy: ctx.user!.id,
+          companyId: ctx.activeCompanyId, // M11.A
         }).returning();
         const itemValues: Array<{ orderId: string; productId: string; quantity: number; unitPriceBase: string; discountPercent: string; unitPriceFinal: string; vatRate: string; lineTotalNet: string; lineTotalGross: string; productSku: string; productName: string; batchId: string | null; }> = [];
         for (const pi of allAllocations) {
@@ -1365,7 +1370,7 @@ export const ordersRouter = router({
       if (!order.eventType) throw new TRPCError({ code: "BAD_REQUEST", message: "Non è un ordine evento" });
       if (order.status !== "pending") throw new TRPCError({ code: "BAD_REQUEST", message: "Solo ordini pending possono essere consegnati" });
       const items = await db.select({ id: orderItems.id, productId: orderItems.productId, batchId: orderItems.batchId, quantity: orderItems.quantity, productName: orderItems.productName }).from(orderItems).where(eq(orderItems.orderId, input.orderId));
-      const [warehouse] = await db.select({ id: locations.id }).from(locations).where(eq(locations.type, "central_warehouse")).limit(1);
+      const [warehouse] = await db.select({ id: locations.id }).from(locations).where(and(eq(locations.type, "central_warehouse"), eq(locations.companyId, ctx.activeCompanyId))).limit(1);
       if (!warehouse) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Magazzino centrale non configurato" });
       const results: string[] = [];
       await db.transaction(async (tx) => {
@@ -1376,7 +1381,7 @@ export const ordersRouter = router({
           if (!central || central.quantity < item.quantity) { results.push(`${item.productName}: stock insufficiente (${central?.quantity ?? 0} < ${item.quantity})`); continue; }
           await tx.update(inventoryByBatch).set({ quantity: central.quantity - item.quantity, updatedAt: new Date() }).where(eq(inventoryByBatch.id, central.id));
           const { stockMovements } = await import("../drizzle/schema");
-          await tx.insert(stockMovements).values({ productId: item.productId, type: "OUT", quantity: item.quantity, previousQuantity: central.quantity, newQuantity: central.quantity - item.quantity, batchId: item.batchId, fromLocationId: warehouse.id, notes: `Ordine evento ${order.orderNumber} — ${order.eventName}`, createdBy: ctx.user.id });
+          await tx.insert(stockMovements).values({ productId: item.productId, type: "OUT", quantity: item.quantity, previousQuantity: central.quantity, newQuantity: central.quantity - item.quantity, batchId: item.batchId, fromLocationId: warehouse.id, notes: `Ordine evento ${order.orderNumber} — ${order.eventName}`, createdBy: ctx.user!.id, companyId: ctx.activeCompanyId });
           results.push(`${item.productName}: ${item.quantity} conf. scaricate`);
         }
         await tx.update(orders).set({ status: "delivered", deliveredAt: new Date(), updatedAt: new Date() }).where(eq(orders.id, input.orderId));

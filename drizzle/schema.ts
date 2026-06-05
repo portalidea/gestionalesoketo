@@ -87,6 +87,48 @@ export const ddtItemStatusEnum = pgEnum("ddt_item_status", [
   "merged",
 ]);
 
+// ============================================================
+// M11.A — Multi-tenant tables
+// ============================================================
+
+/**
+ * Companies — entità aziendali (E-Keto Food Srls, SoKeto Srl, etc.).
+ * Catalogo prodotti condiviso; magazzino, ordini, retailer separati per company.
+ */
+export const companies = pgTable("companies", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  vatNumber: varchar("vatNumber", { length: 20 }),
+  fiscalCode: varchar("fiscalCode", { length: 20 }),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+});
+export type Company = typeof companies.$inferSelect;
+export type InsertCompany = typeof companies.$inferInsert;
+
+/**
+ * userCompanyAccess — associa utenti a company con default.
+ * Un utente può avere accesso a più company (es. Alessandro e Ilira).
+ */
+export const userCompanyAccess = pgTable(
+  "userCompanyAccess",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid("userId").notNull(),
+    companyId: uuid("companyId")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    isDefault: boolean("isDefault").default(false).notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    unique("userCompanyAccess_user_company_unique").on(t.userId, t.companyId),
+    index("user_company_access_user_idx").on(t.userId),
+  ],
+);
+export type UserCompanyAccess = typeof userCompanyAccess.$inferSelect;
+export type InsertUserCompanyAccess = typeof userCompanyAccess.$inferInsert;
+
 /**
  * Profilo applicativo dell'operatore SoKeto.
  * `id` è 1:1 con `auth.users.id` di Supabase Auth: la riga viene creata da un trigger
@@ -139,6 +181,10 @@ export const retailers = pgTable("retailers", {
   // M7-A: affiliato che ha portato questo retailer
   affiliateId: uuid("affiliateId"),
   affiliateAssignedAt: timestamp("affiliateAssignedAt", { withTimezone: true }),
+  // M11.A: multi-tenant
+  companyId: uuid("companyId")
+    .notNull()
+    .references(() => companies.id),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -258,11 +304,15 @@ export const productBatches = pgTable(
     initialQuantity: integer("initialQuantity").notNull(),
     // M6.2.E: costo effettivo unitario IVA esclusa per questo lotto
     costPrice: numeric("costPrice", { precision: 10, scale: 4 }).default("0").notNull(),
+    // M11.A: multi-tenant
+    companyId: uuid("companyId")
+      .notNull()
+      .references(() => companies.id),
     notes: text("notes"),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
-    unique("productBatches_product_batch_unique").on(t.productId, t.batchNumber),
+    unique("productBatches_product_batch_company_unique").on(t.companyId, t.productId, t.batchNumber),
     check("productBatches_initial_qty_positive", sql`${t.initialQuantity} > 0`),
     index("productBatches_product_expiration_idx").on(t.productId, t.expirationDate),
   ],
@@ -290,6 +340,10 @@ export const locations = pgTable(
       onDelete: "cascade",
     }),
     isActive: boolean("isActive").default(true).notNull(),
+    // M11.A: multi-tenant
+    companyId: uuid("companyId")
+      .notNull()
+      .references(() => companies.id),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
@@ -297,8 +351,8 @@ export const locations = pgTable(
       "locations_type_retailer_coherence",
       sql`(${t.type} = 'central_warehouse' AND ${t.retailerId} IS NULL) OR (${t.type} = 'retailer' AND ${t.retailerId} IS NOT NULL)`,
     ),
-    uniqueIndex("locations_central_singleton")
-      .on(t.type)
+    uniqueIndex("locations_central_per_company")
+      .on(t.companyId, t.type)
       .where(sql`${t.type} = 'central_warehouse'`),
     index("locations_retailerId_idx")
       .on(t.retailerId)
@@ -325,6 +379,10 @@ export const inventoryByBatch = pgTable(
       .notNull()
       .references(() => productBatches.id, { onDelete: "restrict" }),
     quantity: integer("quantity").default(0).notNull(),
+    // M11.A: multi-tenant
+    companyId: uuid("companyId")
+      .notNull()
+      .references(() => companies.id),
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
@@ -385,6 +443,10 @@ export const stockMovements = pgTable("stockMovements", {
   // M6.2.F: rettifica quantità — motivo e nota
   adjustmentReason: adjustmentReasonEnum("adjustmentReason"),
   adjustmentNote: text("adjustmentNote"),
+  // M11.A: multi-tenant
+  companyId: uuid("companyId")
+    .notNull()
+    .references(() => companies.id),
 });
 
 export type StockMovement = typeof stockMovements.$inferSelect;
@@ -625,11 +687,16 @@ export const orders = pgTable(
     createdBy: uuid("createdBy")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
+    // M11.A: multi-tenant
+    companyId: uuid("companyId")
+      .notNull()
+      .references(() => companies.id),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
     index("orders_retailerId_idx").on(t.retailerId),
+    index("orders_company_idx").on(t.companyId),
     index("orders_status_idx")
       .on(t.status)
       .where(sql`${t.status} IN ('pending', 'transferring')`),
