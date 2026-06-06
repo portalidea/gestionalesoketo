@@ -18,6 +18,7 @@ import { TRPCError } from "@trpc/server";
 import { staffProcedure, adminProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
 import { companies, userCompanyAccess, users } from "../drizzle/schema";
+import { uuidSchema } from "../shared/schemas";
 
 export const companiesRouter = router({
   /**
@@ -95,7 +96,7 @@ export const companiesRouter = router({
   update: adminProcedure
     .input(
       z.object({
-        id: z.string().uuid(),
+        id: uuidSchema,
         name: z.string().min(1).optional(),
         vatNumber: z.string().max(20).nullable().optional(),
         fiscalCode: z.string().max(20).nullable().optional(),
@@ -147,7 +148,7 @@ export const companiesRouter = router({
    * M11.B: Lista utenti con accesso a una company (admin only).
    */
   listUserAccess: adminProcedure
-    .input(z.object({ companyId: z.string().uuid() }))
+    .input(z.object({ companyId: uuidSchema }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
@@ -174,8 +175,8 @@ export const companiesRouter = router({
   grantUserAccess: adminProcedure
     .input(
       z.object({
-        userId: z.string().uuid(),
-        companyId: z.string().uuid(),
+        userId: uuidSchema,
+        companyId: uuidSchema,
         isDefault: z.boolean().optional().default(false),
       }),
     )
@@ -232,8 +233,8 @@ export const companiesRouter = router({
   revokeUserAccess: adminProcedure
     .input(
       z.object({
-        userId: z.string().uuid(),
-        companyId: z.string().uuid(),
+        userId: uuidSchema,
+        companyId: uuidSchema,
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -316,8 +317,8 @@ export const companiesRouter = router({
   setUserDefault: adminProcedure
     .input(
       z.object({
-        userId: z.string().uuid(),
-        companyId: z.string().uuid(),
+        userId: uuidSchema,
+        companyId: uuidSchema,
       }),
     )
     .mutation(async ({ ctx, input }) => {

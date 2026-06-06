@@ -15,8 +15,9 @@ import { supabaseAdmin } from "./_core/supabase";
 import { ENV } from "./_core/env";
 import * as db from "./db";
 import { sendEmail } from "./email";
+import { uuidSchema } from "../shared/schemas";
 
-const uuid = z.string().uuid();
+const uuid = uuidSchema;
 const retailerRoleSchema = z.enum(["retailer_admin", "retailer_user"]);
 
 /**

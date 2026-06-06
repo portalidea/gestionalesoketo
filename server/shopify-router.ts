@@ -32,8 +32,9 @@ import {
   computeVariantAvailableStock,
   type SyncVariantsResult,
 } from "./services/channelVariantService";
+import { uuidSchema } from "../shared/schemas";
 
-const uuid = z.string().uuid();
+const uuid = uuidSchema;
 
 export const shopifyRouter = router({
   // ─── Store ───────────────────────────────────────────────────────────────
@@ -174,8 +175,8 @@ export const shopifyRouter = router({
     list: staffProcedure
       .input(
         z.object({
-          storeId: z.string().uuid().optional(),
-          productId: z.string().uuid().optional(),
+          storeId: uuidSchema.optional(),
+          productId: uuidSchema.optional(),
           onlyUnmapped: z.boolean().optional(),
           search: z.string().optional(),
           limit: z.number().int().min(1).max(200).default(50),
@@ -252,8 +253,8 @@ export const shopifyRouter = router({
     updateMapping: staffProcedure
       .input(
         z.object({
-          variantId: z.string().uuid(),
-          productId: z.string().uuid().nullable(),
+          variantId: uuidSchema,
+          productId: uuidSchema.nullable(),
           multiplier: z.number().int().min(1),
           displayName: z.string().optional(),
           isActive: z.boolean().optional(),
@@ -298,12 +299,12 @@ export const shopifyRouter = router({
     setBundle: staffProcedure
       .input(
         z.object({
-          variantId: z.string().uuid(),
+          variantId: uuidSchema,
           isBundle: z.boolean(),
           components: z
             .array(
               z.object({
-                productId: z.string().uuid(),
+                productId: uuidSchema,
                 quantity: z.number().int().min(1),
               }),
             )
@@ -403,7 +404,7 @@ export const shopifyRouter = router({
       }),
 
     getComponents: staffProcedure
-      .input(z.object({ variantId: z.string().uuid() }))
+      .input(z.object({ variantId: uuidSchema }))
       .query(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
@@ -711,7 +712,7 @@ export const shopifyRouter = router({
     syncToShopify: staffProcedure
       .input(
         z.object({
-          productIds: z.array(z.string().uuid()).optional(),
+          productIds: z.array(uuidSchema).optional(),
         }),
       )
        .mutation(async ({ input, ctx }) => {

@@ -41,9 +41,9 @@ import { shopifyRouter } from "./shopify-router";
 import { reportsRouter } from "./reports-router";
 import { inventoryExportRouter } from "./inventory-export-router";
 import { companiesRouter } from "./companies-router";
+import { uuidSchema } from "../shared/schemas";
 
-
-const uuid = z.string().uuid();
+const uuid = uuidSchema;
 const userRoleSchema = z.enum(["admin", "operator", "viewer"]);
 const vatRateSchema = z.enum(["4.00", "5.00", "10.00", "22.00"]);
 
@@ -315,7 +315,7 @@ export const appRouter = router({
           contactPerson: z.string().optional(),
           notes: z.string().optional(),
           // M7-A: affiliato opzionale in creazione
-          affiliateId: z.string().uuid().optional(),
+          affiliateId: uuidSchema.optional(),
           // M11.A.markup: pricing model
           pricingModel: z.enum(["tier_discount", "cost_markup"]).default("tier_discount"),
           markupPercentage: z.number().min(0).max(100).optional(),
@@ -452,7 +452,7 @@ export const appRouter = router({
       .input(
         z.object({
           retailerId: uuid,
-          affiliateId: z.string().uuid().nullable(),
+          affiliateId: uuidSchema.nullable(),
         }),
       )
       .mutation(async ({ input }) => {
@@ -1212,8 +1212,8 @@ export const appRouter = router({
     // M8.5: Rettifica manuale quantità lotto
     adjustBatchQuantity: staffProcedure
       .input(z.object({
-        batchId: z.string().uuid(),
-        locationId: z.string().uuid(),
+        batchId: uuidSchema,
+        locationId: uuidSchema,
         newQuantity: z.number().int().min(0),
         reason: z.enum([
           'typo',

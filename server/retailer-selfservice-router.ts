@@ -28,6 +28,7 @@ import { calculateOrderPricing, PricingItemInput } from "./pricing";
 import { transitionOrder } from "./services/orderStateMachine";
 import { sendEmail } from "./email";
 import { ENV } from "./_core/env";
+import { uuidSchema } from "../shared/schemas";
 
 export const retailerSelfServiceRouter = router({
   // ============= CATALOGO =============
@@ -168,7 +169,7 @@ export const retailerSelfServiceRouter = router({
   cartPreview: retailerProcedure
     .input(
       z.object({
-        items: z.array(z.object({ productId: z.string().uuid(), quantity: z.number().int().positive() })).min(1),
+        items: z.array(z.object({ productId: uuidSchema, quantity: z.number().int().positive() })).min(1),
       }),
     )
     .mutation(async ({ input, ctx }) => {
@@ -242,7 +243,7 @@ export const retailerSelfServiceRouter = router({
   cartCheckout: retailerProcedure
     .input(
       z.object({
-        items: z.array(z.object({ productId: z.string().uuid(), quantity: z.number().int().positive() })).min(1),
+        items: z.array(z.object({ productId: uuidSchema, quantity: z.number().int().positive() })).min(1),
         notes: z.string().optional(),
       }),
     )
@@ -491,7 +492,7 @@ export const retailerSelfServiceRouter = router({
    * Dettaglio ordine singolo (security: solo ordini del retailer corrente).
    */
   ordersGetById: retailerProcedure
-    .input(z.object({ orderId: z.string().uuid() }))
+    .input(z.object({ orderId: uuidSchema }))
     .query(async ({ input, ctx }) => {
       console.log(`[retailerPortal.ordersGetById] retailerId=${ctx.retailerId} orderId=${input.orderId}`);
       const database = await getDb();
@@ -577,8 +578,8 @@ export const retailerSelfServiceRouter = router({
   ordersModifyItems: retailerProcedure
     .input(
       z.object({
-        orderId: z.string().uuid(),
-        items: z.array(z.object({ productId: z.string().uuid(), quantity: z.number().int().positive() })).min(1),
+        orderId: uuidSchema,
+        items: z.array(z.object({ productId: uuidSchema, quantity: z.number().int().positive() })).min(1),
       }),
     )
     .mutation(async ({ input, ctx }) => {
@@ -692,7 +693,7 @@ export const retailerSelfServiceRouter = router({
    * Cancella ordine pending (retailer).
    */
   ordersCancel: retailerProcedure
-    .input(z.object({ orderId: z.string().uuid(), reason: z.string().optional() }))
+    .input(z.object({ orderId: uuidSchema, reason: z.string().optional() }))
     .mutation(async ({ input, ctx }) => {
       console.log(`[retailerPortal.ordersCancel] retailerId=${ctx.retailerId} orderId=${input.orderId}`);
       const database = await getDb();

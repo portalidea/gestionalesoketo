@@ -19,6 +19,7 @@ import {
   orders,
   users,
 } from "../drizzle/schema";
+import { uuidSchema } from "../shared/schemas";
 
 export const affiliatesRouter = router({
   // --- CRUD Affiliates ---
@@ -93,7 +94,7 @@ export const affiliatesRouter = router({
     }),
 
   getById: staffProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: uuidSchema }))
     .query(async ({ input, ctx }) => {
       const db = (await getDb())!;
       const affiliate = await db.select().from(affiliates).where(eq(affiliates.id, input.id)).limit(1).then(r => r[0]);
@@ -185,7 +186,7 @@ export const affiliatesRouter = router({
   update: adminProcedure
     .input(
       z.object({
-        id: z.string().uuid(),
+        id: uuidSchema,
         name: z.string().min(2).optional(),
         email: z.string().email().optional(),
         phone: z.string().optional(),
@@ -238,7 +239,7 @@ export const affiliatesRouter = router({
     }),
 
   toggleStatus: adminProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: uuidSchema }))
     .mutation(async ({ input }) => {
       const db = (await getDb())!;
       const affiliate = await db.select().from(affiliates).where(eq(affiliates.id, input.id)).limit(1).then(r => r[0]);
@@ -263,8 +264,8 @@ export const affiliatesRouter = router({
       z.object({
         page: z.number().min(1).default(1),
         limit: z.number().min(1).max(100).default(30),
-        affiliateId: z.string().uuid().optional(),
-        retailerId: z.string().uuid().optional(),
+        affiliateId: uuidSchema.optional(),
+        retailerId: uuidSchema.optional(),
         status: z.enum(["pending", "paid", "voided"]).optional(),
         month: z.string().optional(), // "2026-05" format
       }).optional(),
@@ -326,7 +327,7 @@ export const affiliatesRouter = router({
   markPaid: adminProcedure
     .input(
       z.object({
-        commissionIds: z.array(z.string().uuid()).min(1),
+        commissionIds: z.array(uuidSchema).min(1),
         paymentReference: z.string().min(1),
       }),
     )
@@ -471,7 +472,7 @@ export const affiliatesRouter = router({
   inviteUser: adminProcedure
     .input(
       z.object({
-        affiliateId: z.string().uuid(),
+        affiliateId: uuidSchema,
         email: z.string().email(),
         name: z.string().optional(),
       }),
@@ -620,7 +621,7 @@ export const affiliatesRouter = router({
     }),
 
   resendInvite: adminProcedure
-    .input(z.object({ userId: z.string().uuid() }))
+    .input(z.object({ userId: uuidSchema }))
     .mutation(async ({ input }) => {
       const database = (await getDb())!;
 
@@ -677,7 +678,7 @@ export const affiliatesRouter = router({
     }),
 
   listUsers: staffProcedure
-    .input(z.object({ affiliateId: z.string().uuid() }))
+    .input(z.object({ affiliateId: uuidSchema }))
     .query(async ({ input }) => {
       const database = (await getDb())!;
 

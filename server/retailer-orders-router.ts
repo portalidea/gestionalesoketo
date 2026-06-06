@@ -24,6 +24,7 @@ import {
 } from "../drizzle/schema";
 import { createFicProformaForCompany, getRetailerFicClientId } from "./fic-integration";
 import { sendEmail } from "./email";
+import { uuidSchema } from "../shared/schemas";
 
 export const retailerOrdersRouter = router({
   /**
@@ -108,7 +109,7 @@ export const retailerOrdersRouter = router({
    * 2. getById — dettaglio ordine con items, lotti, timeline
    */
   getById: retailerProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: uuidSchema }))
     .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
@@ -175,8 +176,8 @@ export const retailerOrdersRouter = router({
   updateItems: retailerProcedure
     .input(
       z.object({
-        id: z.string().uuid(),
-        items: z.array(z.object({ productId: z.string().uuid(), quantity: z.number().int().min(1) })).min(1),
+        id: uuidSchema,
+        items: z.array(z.object({ productId: uuidSchema, quantity: z.number().int().min(1) })).min(1),
         notes: z.string().optional(),
       }),
     )
@@ -444,7 +445,7 @@ export const retailerOrdersRouter = router({
    * 4. cancel — cancella ordine pending
    */
   cancel: retailerProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: uuidSchema }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });

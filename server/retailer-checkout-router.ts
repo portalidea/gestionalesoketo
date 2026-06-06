@@ -21,9 +21,10 @@ import {
 } from "../drizzle/schema";
 import { createFicProformaForCompany, getRetailerFicClientId } from "./fic-integration";
 import { sendEmail } from "./email";
+import { uuidSchema } from "../shared/schemas";
 
 const cartItemSchema = z.object({
-  productId: z.string().uuid(),
+  productId: uuidSchema,
   quantity: z.number().int().min(1),
 });
 

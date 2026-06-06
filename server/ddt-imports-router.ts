@@ -22,8 +22,9 @@ import {
 // tramite Edge Function /api/ddt-extract (M5.4 refactor)
 import { uploadDdtPdf, getSignedUrl, deleteDdtPdf } from "../lib/storage";
 import { findBestMatch } from "../lib/fuzzyMatch";
+import { uuidSchema } from "../shared/schemas";
 
-const uuid = z.string().uuid();
+const uuid = uuidSchema;
 
 export const ddtImportsRouter = router({
   /**

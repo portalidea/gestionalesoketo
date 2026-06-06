@@ -21,6 +21,7 @@ import {
   products,
   retailers,
 } from "../drizzle/schema";
+import { uuidSchema } from "../shared/schemas";
 
 export const catalogPortalRouter = router({
   /**
@@ -226,7 +227,7 @@ export const catalogPortalRouter = router({
    * 2. catalogPortal.getById — dettaglio prodotto con lotti FEFO
    */
   getById: retailerProcedure
-    .input(z.object({ productId: z.string().uuid() }))
+    .input(z.object({ productId: uuidSchema }))
     .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });

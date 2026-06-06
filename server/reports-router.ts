@@ -16,6 +16,7 @@ import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { staffProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
+import { uuidSchema } from "../shared/schemas";
 
 // ============= HELPERS =============
 
@@ -226,7 +227,7 @@ const warehouseRouter = router({
     .input(z.object({
       dateFrom: z.string().optional(),
       dateTo: z.string().optional(),
-      productId: z.string().uuid().optional(),
+      productId: uuidSchema.optional(),
       type: z.string().optional(),
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
@@ -510,7 +511,7 @@ const salesRouter = router({
       dateFrom: z.string().optional(),
       dateTo: z.string().optional(),
       status: z.string().optional(),
-      retailerId: z.string().uuid().optional(),
+      retailerId: uuidSchema.optional(),
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
     }))

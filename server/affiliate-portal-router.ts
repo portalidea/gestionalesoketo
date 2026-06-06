@@ -16,6 +16,7 @@ import {
   products,
 } from "../drizzle/schema";
 import { eq, and, gte, lt, desc, asc, count, sql, inArray } from "drizzle-orm";
+import { uuidSchema } from "../shared/schemas";
 
 export const affiliatePortalRouter = router({
   // ═══════════════════════════════════════════════════════════════
@@ -176,7 +177,7 @@ export const affiliatePortalRouter = router({
     .input(
       z.object({
         status: z.array(z.enum(["pending", "paid", "voided"])).optional(),
-        retailerId: z.string().uuid().optional(),
+        retailerId: uuidSchema.optional(),
         dateFrom: z.string().optional(),
         dateTo: z.string().optional(),
         sortBy: z.enum(["date", "amount"]).default("date"),
@@ -267,7 +268,7 @@ export const affiliatePortalRouter = router({
     }),
 
   commissionsGetById: affiliateProcedure
-    .input(z.object({ commissionId: z.string().uuid() }))
+    .input(z.object({ commissionId: uuidSchema }))
     .query(async ({ ctx, input }) => {
       const db = (await getDb())!;
       const affiliateId = ctx.affiliateId;
@@ -340,7 +341,7 @@ export const affiliatePortalRouter = router({
     .input(
       z.object({
         status: z.array(z.enum(["pending", "paid", "voided"])).optional(),
-        retailerId: z.string().uuid().optional(),
+        retailerId: uuidSchema.optional(),
         dateFrom: z.string().optional(),
         dateTo: z.string().optional(),
       }).optional(),

@@ -28,11 +28,12 @@ import { calculateOrderPricing, calculateEventOrderPricing, type PricingItemInpu
 import { createFicProformaForCompany, getRetailerFicClientId } from "./fic-integration";
 import { transitionOrder, registerPayment, cancelPayment, modifyOrderItems, type OrderStatus, type PaymentStatus } from "./services/orderStateMachine";
 import { getAvailableStock } from "./services/stockService";
+import { uuidSchema } from "../shared/schemas";
 
 // --- Zod Schemas ---
 
 const orderItemInput = z.object({
-  productId: z.string().uuid(),
+  productId: uuidSchema,
   quantity: z.number().int().positive(),
 });
 
@@ -60,7 +61,7 @@ export const ordersRouter = router({
       z.object({
         status: statusEnum.optional(),
         paymentStatus: paymentStatusEnum.optional(),
-        retailerId: z.string().uuid().optional(),
+        retailerId: uuidSchema.optional(),
         orderType: z.enum(["retailer", "event"]).optional(),
         dateFrom: z.string().optional(), // ISO date
         dateTo: z.string().optional(), // ISO date
@@ -145,7 +146,7 @@ export const ordersRouter = router({
    * 2. Dettaglio ordine con items
    */
   getById: staffProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: uuidSchema }))
     .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
@@ -226,7 +227,7 @@ export const ordersRouter = router({
   preview: staffProcedure
     .input(
       z.object({
-        retailerId: z.string().uuid(),
+        retailerId: uuidSchema,
         items: z.array(orderItemInput).min(1),
         markupPercentageOverride: z.number().min(0).max(100).nullish(),
       }),
@@ -246,7 +247,7 @@ export const ordersRouter = router({
   create: staffProcedure
     .input(
       z.object({
-        retailerId: z.string().uuid(),
+        retailerId: uuidSchema,
         items: z.array(orderItemInput).min(1),
         notes: z.string().optional(),
         notesInternal: z.string().optional(),
@@ -474,7 +475,7 @@ export const ordersRouter = router({
   updateItems: staffProcedure
     .input(
       z.object({
-        orderId: z.string().uuid(),
+        orderId: uuidSchema,
         items: z.array(orderItemInput).min(1),
         notes: z.string().optional(),
         notesInternal: z.string().optional(),
@@ -562,8 +563,8 @@ export const ordersRouter = router({
   assignBatch: staffProcedure
     .input(
       z.object({
-        orderItemId: z.string().uuid(),
-        batchId: z.string().uuid().nullable(),
+        orderItemId: uuidSchema,
+        batchId: uuidSchema.nullable(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
@@ -723,7 +724,7 @@ export const ordersRouter = router({
    * 9. Lista lotti disponibili per un prodotto (per dropdown assegnazione)
    */
   batchesForProduct: staffProcedure
-    .input(z.object({ productId: z.string().uuid() }))
+    .input(z.object({ productId: uuidSchema }))
     .query(async ({ input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
@@ -745,7 +746,7 @@ export const ordersRouter = router({
    * 9b. List all batches with stock for an order item, with FEFO suggestion flag
    */
   suggestBatchForItem: staffProcedure
-    .input(z.object({ orderItemId: z.string().uuid() }))
+    .input(z.object({ orderItemId: uuidSchema }))
     .query(async ({ input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
@@ -811,7 +812,7 @@ export const ordersRouter = router({
    * 10. Genera proforma FiC e salva riferimento
    */
   generateProforma: staffProcedure
-    .input(z.object({ orderId: z.string().uuid() }))
+    .input(z.object({ orderId: uuidSchema }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
@@ -918,7 +919,7 @@ export const ordersRouter = router({
    * 8. Rigenera proforma FiC (reset + ricrea)
    */
   regenerateProforma: staffProcedure
-    .input(z.object({ orderId: z.string().uuid() }))
+    .input(z.object({ orderId: uuidSchema }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
@@ -1032,7 +1033,7 @@ export const ordersRouter = router({
    */
   registerPayment: staffProcedure
     .input(z.object({
-      orderId: z.string().uuid(),
+      orderId: uuidSchema,
       paidAt: z.string(), // ISO datetime
       paymentMethod: z.string().min(1).max(50),
       note: z.string().optional(),
@@ -1052,7 +1053,7 @@ export const ordersRouter = router({
    */
   cancelPaymentProc: staffProcedure
     .input(z.object({
-      orderId: z.string().uuid(),
+      orderId: uuidSchema,
       reason: z.string().min(1),
     }))
     .mutation(async ({ input, ctx }) => {
@@ -1069,7 +1070,7 @@ export const ordersRouter = router({
    * After transition, decrement stock + create TRANSFER movements.
    */
   startTransfer: staffProcedure
-    .input(z.object({ orderId: z.string().uuid() }))
+    .input(z.object({ orderId: uuidSchema }))
     .mutation(async ({ input, ctx }) => {
       // 1. Transition state (validates batch assignment)
       const result = await transitionOrder({
@@ -1142,7 +1143,7 @@ export const ordersRouter = router({
    * 12. Mark shipped (transferring → shipped)
    */
   markShipped: staffProcedure
-    .input(z.object({ orderId: z.string().uuid() }))
+    .input(z.object({ orderId: uuidSchema }))
     .mutation(async ({ input, ctx }) => {
       return transitionOrder({
         orderId: input.orderId,
@@ -1156,7 +1157,7 @@ export const ordersRouter = router({
    * Triggers proforma → invoice transform on FiC.
    */
   markDelivered: staffProcedure
-    .input(z.object({ orderId: z.string().uuid() }))
+    .input(z.object({ orderId: uuidSchema }))
     .mutation(async ({ input, ctx }) => {
       return transitionOrder({
         orderId: input.orderId,
@@ -1171,7 +1172,7 @@ export const ordersRouter = router({
    */
   cancelOrder: staffProcedure
     .input(z.object({
-      orderId: z.string().uuid(),
+      orderId: uuidSchema,
       reason: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
@@ -1189,8 +1190,8 @@ export const ordersRouter = router({
    */
   getProductPricingForRetailer: staffProcedure
     .input(z.object({
-      productId: z.string().uuid(),
-      retailerId: z.string().uuid(),
+      productId: uuidSchema,
+      retailerId: uuidSchema,
     }))
     .query(async ({ input }) => {
       const db = await getDb();
@@ -1253,9 +1254,9 @@ export const ordersRouter = router({
    */
   modifyOrderItems: staffProcedure
     .input(z.object({
-      orderId: z.string().uuid(),
+      orderId: uuidSchema,
       items: z.array(z.object({
-        productId: z.string().uuid(),
+        productId: uuidSchema,
         quantity: z.number().int().positive(),
       })).min(1),
     }))
@@ -1369,7 +1370,7 @@ export const ordersRouter = router({
    * 18. Deliver event order (pending → delivered, decrement stock)
    */
   deliverEventOrder: staffProcedure
-    .input(z.object({ orderId: z.string().uuid() }))
+    .input(z.object({ orderId: uuidSchema }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
@@ -1402,7 +1403,7 @@ export const ordersRouter = router({
    */
   getAvailableStock: staffProcedure
     .input(z.object({
-      productIds: z.array(z.string().uuid()).min(1).max(50),
+      productIds: z.array(uuidSchema).min(1).max(50),
     }))
     .query(async ({ input }) => {
       const stockMap = await getAvailableStock(input.productIds);
