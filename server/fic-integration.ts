@@ -336,6 +336,28 @@ export async function completeFicOAuthForCompany(
   if (!ficCompany) throw new Error("Account FiC senza alcuna company associata");
 
   const db = getDb();
+
+  // Cross-company validation: se esiste già una connessione per questa company,
+  // verifica che il ficCompanyId restituito da FiC corrisponda a quello salvato.
+  // Previene sovrascrivimenti accidentali se l'utente autorizza l'azienda FiC sbagliata.
+  const existing = await db
+    .select({ ficCompanyId: ficConnections.ficCompanyId })
+    .from(ficConnections)
+    .where(eq(ficConnections.companyId, companyId))
+    .limit(1);
+
+  if (existing.length > 0 && existing[0].ficCompanyId) {
+    const expectedFicId = existing[0].ficCompanyId;
+    if (expectedFicId !== String(ficCompany.id)) {
+      throw new Error(
+        `Hai autorizzato l'azienda FiC "${ficCompany.name}" (ID ${ficCompany.id}) ` +
+        `ma questa company del gestionale era gi\u00e0 collegata a FiC ID ${expectedFicId}. ` +
+        `Verifica di aver selezionato l'azienda corretta nel selettore di Fatture in Cloud ` +
+        `prima di riautorizzare. Se vuoi cambiare azienda FiC, disconnetti prima e riconnetti.`
+      );
+    }
+  }
+
   await db
     .insert(ficConnections)
     .values({
