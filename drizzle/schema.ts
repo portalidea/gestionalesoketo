@@ -64,6 +64,7 @@ export const alertTypeEnum = pgEnum("alert_type", ["LOW_STOCK", "EXPIRING", "EXP
 export const alertStatusEnum = pgEnum("alert_status", ["ACTIVE", "ACKNOWLEDGED", "RESOLVED"]);
 export const syncStatusEnum = pgEnum("sync_status", ["SUCCESS", "FAILED", "PARTIAL"]);
 export const locationTypeEnum = pgEnum("location_type", ["central_warehouse", "retailer"]);
+export const pricingModelEnum = pgEnum("pricing_model_enum", ["tier_discount", "cost_markup"]);
 export const proformaQueueStatusEnum = pgEnum("proforma_queue_status", [
   "pending",
   "processing",
@@ -185,6 +186,9 @@ export const retailers = pgTable("retailers", {
   companyId: uuid("companyId")
     .notNull()
     .references(() => companies.id),
+  // M11.A.markup: modello pricing
+  pricingModel: pricingModelEnum("pricingModel").default("tier_discount").notNull(),
+  markupPercentage: numeric("markupPercentage", { precision: 5, scale: 2 }),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -691,6 +695,8 @@ export const orders = pgTable(
     companyId: uuid("companyId")
       .notNull()
       .references(() => companies.id),
+    // M11.A.markup: override markup per singolo ordine
+    markupPercentageOverride: numeric("markupPercentageOverride", { precision: 5, scale: 2 }),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },

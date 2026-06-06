@@ -517,14 +517,27 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
     throw new TRPCError({ code: "BAD_REQUEST", message: "Almeno un item richiesto" });
   }
 
-  // 2. Recalculate pricing
+  // 2. Recalculate pricing (M11.A.markup: read markupPercentageOverride from order)
   let pricing;
   if (isEventOrder) {
     const { calculateEventOrderPricing } = await import("../pricing");
     pricing = await calculateEventOrderPricing(input.items);
   } else {
     const { calculateOrderPricing } = await import("../pricing");
-    pricing = await calculateOrderPricing(order.retailerId!, input.items);
+    // Read existing markupPercentageOverride from the order row
+    const [orderForMarkup] = await db
+      .select({ markupPercentageOverride: orders.markupPercentageOverride })
+      .from(orders)
+      .where(eq(orders.id, input.orderId))
+      .limit(1);
+    const markupOverride = orderForMarkup?.markupPercentageOverride
+      ? parseFloat(orderForMarkup.markupPercentageOverride)
+      : undefined;
+    pricing = await calculateOrderPricing({
+      retailerId: order.retailerId!,
+      items: input.items,
+      markupPercentageOverride: markupOverride,
+    });
   }
 
   // 3. Transaction: diff strategy — preserve batchId on existing items

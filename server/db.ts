@@ -168,6 +168,8 @@ export async function getAllRetailers(companyId?: string) {
       ficClientId: retailers.ficClientId,
       affiliateId: retailers.affiliateId,
       affiliateAssignedAt: retailers.affiliateAssignedAt,
+      pricingModel: retailers.pricingModel,
+      markupPercentage: retailers.markupPercentage,
       createdAt: retailers.createdAt,
       updatedAt: retailers.updatedAt,
       activeBatchCount: activeBatchCountExpr,

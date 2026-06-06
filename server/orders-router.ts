@@ -228,10 +228,16 @@ export const ordersRouter = router({
       z.object({
         retailerId: z.string().uuid(),
         items: z.array(orderItemInput).min(1),
+        markupPercentageOverride: z.number().min(0).max(100).nullish(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      return calculateOrderPricing(input.retailerId, input.items, ctx.activeCompanyId);
+      return calculateOrderPricing({
+        retailerId: input.retailerId,
+        items: input.items,
+        companyId: ctx.activeCompanyId,
+        markupPercentageOverride: input.markupPercentageOverride ?? undefined,
+      });
     }),
 
   /**
@@ -245,6 +251,7 @@ export const ordersRouter = router({
         notes: z.string().optional(),
         notesInternal: z.string().optional(),
         paymentTerms: z.enum(['advance_transfer', 'on_delivery', 'credit_card', 'manual']).optional(),
+        markupPercentageOverride: z.number().min(0).max(100).nullish(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
@@ -260,8 +267,13 @@ export const ordersRouter = router({
         .limit(1);
       const resolvedPaymentTerms = input.paymentTerms ?? retailerForPT?.paymentTerms ?? 'advance_transfer';
 
-      // Calcola pricing
-      const pricing = await calculateOrderPricing(input.retailerId, input.items, ctx.activeCompanyId);
+      // Calcola pricing (M11.A.markup: pass override)
+      const pricing = await calculateOrderPricing({
+        retailerId: input.retailerId,
+        items: input.items,
+        companyId: ctx.activeCompanyId,
+        markupPercentageOverride: input.markupPercentageOverride ?? undefined,
+      });
 
       // --- Auto-assegnazione FEFO lotti ---
       // Trova magazzino centrale per la company attiva (M11.A)
@@ -356,6 +368,9 @@ export const ordersRouter = router({
             notesInternal: input.notesInternal ?? null,
             createdBy: ctx.user!.id,
             companyId: ctx.activeCompanyId, // M11.A
+            markupPercentageOverride: input.markupPercentageOverride != null
+              ? String(input.markupPercentageOverride)
+              : null,
           })
           .returning();
 
@@ -463,6 +478,7 @@ export const ordersRouter = router({
         items: z.array(orderItemInput).min(1),
         notes: z.string().optional(),
         notesInternal: z.string().optional(),
+        markupPercentageOverride: z.number().min(0).max(100).nullish(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
@@ -484,8 +500,13 @@ export const ordersRouter = router({
         });
       }
 
-      // Ricalcola pricing
-      const pricing = await calculateOrderPricing(order.retailerId!, input.items, ctx.activeCompanyId);
+      // Ricalcola pricing (M11.A.markup: pass override)
+      const pricing = await calculateOrderPricing({
+        retailerId: order.retailerId!,
+        items: input.items,
+        companyId: ctx.activeCompanyId,
+        markupPercentageOverride: input.markupPercentageOverride ?? undefined,
+      });
 
       await db.transaction(async (tx) => {
         // Elimina vecchi items

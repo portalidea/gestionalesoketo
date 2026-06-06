@@ -1,5 +1,6 @@
 /**
  * M6.2.A — Pricing Calculator
+ * M11.A.markup — Aggiunto supporto pricing model "cost_markup"
  *
  * Calcola pricing ordine con snapshot frozen al momento della creazione.
  * Riusabile da: admin order creation, retailer portal checkout (futuro M6.2.B).
@@ -32,6 +33,10 @@ export interface PricingItemOutput {
   // Stock info per soft warning
   stockAvailableConfezioni: number;
   stockWarning: boolean;
+  // M11.A.markup: info calcolo markup (solo per cost_markup)
+  costPrice?: string; // costo anagrafico (2 decimali)
+  markupPercent?: string; // markup applicato (2 decimali)
+  pricingModel?: "tier_discount" | "cost_markup";
 }
 
 export interface PricingResult {
@@ -42,28 +47,55 @@ export interface PricingResult {
   vatAmount: string; // 2 decimali
   totalGross: string; // 2 decimali
   warnings: string[];
+  // M11.A.markup: metadata
+  pricingModel: "tier_discount" | "cost_markup";
+  markupPercent?: string; // markup effettivo applicato (2 decimali)
+}
+
+export interface CalculateOrderPricingOptions {
+  retailerId: string;
+  items: PricingItemInput[];
+  companyId?: string;
+  markupPercentageOverride?: number | null; // override per singolo ordine
 }
 
 /**
  * Calcola pricing completo per un ordine.
- * @param retailerId UUID del retailer destinatario
- * @param items Array di { productId, quantity }
- * @returns PricingResult con totali e warnings stock
+ * Supporta sia tier_discount che cost_markup.
  */
 export async function calculateOrderPricing(
-  retailerId: string,
-  items: PricingItemInput[],
-  companyId?: string, // M11.A — optional for backward compat
+  retailerIdOrOpts: string | CalculateOrderPricingOptions,
+  itemsArg?: PricingItemInput[],
+  companyIdArg?: string,
 ): Promise<PricingResult> {
+  // Supporto backward-compat: vecchia signature (retailerId, items, companyId)
+  let retailerId: string;
+  let items: PricingItemInput[];
+  let companyId: string | undefined;
+  let markupPercentageOverride: number | null | undefined;
+
+  if (typeof retailerIdOrOpts === "string") {
+    retailerId = retailerIdOrOpts;
+    items = itemsArg!;
+    companyId = companyIdArg;
+  } else {
+    retailerId = retailerIdOrOpts.retailerId;
+    items = retailerIdOrOpts.items;
+    companyId = retailerIdOrOpts.companyId;
+    markupPercentageOverride = retailerIdOrOpts.markupPercentageOverride;
+  }
+
   const db = await getDb();
   if (!db) throw new Error("Database non disponibile");
 
-  // 1. Ottieni retailer + pacchetto pricing
+  // 1. Ottieni retailer + pacchetto pricing + pricing model
   const [retailer] = await db
     .select({
       id: retailers.id,
       name: retailers.name,
       pricingPackageId: retailers.pricingPackageId,
+      pricingModel: retailers.pricingModel,
+      markupPercentage: retailers.markupPercentage,
     })
     .from(retailers)
     .where(eq(retailers.id, retailerId))
@@ -71,24 +103,37 @@ export async function calculateOrderPricing(
 
   if (!retailer) throw new Error("Retailer non trovato");
 
+  const pricingModel = retailer.pricingModel ?? "tier_discount";
+
+  // Determina discount (tier_discount) o markup (cost_markup)
   let discountPercent = 0;
   let packageName: string | null = null;
-  if (retailer.pricingPackageId) {
-    const [pkg] = await db
-      .select({
-        discountPercent: pricingPackages.discountPercent,
-        name: pricingPackages.name,
-      })
-      .from(pricingPackages)
-      .where(eq(pricingPackages.id, retailer.pricingPackageId))
-      .limit(1);
-    if (pkg) {
-      discountPercent = parseFloat(pkg.discountPercent);
-      packageName = pkg.name;
+  let effectiveMarkup = 0;
+
+  if (pricingModel === "cost_markup") {
+    // Markup: override ordine > markup retailer
+    effectiveMarkup = markupPercentageOverride != null
+      ? markupPercentageOverride
+      : parseFloat(retailer.markupPercentage || "0");
+  } else {
+    // Tier discount: logica invariata
+    if (retailer.pricingPackageId) {
+      const [pkg] = await db
+        .select({
+          discountPercent: pricingPackages.discountPercent,
+          name: pricingPackages.name,
+        })
+        .from(pricingPackages)
+        .where(eq(pricingPackages.id, retailer.pricingPackageId))
+        .limit(1);
+      if (pkg) {
+        discountPercent = parseFloat(pkg.discountPercent);
+        packageName = pkg.name;
+      }
     }
   }
 
-  // 2. Ottieni prodotti
+  // 2. Ottieni prodotti (incluso costPrice per cost_markup)
   const productIds = items.map((i) => i.productId);
   const productRows = await db
     .select({
@@ -98,13 +143,14 @@ export async function calculateOrderPricing(
       unitPrice: products.unitPrice,
       vatRate: products.vatRate,
       piecesPerUnit: products.piecesPerUnit,
+      costPrice: products.costPrice,
     })
     .from(products)
     .where(sql`${products.id} IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})`);
 
   const productMap = new Map(productRows.map((p) => [p.id, p]));
 
-  // 3. Ottieni stock centrale per ogni prodotto (raw SQL per join complessi)
+  // 3. Ottieni stock centrale per ogni prodotto
   const stockRows = await db.execute<{ productId: string; totalQty: number }>(sql`
     SELECT pb."productId" AS "productId", COALESCE(SUM(ibb."quantity"), 0)::int AS "totalQty"
     FROM "inventoryByBatch" ibb
@@ -136,12 +182,31 @@ export async function calculateOrderPricing(
       throw new Error(`Prodotto ${item.productId} non trovato`);
     }
 
-    const unitPriceBase = parseFloat(product.unitPrice || "0");
     const vatRate = parseFloat(product.vatRate);
     const piecesPerUnit = product.piecesPerUnit;
+    let unitPriceBase: number;
+    let unitPriceFinal: number;
+    let costPriceStr: string | undefined;
+    let markupPercentStr: string | undefined;
 
-    // Calcolo prezzo con sconto
-    const unitPriceFinal = roundTo2(unitPriceBase * (1 - discountPercent / 100));
+    if (pricingModel === "cost_markup") {
+      // M11.A.markup: prezzo = costPrice × (1 + markup/100)
+      const costBase = parseFloat(product.costPrice || "0");
+      if (!costBase || costBase === 0) {
+        throw new Error(
+          `Costo non valorizzato per il prodotto "${product.name}". Imposta costPrice in anagrafica prima di creare ordini con pricing markup-su-costo.`,
+        );
+      }
+      unitPriceBase = costBase;
+      unitPriceFinal = roundTo2(costBase * (1 + effectiveMarkup / 100));
+      costPriceStr = costBase.toFixed(2);
+      markupPercentStr = effectiveMarkup.toFixed(2);
+    } else {
+      // Tier discount: logica invariata
+      unitPriceBase = parseFloat(product.unitPrice || "0");
+      unitPriceFinal = roundTo2(unitPriceBase * (1 - discountPercent / 100));
+    }
+
     const lineTotalNet = roundTo2(unitPriceFinal * item.quantity);
     const lineVat = roundTo2(lineTotalNet * (vatRate / 100));
     const lineTotalGross = roundTo2(lineTotalNet + lineVat);
@@ -150,7 +215,7 @@ export async function calculateOrderPricing(
     sumVat += lineVat;
     sumGross += lineTotalGross;
 
-     // Stock check (soft warning) — stockMap è in pezzi, convertiamo in confezioni
+    // Stock check (soft warning) — stockMap è in pezzi, convertiamo in confezioni
     const stockPieces = stockMap.get(item.productId) ?? 0;
     const ppu = piecesPerUnit ?? 1;
     const stockAvailableConf = Math.floor(stockPieces / ppu);
@@ -167,13 +232,22 @@ export async function calculateOrderPricing(
       piecesPerUnit,
       quantity: item.quantity,
       unitPriceBase: unitPriceBase.toFixed(2),
-      discountPercent: discountPercent.toFixed(2),
+      discountPercent: pricingModel === "cost_markup" ? "0.00" : discountPercent.toFixed(2),
       unitPriceFinal: unitPriceFinal.toFixed(2),
       vatRate: vatRate.toFixed(2),
       lineTotalNet: lineTotalNet.toFixed(2),
       lineTotalGross: lineTotalGross.toFixed(2),
       stockAvailableConfezioni: stockAvailableConf,
       stockWarning,
+      // M11.A.markup: extra info
+      ...(pricingModel === "cost_markup" && {
+        costPrice: costPriceStr,
+        markupPercent: markupPercentStr,
+        pricingModel: "cost_markup" as const,
+      }),
+      ...(pricingModel === "tier_discount" && {
+        pricingModel: "tier_discount" as const,
+      }),
     });
   }
 
@@ -185,6 +259,10 @@ export async function calculateOrderPricing(
     vatAmount: roundTo2(sumVat).toFixed(2),
     totalGross: roundTo2(sumGross).toFixed(2),
     warnings,
+    pricingModel,
+    ...(pricingModel === "cost_markup" && {
+      markupPercent: effectiveMarkup.toFixed(2),
+    }),
   };
 }
 
@@ -266,6 +344,7 @@ export async function calculateEventOrderPricing(
       lineTotalGross: lineTotalGross.toFixed(2),
       stockAvailableConfezioni: stockAvailableConf,
       stockWarning,
+      pricingModel: "tier_discount",
     });
   }
   return {
@@ -276,10 +355,11 @@ export async function calculateEventOrderPricing(
     vatAmount: roundTo2(sumVat).toFixed(2),
     totalGross: roundTo2(sumGross).toFixed(2),
     warnings,
+    pricingModel: "tier_discount",
   };
 }
 
-/** Arrotonda a 2 decimali */
+/** Arrotonda a 2 decimali (half-up) */
 function roundTo2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }

@@ -311,11 +311,19 @@ export const appRouter = router({
           ficClientId: z.number().int().positive().optional(),
           // M7-A: affiliato opzionale in creazione
           affiliateId: z.string().uuid().optional(),
+          // M11.A.markup: pricing model
+          pricingModel: z.enum(["tier_discount", "cost_markup"]).default("tier_discount"),
+          markupPercentage: z.number().min(0).max(100).optional(),
         }),
       )
       .mutation(async ({ input, ctx }) => {
         // Se affiliateId è presente, setta anche affiliateAssignedAt
-        const createData: any = { ...input, companyId: ctx.activeCompanyId }; // M11.A
+        const createData: any = {
+          ...input,
+          companyId: ctx.activeCompanyId, // M11.A
+          // M11.A.markup: serialize markupPercentage
+          markupPercentage: input.markupPercentage != null ? String(input.markupPercentage) : null,
+        };
         if (input.affiliateId) {
           createData.affiliateAssignedAt = new Date();
         }
@@ -338,11 +346,19 @@ export const appRouter = router({
           fattureInCloudCompanyId: z.string().optional(),
           syncEnabled: z.number().optional(),
           notes: z.string().optional(),
+          // M11.A.markup: pricing model
+          pricingModel: z.enum(["tier_discount", "cost_markup"]).optional(),
+          markupPercentage: z.number().min(0).max(100).nullish(),
         }),
       )
       .mutation(async ({ input }) => {
         const { id, ...data } = input;
-        await db.updateRetailer(id, data);
+        // M11.A.markup: serialize markupPercentage
+        const updateData: any = { ...data };
+        if (data.markupPercentage !== undefined) {
+          updateData.markupPercentage = data.markupPercentage != null ? String(data.markupPercentage) : null;
+        }
+        await db.updateRetailer(id, updateData);
         return { success: true };
       }),
 

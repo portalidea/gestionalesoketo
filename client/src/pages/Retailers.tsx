@@ -78,6 +78,8 @@ const EMPTY_FORM = {
   email: "",
   contactPerson: "",
   notes: "",
+  pricingModel: "tier_discount" as "tier_discount" | "cost_markup",
+  markupPercentage: "",
 };
 
 type FicClient = {
@@ -194,14 +196,20 @@ export default function Retailers() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const { markupPercentage, ...rest } = formData;
     createMutation.mutate({
-      ...formData,
+      ...rest,
       // Pass ficClientId only when set (zod schema is .optional())
       ...(selectedFicClientId !== null
         ? { ficClientId: selectedFicClientId }
         : {}),
       // M7-A: affiliato opzionale
       ...(selectedAffiliateId && selectedAffiliateId !== "__none__" ? { affiliateId: selectedAffiliateId } : {}),
+      // M11.A.markup: pricing model
+      pricingModel: formData.pricingModel,
+      ...(formData.pricingModel === "cost_markup" && markupPercentage
+        ? { markupPercentage: parseFloat(markupPercentage) }
+        : {}),
     });
   };
 
@@ -520,6 +528,65 @@ export default function Retailers() {
                       rows={3}
                     />
                   </div>
+                  {/* M11.A.markup: Modello Pricing */}
+                  <Card className="border-dashed border-border bg-muted/30">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm">Modello Pricing</CardTitle>
+                      <CardDescription className="text-xs">
+                        Scegli come calcolare il prezzo per questo rivenditore.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="flex gap-4">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="pricingModel"
+                            value="tier_discount"
+                            checked={formData.pricingModel === "tier_discount"}
+                            onChange={() => setFormData({ ...formData, pricingModel: "tier_discount", markupPercentage: "" })}
+                            className="accent-primary"
+                          />
+                          <span className="text-sm">Sconto su listino</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="pricingModel"
+                            value="cost_markup"
+                            checked={formData.pricingModel === "cost_markup"}
+                            onChange={() => setFormData({ ...formData, pricingModel: "cost_markup" })}
+                            className="accent-primary"
+                          />
+                          <span className="text-sm">Markup su costo</span>
+                        </label>
+                      </div>
+                      {formData.pricingModel === "cost_markup" && (
+                        <div className="grid gap-2">
+                          <Label htmlFor="markupPercentage">Markup % (default)</Label>
+                          <Input
+                            id="markupPercentage"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max="100"
+                            placeholder="es. 30"
+                            value={formData.markupPercentage}
+                            onChange={(e) => setFormData({ ...formData, markupPercentage: e.target.value })}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Prezzo vendita = Costo prodotto × (1 + markup/100). Sovrascrivibile per singolo ordine.
+                          </p>
+                        </div>
+                      )}
+                      {formData.pricingModel === "tier_discount" && (
+                        <p className="text-xs text-muted-foreground">
+                          Lo sconto verrà determinato dal pacchetto pricing assegnato dopo la creazione.
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
+
                   {/* M7-A: Affiliato opzionale */}
                   <div className="grid gap-2">
                     <Label>Affiliato (opzionale)</Label>

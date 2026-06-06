@@ -74,11 +74,16 @@ type PreviewData = {
     lineTotalGross: string;
     stockAvailableConfezioni: number;
     stockWarning: boolean;
+    costPrice?: string;
+    markupPercent?: string;
+    pricingModel?: "tier_discount" | "cost_markup";
   }>;
   subtotalNet: string;
   vatAmount: string;
   totalGross: string;
   warnings: string[];
+  pricingModel: "tier_discount" | "cost_markup";
+  markupPercent?: string;
 };
 
 const NO_RETAILER = "__none__";
@@ -195,7 +200,13 @@ function CartContent({
         <>
           <Separator />
           <div className="space-y-2 text-sm">
-            {parseFloat(previewData.discountPercent) > 0 && (
+            {previewData.pricingModel === "cost_markup" && previewData.markupPercent && (
+              <div className="flex justify-between text-muted-foreground">
+                <span className="text-emerald-600">Markup su costo</span>
+                <span className="text-emerald-600 font-medium">+{previewData.markupPercent}%</span>
+              </div>
+            )}
+            {previewData.pricingModel !== "cost_markup" && parseFloat(previewData.discountPercent) > 0 && (
               <div className="flex justify-between text-muted-foreground">
                 <span>
                   Sconto{" "}
@@ -272,6 +283,8 @@ export default function OrderNew() {
   const [productSearch, setProductSearch] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
+  // M11.A.markup: override markup per singolo ordine
+  const [markupOverride, setMarkupOverride] = useState<string>("");
 
   // Dati
   const retailers = trpc.retailers.list.useQuery();
@@ -279,12 +292,16 @@ export default function OrderNew() {
   const utils = trpc.useUtils();
 
   // Preview pricing (debounced)
+  const markupOverrideNum = markupOverride !== "" ? parseFloat(markupOverride) : undefined;
   const previewInput = useMemo(
     () => ({
       retailerId: retailerId !== NO_RETAILER ? retailerId : "",
       items: cart.map((c) => ({ productId: c.productId, quantity: c.quantity })),
+      ...(markupOverrideNum != null && !isNaN(markupOverrideNum)
+        ? { markupPercentageOverride: markupOverrideNum }
+        : {}),
     }),
-    [retailerId, cart],
+    [retailerId, cart, markupOverrideNum],
   );
 
   const preview = trpc.orders.preview.useMutation();
@@ -387,8 +404,11 @@ export default function OrderNew() {
       items: cart.map((c) => ({ productId: c.productId, quantity: c.quantity })),
       notes: notes || undefined,
       notesInternal: notesInternal || undefined,
+      ...(markupOverrideNum != null && !isNaN(markupOverrideNum)
+        ? { markupPercentageOverride: markupOverrideNum }
+        : {}),
     });
-  }, [retailerId, cart, notes, notesInternal, createOrder]);
+  }, [retailerId, cart, notes, notesInternal, createOrder, markupOverrideNum]);
 
   // Conteggio totale pezzi nel carrello
   const totalCartQty = cart.reduce((sum, c) => sum + c.quantity, 0);
@@ -450,16 +470,55 @@ export default function OrderNew() {
                   </SelectContent>
                 </Select>
                 {selectedRetailer && (
-                  <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
-                    {selectedRetailer.pricingPackageId ? (
-                      <Badge variant="secondary">Pacchetto assegnato</Badge>
-                    ) : (
-                      <Badge variant="outline">Nessun pacchetto (prezzo pieno)</Badge>
-                    )}
-                    {selectedRetailer.ficClientId ? (
-                      <Badge variant="secondary">FiC collegato</Badge>
-                    ) : (
-                      <Badge variant="outline">FiC non collegato</Badge>
+                  <div className="mt-3 space-y-3">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
+                      {selectedRetailer.pricingModel === "cost_markup" ? (
+                        <Badge className="bg-emerald-500/15 text-emerald-600 border-emerald-500/30">
+                          Markup su costo ({selectedRetailer.markupPercentage ?? "0"}%)
+                        </Badge>
+                      ) : selectedRetailer.pricingPackageId ? (
+                        <Badge variant="secondary">Pacchetto assegnato</Badge>
+                      ) : (
+                        <Badge variant="outline">Nessun pacchetto (prezzo pieno)</Badge>
+                      )}
+                      {selectedRetailer.ficClientId ? (
+                        <Badge variant="secondary">FiC collegato</Badge>
+                      ) : (
+                        <Badge variant="outline">FiC non collegato</Badge>
+                      )}
+                    </div>
+                    {/* M11.A.markup: override markup per ordine */}
+                    {selectedRetailer.pricingModel === "cost_markup" && (
+                      <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-md p-3 space-y-2">
+                        <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                          Pricing: Costo × (1 + markup%). Default retailer: {selectedRetailer.markupPercentage ?? "0"}%
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <Label className="text-xs whitespace-nowrap">Override %:</Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max="100"
+                            placeholder={selectedRetailer.markupPercentage ?? "default"}
+                            value={markupOverride}
+                            onChange={(e) => setMarkupOverride(e.target.value)}
+                            className="h-7 w-24 text-sm"
+                          />
+                          {markupOverride && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6"
+                              onClick={() => setMarkupOverride("")}
+                              title="Usa default retailer"
+                            >
+                              <X className="h-3 w-3" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
                     )}
                   </div>
                 )}
