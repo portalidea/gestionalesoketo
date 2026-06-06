@@ -22,7 +22,7 @@ import {
   products,
   retailers,
 } from "../drizzle/schema";
-import { createFicProforma } from "./fic-integration";
+import { createFicProformaForCompany, getRetailerFicClientId } from "./fic-integration";
 import { sendEmail } from "./email";
 
 export const retailerOrdersRouter = router({
@@ -374,15 +374,11 @@ export const retailerOrdersRouter = router({
           .where(eq(orders.id, input.id));
       });
 
-      // Rigenera proforma FiC (non bloccante)
+      // Rigenera proforma FiC (non bloccante) — M11.C per-company
       try {
-        const [retailer] = await db
-          .select({ ficClientId: retailers.ficClientId, name: retailers.name })
-          .from(retailers)
-          .where(eq(retailers.id, ctx.retailerId))
-          .limit(1);
+        const retailerFicClientId = await getRetailerFicClientId(ctx.retailerId, ctx.activeCompanyId);
 
-        if (retailer?.ficClientId) {
+        if (retailerFicClientId) {
           const items = await db
             .select({
               productName: orderItems.productName,
@@ -420,11 +416,10 @@ export const retailerOrdersRouter = router({
             .set({ ficProformaId: null, ficProformaNumber: null, updatedAt: new Date() })
             .where(eq(orders.id, input.id));
 
-          const proforma = await createFicProforma({
-            ficClientId: retailer.ficClientId,
+          const proforma = await createFicProformaForCompany(ctx.activeCompanyId, {
+            ficClientId: retailerFicClientId,
             date: new Date().toISOString().split("T")[0],
             orderNumber: order.orderNumber ?? undefined,
-            totalGross: parseFloat(pricing.totalGross),
             notesInternal: `Ordine ${order.orderNumber} (modificato) — portale partner`,
             items: ficItems,
           });

@@ -29,50 +29,58 @@ import {
   Plug,
   RefreshCw,
   Unplug,
+  Users,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
+/**
+ * M11.C — Integrations page: dual FiC connection per company.
+ * Shows one card per company with independent OAuth connect/disconnect,
+ * plus a "Sync Retailer Mapping" button per company.
+ */
 export default function Integrations() {
   const { user: me } = useAuth({ redirectOnUnauthenticated: true });
   const utils = trpc.useUtils();
-  const { data: status, isLoading: statusLoading } =
-    trpc.ficIntegration.getStatus.useQuery();
-  const { data: clientsData } = trpc.ficClients.list.useQuery(undefined, {
-    enabled: !!status?.connected,
-    retry: false,
+
+  // M11.C: list all company connections
+  const { data: connections, isLoading: connectionsLoading } =
+    trpc.ficIntegration.listConnections.useQuery();
+
+  const [disconnectTarget, setDisconnectTarget] = useState<{
+    companyId: string;
+    companyName: string;
+  } | null>(null);
+  const [oauthLoading, setOauthLoading] = useState<string | null>(null);
+  const [syncLoading, setSyncLoading] = useState<string | null>(null);
+
+  const disconnectMut = trpc.ficIntegration.disconnectForCompany.useMutation({
+    onSuccess: () => {
+      utils.ficIntegration.listConnections.invalidate();
+      setDisconnectTarget(null);
+      toast.success("Fatture in Cloud disconnesso per questa azienda.");
+    },
+    onError: (e) => toast.error(e.message),
   });
 
-  const [disconnectOpen, setDisconnectOpen] = useState(false);
-  const [oauthLoading, setOauthLoading] = useState<"normal" | "force" | null>(null);
-
-  const disconnectMut = trpc.ficIntegration.disconnect.useMutation({
-    onSuccess: (res) => {
-      utils.ficIntegration.getStatus.invalidate();
-      utils.ficClients.list.invalidate();
-      setDisconnectOpen(false);
+  const syncMappingsMut = trpc.ficIntegration.syncRetailerMappings.useMutation({
+    onSuccess: (data) => {
+      setSyncLoading(null);
       toast.success(
-        `Fatture in Cloud disconnesso (${res.deleted} riga rimossa dal DB). Per connettere ad altra azienda, prima cambia azienda su Fatture in Cloud, poi clicca Connetti.`,
-        { duration: 8000 },
+        `Mapping sincronizzato: ${data.mapped} abbinati, ${data.unmatched.length} non trovati.`,
       );
     },
-    onError: (e) => toast.error(e.message),
-  });
-
-  const refreshMut = trpc.ficClients.refresh.useMutation({
-    onSuccess: (data) => {
-      utils.ficClients.list.invalidate();
-      toast.success(`Aggiornati ${data.clients.length} clienti FiC`);
+    onError: (e) => {
+      setSyncLoading(null);
+      toast.error(e.message);
     },
-    onError: (e) => toast.error(e.message),
   });
 
-  // Listen for OAuth popup success → refetch status
+  // Listen for OAuth popup success → refetch
   useEffect(() => {
     function onMsg(e: MessageEvent) {
       if (e.data?.type === "fic_sso_success") {
-        utils.ficIntegration.getStatus.invalidate();
-        utils.ficClients.list.invalidate();
+        utils.ficIntegration.listConnections.invalidate();
         toast.success("Fatture in Cloud connesso");
       }
     }
@@ -90,16 +98,13 @@ export default function Integrations() {
     );
   }
 
-  async function handleConnect(forceLogin = false) {
-    // M3.0.5: prompt=login NON è onorato da FiC (testato empiricamente:
-    // selettore appare 1s e poi auto-submit con la company precedente).
-    // Il workaround vero è cambiare azienda su secure.fattureincloud.it
-    // prima del Connect — vedi info-box. Il flag forceLogin resta
-    // wired (bottone "Forza re-login" come edge case) ma non è
-    // più la soluzione primaria.
-    setOauthLoading(forceLogin ? "force" : "normal");
+  async function handleConnect(companyId: string, forceLogin = false) {
+    setOauthLoading(companyId);
     try {
-      const r = await utils.ficIntegration.startOAuth.fetch({ forceLogin });
+      const r = await utils.ficIntegration.startOAuthForCompany.fetch({
+        companyId,
+        forceLogin,
+      });
       if (r?.url) {
         window.open(r.url, "fic-oauth", "width=600,height=700");
       }
@@ -110,196 +115,115 @@ export default function Integrations() {
     }
   }
 
+  function handleSyncMappings(companyId: string) {
+    setSyncLoading(companyId);
+    syncMappingsMut.mutate({ companyId });
+  }
+
   return (
     <DashboardLayout>
       <div className="space-y-8">
         <div>
           <h1 className="text-4xl font-bold text-foreground mb-2">Integrazioni</h1>
-          <p className="text-muted-foreground">Connessioni a servizi esterni di sistema.</p>
+          <p className="text-muted-foreground">
+            Connessioni Fatture in Cloud per-azienda. Ogni azienda ha la propria connessione
+            OAuth indipendente e il proprio mapping retailer → clienti FiC.
+          </p>
         </div>
 
-        <Card className="border-border bg-card">
-          <CardHeader>
-            <div className="flex items-center gap-3">
-              <Plug className="h-6 w-6 text-primary" />
-              <div className="flex-1">
-                <CardTitle>Fatture in Cloud</CardTitle>
-                <CardDescription>
-                  Integrazione single-tenant. L'account E-Keto Food Srls è connesso una sola
-                  volta; tutti i retailer vengono mappati come clienti FiC e ricevono proforma
-                  da questo account.
-                </CardDescription>
+        {connectionsLoading ? (
+          <div className="flex items-center gap-2 text-muted-foreground py-8">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>Caricamento stato connessioni…</span>
+          </div>
+        ) : (
+          <div className="grid gap-6">
+            {connections?.map((conn) => (
+              <CompanyFicCard
+                key={conn.companyId}
+                companyId={conn.companyId}
+                companyName={conn.companyName}
+                configured={conn.configured}
+                connected={conn.connected}
+                companyFicName={conn.companyName}
+                ficCompanyId={conn.companyId}
+                expiresAt={conn.tokenExpiresAt}
+                expired={conn.expired}
+                oauthLoading={oauthLoading === conn.companyId}
+                syncLoading={syncLoading === conn.companyId}
+                onConnect={(force) => handleConnect(conn.companyId, force)}
+                onDisconnect={() =>
+                  setDisconnectTarget({
+                    companyId: conn.companyId,
+                    companyName: conn.companyName,
+                  })
+                }
+                onSyncMappings={() => handleSyncMappings(conn.companyId)}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Info box: workaround multi-azienda FiC */}
+        <Card className="border-blue-500/30 bg-blue-500/5">
+          <CardContent className="pt-6">
+            <div className="flex items-start gap-3 text-sm">
+              <Info className="h-5 w-5 shrink-0 text-blue-400 mt-0.5" />
+              <div className="space-y-2 flex-1">
+                <div className="font-medium text-foreground">
+                  Come funziona il flusso OAuth per-azienda
+                </div>
+                <p className="text-muted-foreground">
+                  OAuth FiC autorizza sempre l'<strong>azienda attualmente attiva</strong> nella
+                  tua sessione browser FiC. Per connettere un'azienda diversa:
+                </p>
+                <ol className="list-decimal list-inside text-muted-foreground space-y-1 pl-1">
+                  <li>
+                    Apri Fatture in Cloud in una nuova scheda.
+                  </li>
+                  <li>
+                    Cambia all'azienda da connettere col selettore in alto a destra.
+                  </li>
+                  <li>
+                    Torna qui e clicca <strong>Connetti</strong> sulla card corrispondente.
+                  </li>
+                </ol>
+                <a
+                  href="https://secure.fattureincloud.it/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 underline mt-1"
+                >
+                  Apri Fatture in Cloud
+                  <ExternalLink className="h-3 w-3" />
+                </a>
               </div>
             </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {statusLoading ? (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Verifica stato connessione…</span>
-              </div>
-            ) : !status?.configured ? (
-              <div className="flex items-center gap-3 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm">
-                <AlertCircle className="h-5 w-5 shrink-0 text-yellow-500" />
-                <span>
-                  OAuth FiC non configurato. Variabili ambiente mancanti su Vercel:
-                  <code className="ml-1 font-mono text-xs">FATTUREINCLOUD_CLIENT_ID</code>,
-                  <code className="ml-1 font-mono text-xs">FATTUREINCLOUD_CLIENT_SECRET</code>,
-                  <code className="ml-1 font-mono text-xs">FATTUREINCLOUD_REDIRECT_URI</code>.
-                </span>
-              </div>
-            ) : !status.connected ? (
-              <div className="space-y-4">
-                <div className="flex items-center gap-3 rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-                  <AlertCircle className="h-5 w-5 shrink-0" />
-                  <span>Non connesso. Avvia il flusso OAuth con FiC per autorizzare l'app.</span>
-                </div>
-
-                {/* M3.0.5: info-box workaround multi-azienda. FiC non onora
-                    prompt=login (verificato empiricamente), unica strada
-                    affidabile è cambiare azienda PRIMA del connect. */}
-                <div className="rounded-md border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm space-y-3">
-                  <div className="flex items-start gap-3">
-                    <Info className="h-5 w-5 shrink-0 text-blue-400 mt-0.5" />
-                    <div className="space-y-2 flex-1">
-                      <div className="font-medium text-foreground">
-                        Hai più aziende su Fatture in Cloud?
-                      </div>
-                      <p className="text-muted-foreground">
-                        OAuth FiC autorizza sempre l'<strong>azienda attualmente
-                        attiva</strong> nella tua sessione browser FiC. Per connettere
-                        un'azienda diversa:
-                      </p>
-                      <ol className="list-decimal list-inside text-muted-foreground space-y-1 pl-1">
-                        <li>
-                          Apri Fatture in Cloud in una nuova scheda (link sotto).
-                        </li>
-                        <li>
-                          Cambia all'azienda da connettere col selettore in alto a destra.
-                        </li>
-                        <li>
-                          Torna qui e clicca <strong>Connetti Fatture in Cloud</strong>.
-                        </li>
-                      </ol>
-                      <a
-                        href="https://secure.fattureincloud.it/"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 underline mt-1"
-                      >
-                        Apri Fatture in Cloud
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button
-                    onClick={() => handleConnect(false)}
-                    disabled={oauthLoading !== null}
-                  >
-                    {oauthLoading === "normal" ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    ) : (
-                      <Plug className="h-4 w-4 mr-2" />
-                    )}
-                    Connetti Fatture in Cloud
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleConnect(true)}
-                    disabled={oauthLoading !== null}
-                    title="Edge case: prova a forzare prompt=login. FiC tipicamente lo ignora — usa il workaround dell'info-box sopra."
-                  >
-                    {oauthLoading === "force" ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    ) : null}
-                    Forza re-login (edge case)
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="flex items-start gap-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm">
-                  <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500 mt-0.5" />
-                  <div className="space-y-1">
-                    <div className="font-medium text-foreground">
-                      Connesso — {status.companyName ?? "?"}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Company ID FiC: <span className="font-mono">{status.companyId ?? "?"}</span>
-                      {status.expiresAt && (
-                        <span className="ml-3">
-                          Token scade:{" "}
-                          {new Date(status.expiresAt).toLocaleString("it-IT", {
-                            dateStyle: "short",
-                            timeStyle: "short",
-                          })}
-                        </span>
-                      )}
-                      {status.expired && (
-                        <Badge className="ml-2 bg-orange-500 hover:bg-orange-600">
-                          Scaduto — sarà rinfrescato al primo uso
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    variant="secondary"
-                    onClick={() => refreshMut.mutate()}
-                    disabled={refreshMut.isPending}
-                  >
-                    {refreshMut.isPending ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    ) : (
-                      <RefreshCw className="h-4 w-4 mr-2" />
-                    )}
-                    Aggiorna lista clienti FiC
-                  </Button>
-                  <Button variant="destructive" onClick={() => setDisconnectOpen(true)}>
-                    <Unplug className="h-4 w-4 mr-2" />
-                    Disconnetti
-                  </Button>
-                  {clientsData && (
-                    <span className="text-xs text-muted-foreground ml-2">
-                      {clientsData.clients.length} clienti in cache
-                      {clientsData.refreshedAt && (
-                        <>
-                          {" "}
-                          · ultimo refresh{" "}
-                          {new Date(clientsData.refreshedAt).toLocaleString("it-IT", {
-                            dateStyle: "short",
-                            timeStyle: "short",
-                          })}
-                        </>
-                      )}
-                    </span>
-                  )}
-                </div>
-              </div>
-            )}
           </CardContent>
         </Card>
 
-        <AlertDialog open={disconnectOpen} onOpenChange={setDisconnectOpen}>
+        {/* Disconnect confirmation dialog */}
+        <AlertDialog
+          open={!!disconnectTarget}
+          onOpenChange={(open) => !open && setDisconnectTarget(null)}
+        >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Disconnettere Fatture in Cloud?</AlertDialogTitle>
+              <AlertDialogTitle>
+                Disconnettere FiC per {disconnectTarget?.companyName}?
+              </AlertDialogTitle>
               <AlertDialogDescription>
-                I token verranno cancellati. La generazione proforma su TRANSFER si bloccherà
-                finché non riconnetti l'account. I mapping retailer → cliente FiC restano
-                preservati, ma non saranno utilizzabili senza connessione.
+                I token verranno cancellati. La generazione proforma si bloccherà finché non
+                riconnetti. I mapping retailer → cliente FiC restano preservati.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Annulla</AlertDialogCancel>
               <AlertDialogAction
-                onClick={() => disconnectMut.mutate()}
+                onClick={() =>
+                  disconnectTarget &&
+                  disconnectMut.mutate({ companyId: disconnectTarget.companyId })
+                }
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
                 Disconnetti
@@ -309,5 +233,149 @@ export default function Integrations() {
         </AlertDialog>
       </div>
     </DashboardLayout>
+  );
+}
+
+// --- Sub-component: Company FiC Card ---
+
+interface CompanyFicCardProps {
+  companyId: string;
+  companyName: string;
+  configured: boolean;
+  connected: boolean;
+  companyFicName?: string;
+  ficCompanyId?: string;
+  expiresAt?: string | null;
+  expired?: boolean;
+  oauthLoading: boolean;
+  syncLoading: boolean;
+  onConnect: (forceLogin?: boolean) => void;
+  onDisconnect: () => void;
+  onSyncMappings: () => void;
+}
+
+function CompanyFicCard({
+  companyName,
+  configured,
+  connected,
+  expiresAt,
+  expired,
+  oauthLoading,
+  syncLoading,
+  onConnect,
+  onDisconnect,
+  onSyncMappings,
+}: CompanyFicCardProps) {
+  return (
+    <Card className="border-border bg-card">
+      <CardHeader>
+        <div className="flex items-center gap-3">
+          <Plug className="h-6 w-6 text-primary" />
+          <div className="flex-1">
+            <CardTitle className="flex items-center gap-2">
+              {companyName}
+              {connected ? (
+                <Badge className="bg-emerald-500/20 text-emerald-500 border-emerald-500/30">
+                  Connesso
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="text-muted-foreground">
+                  Non connesso
+                </Badge>
+              )}
+            </CardTitle>
+            <CardDescription>
+              Connessione Fatture in Cloud per {companyName}
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!configured ? (
+          <div className="flex items-center gap-3 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm">
+            <AlertCircle className="h-5 w-5 shrink-0 text-yellow-500" />
+            <span>
+              OAuth FiC non configurato. Variabili ambiente mancanti:
+              <code className="ml-1 font-mono text-xs">FATTUREINCLOUD_CLIENT_ID</code>,
+              <code className="ml-1 font-mono text-xs">FATTUREINCLOUD_CLIENT_SECRET</code>,
+              <code className="ml-1 font-mono text-xs">FATTUREINCLOUD_REDIRECT_URI</code>.
+            </span>
+          </div>
+        ) : !connected ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+              <AlertCircle className="h-5 w-5 shrink-0" />
+              <span>Non connesso. Avvia il flusso OAuth per autorizzare questa azienda.</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={() => onConnect(false)} disabled={oauthLoading}>
+                {oauthLoading ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Plug className="h-4 w-4 mr-2" />
+                )}
+                Connetti Fatture in Cloud
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm">
+              <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500 mt-0.5" />
+              <div className="space-y-1">
+                <div className="font-medium text-foreground">Connesso</div>
+                <div className="text-xs text-muted-foreground">
+                  {expiresAt && (
+                    <span>
+                      Token scade:{" "}
+                      {new Date(expiresAt).toLocaleString("it-IT", {
+                        dateStyle: "short",
+                        timeStyle: "short",
+                      })}
+                    </span>
+                  )}
+                  {expired && (
+                    <Badge className="ml-2 bg-orange-500 hover:bg-orange-600">
+                      Scaduto — sarà rinfrescato al primo uso
+                    </Badge>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={onSyncMappings}
+                disabled={syncLoading}
+              >
+                {syncLoading ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Users className="h-4 w-4 mr-2" />
+                )}
+                Sincronizza mapping retailer
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => onConnect(false)}
+                disabled={oauthLoading}
+              >
+                {oauthLoading ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                )}
+                Riconnetti (cambia azienda FiC)
+              </Button>
+              <Button variant="destructive" onClick={onDisconnect}>
+                <Unplug className="h-4 w-4 mr-2" />
+                Disconnetti
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

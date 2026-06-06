@@ -122,31 +122,7 @@ export default function RetailerDetail() {
 
   // ============== M3 commercial config ==============
   const { data: packages } = trpc.pricingPackages.list.useQuery();
-  // M6.1.3 Fix 5: lazy load ficStatus — deferred dopo il primo render
-  // per non bloccare il batch iniziale (getDetails + dependentsCount)
-  const [shouldLoadFic, setShouldLoadFic] = useState(false);
-  useEffect(() => {
-    // Attiva FiC query dopo 500ms dal mount (fuori dal batch critico)
-    const timer = setTimeout(() => setShouldLoadFic(true), 500);
-    return () => clearTimeout(timer);
-  }, []);
-  const { data: ficStatus } = trpc.ficIntegration.getStatus.useQuery(undefined, {
-    enabled: shouldLoadFic,
-    staleTime: 60_000,
-    retry: 1,
-  });
-  const { data: ficClientsData } = trpc.ficClients.list.useQuery(undefined, {
-    enabled: shouldLoadFic && !!ficStatus?.connected,
-    staleTime: 60_000,
-    retry: false,
-  });
-  const ficRefreshMut = trpc.ficClients.refresh.useMutation({
-    onSuccess: (data) => {
-      utils.ficClients.list.invalidate();
-      toast.success(`Aggiornati ${data.clients.length} clienti FiC`);
-    },
-    onError: (e) => toast.error(e.message),
-  });
+  // M11.C: FiC queries rimosse — mapping gestito da /settings/integrations
   const assignPackageMut = trpc.retailers.assignPackage.useMutation({
     onSuccess: () => {
       utils.retailers.getDetails.invalidate();
@@ -155,14 +131,7 @@ export default function RetailerDetail() {
     },
     onError: (e) => toast.error(e.message),
   });
-  const assignFicClientMut = trpc.retailers.assignFicClient.useMutation({
-    onSuccess: () => {
-      utils.retailers.getDetails.invalidate();
-      utils.retailers.getById.invalidate();
-      toast.success("Cliente FiC aggiornato");
-    },
-    onError: (e) => toast.error(e.message),
-  });
+  // M11.C: assignFicClient rimosso — mapping ora via syncRetailerMappings in /settings/integrations
 
   // M7-A: affiliate assignment
   const [affiliateDialogOpen, setAffiliateDialogOpen] = useState(false);
@@ -612,81 +581,13 @@ export default function RetailerDetail() {
               <div className="space-y-2">
                 <Label className="flex items-center gap-2">
                   <Link2 className="h-4 w-4 text-primary" />
-                  Cliente FiC associato
+                  Mapping FiC
                 </Label>
-                {!ficStatus?.connected ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <div>
-                        <Select disabled value="">
-                          <SelectTrigger>
-                            <SelectValue placeholder="FiC non connesso" />
-                          </SelectTrigger>
-                          <SelectContent />
-                        </Select>
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      Connetti Fatture in Cloud da /settings/integrations per attivare.
-                    </TooltipContent>
-                  </Tooltip>
-                ) : (
-                  <>
-                    <Select
-                      value={
-                        retailer.ficClientId != null
-                          ? String(retailer.ficClientId)
-                          : "__none__"
-                      }
-                      onValueChange={(v) =>
-                        assignFicClientMut.mutate({
-                          retailerId: retailer.id,
-                          ficClientId: v === "__none__" ? null : parseInt(v, 10),
-                        })
-                      }
-                      disabled={(ficClientsData?.clients.length ?? 0) === 0}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Seleziona cliente FiC" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">— Nessuno —</SelectItem>
-                        {ficClientsData?.clients.map((c) => (
-                          <SelectItem key={c.id} value={String(c.id)}>
-                            {c.name}
-                            {c.vat_number ? ` · P.IVA ${c.vat_number}` : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {(ficClientsData?.clients.length ?? 0) === 0 ? (
-                      <div className="space-y-1">
-                        <p className="text-xs text-muted-foreground">
-                          Cache clienti FiC vuota. Scarica la lista per popolare il
-                          dropdown.
-                        </p>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => ficRefreshMut.mutate()}
-                          disabled={ficRefreshMut.isPending}
-                        >
-                          {ficRefreshMut.isPending ? (
-                            <Loader2 className="h-3 w-3 mr-2 animate-spin" />
-                          ) : (
-                            <RefreshCw className="h-3 w-3 mr-2" />
-                          )}
-                          Aggiorna ora
-                        </Button>
-                      </div>
-                    ) : !retailer.ficClientId ? (
-                      <p className="text-xs text-yellow-500">
-                        Senza mapping cliente FiC non è possibile generare proforma.
-                      </p>
-                    ) : null}
-                  </>
-                )}
+                <p className="text-xs text-muted-foreground">
+                  M11.C: il mapping retailer ↔ cliente FiC è ora gestito automaticamente
+                  dalla pagina <strong>Impostazioni → Integrazioni</strong> tramite il pulsante
+                  "Sincronizza mapping retailer". Il sistema abbina per nome/P.IVA.
+                </p>
               </div>
             </div>
           </CardContent>

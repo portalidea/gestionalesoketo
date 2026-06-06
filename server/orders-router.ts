@@ -25,7 +25,7 @@ import {
 } from "../drizzle/schema";
 import { eq, desc, and, gte, lte, sql, inArray, asc, gt } from "drizzle-orm";
 import { calculateOrderPricing, calculateEventOrderPricing, type PricingItemInput } from "./pricing";
-import { createFicProforma } from "./fic-integration";
+import { createFicProformaForCompany, getRetailerFicClientId } from "./fic-integration";
 import { transitionOrder, registerPayment, cancelPayment, modifyOrderItems, type OrderStatus, type PaymentStatus } from "./services/orderStateMachine";
 import { getAvailableStock } from "./services/stockService";
 
@@ -566,7 +566,7 @@ export const ordersRouter = router({
         batchId: z.string().uuid().nullable(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -666,13 +666,10 @@ export const ordersRouter = router({
         order.retailerId
       ) {
         try {
-          const [retailer] = await db
-            .select({ ficClientId: retailers.ficClientId })
-            .from(retailers)
-            .where(eq(retailers.id, order.retailerId))
-            .limit(1);
+          // M11.C: usa retailerFicMapping
+          const retailerFicClientId = await getRetailerFicClientId(order.retailerId, ctx.activeCompanyId);
 
-          if (retailer?.ficClientId) {
+          if (retailerFicClientId) {
             // Reload all items with updated batch info
             const updatedItems = await db
               .select({
@@ -692,7 +689,7 @@ export const ordersRouter = router({
             await modifyProforma(order.ficProformaId, {
               orderId: item.orderId,
               orderNumber: order.orderNumber ?? "",
-              retailerFicClientId: retailer.ficClientId,
+              retailerFicClientId,
               items: updatedItems.map((it) => ({
                 productName: it.productName,
                 quantity: it.quantity,
@@ -815,7 +812,7 @@ export const ordersRouter = router({
    */
   generateProforma: staffProcedure
     .input(z.object({ orderId: z.string().uuid() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -842,17 +839,13 @@ export const ordersRouter = router({
         });
       }
 
-      // Verifica retailer ha ficClientId
-      const [retailer] = await db
-        .select({ ficClientId: retailers.ficClientId, name: retailers.name })
-        .from(retailers)
-        .where(eq(retailers.id, order.retailerId!))
-        .limit(1);
+      // M11.C: Verifica retailer ha ficClientId via retailerFicMapping
+      const ficClientId = await getRetailerFicClientId(order.retailerId!, ctx.activeCompanyId);
 
-      if (!retailer?.ficClientId) {
+      if (!ficClientId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Retailer non ha ficClientId associato — configura prima l'anagrafica FiC",
+          message: "Retailer non ha ficClientId associato — configura prima il mapping FiC in Impostazioni → Integrazioni",
         });
       }
 
@@ -889,19 +882,18 @@ export const ordersRouter = router({
           description = `Lotto: ${it.batchNumber} - Scadenza: ${expDate}`;
         }
         return {
-          name: it.productName,       // ← solo nome prodotto (grassetto su FiC)
-          description,                 // ← lotto + scadenza (testo normale su FiC)
+          name: it.productName,
+          description,
           qty: it.quantity,
           unitPriceFinal: it.unitPriceFinal,
           vatRate: it.vatRate,
         };
       });
 
-      const proforma = await createFicProforma({
-        ficClientId: retailer.ficClientId,
+      const proforma = await createFicProformaForCompany(ctx.activeCompanyId, {
+        ficClientId,
         date: new Date().toISOString().split("T")[0],
         orderNumber: order.orderNumber ?? undefined,
-        // totalGross removed: now computed internally from items_list per-row
         notesInternal: `Ordine ${order.orderNumber}${order.notesInternal ? ` — ${order.notesInternal}` : ""}`,
         items: ficItems,
       });
@@ -927,7 +919,7 @@ export const ordersRouter = router({
    */
   regenerateProforma: staffProcedure
     .input(z.object({ orderId: z.string().uuid() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -957,17 +949,13 @@ export const ordersRouter = router({
 
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
 
-      // Verifica retailer ha ficClientId
-      const [retailer] = await db
-        .select({ ficClientId: retailers.ficClientId, name: retailers.name })
-        .from(retailers)
-        .where(eq(retailers.id, order.retailerId!))
-        .limit(1);
+      // M11.C: Verifica retailer ha ficClientId via retailerFicMapping
+      const ficClientId = await getRetailerFicClientId(order.retailerId!, ctx.activeCompanyId);
 
-      if (!retailer?.ficClientId) {
+      if (!ficClientId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Retailer non ha ficClientId associato",
+          message: "Retailer non ha ficClientId associato — configura il mapping FiC",
         });
       }
 
@@ -994,7 +982,7 @@ export const ordersRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Ordine senza righe" });
       }
 
-      // Crea proforma su FiC — name (grassetto) + description (lotto/scad, normale)
+      // Crea proforma su FiC
       const ficItems = items.map((it) => {
         let description = "";
         if (it.batchId && it.batchNumber) {
@@ -1004,19 +992,18 @@ export const ordersRouter = router({
           description = `Lotto: ${it.batchNumber} - Scadenza: ${expDate}`;
         }
         return {
-          name: it.productName,       // ← solo nome prodotto (grassetto su FiC)
-          description,                 // ← lotto + scadenza (testo normale su FiC)
+          name: it.productName,
+          description,
           qty: it.quantity,
           unitPriceFinal: it.unitPriceFinal,
           vatRate: it.vatRate,
         };
       });
 
-      const proforma = await createFicProforma({
-        ficClientId: retailer.ficClientId,
+      const proforma = await createFicProformaForCompany(ctx.activeCompanyId, {
+        ficClientId,
         date: new Date().toISOString().split("T")[0],
         orderNumber: order.orderNumber ?? undefined,
-        // totalGross removed: now computed internally from items_list per-row
         notesInternal: `Ordine ${order.orderNumber} (rigenerata)${order.notesInternal ? ` — ${order.notesInternal}` : ""}`,
         items: ficItems,
       });

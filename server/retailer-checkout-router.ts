@@ -19,7 +19,7 @@ import {
   productBatches,
   retailers,
 } from "../drizzle/schema";
-import { createFicProforma, getFicClientById } from "./fic-integration";
+import { createFicProformaForCompany, getRetailerFicClientId } from "./fic-integration";
 import { sendEmail } from "./email";
 
 const cartItemSchema = z.object({
@@ -257,20 +257,13 @@ export const retailerCheckoutRouter = router({
         return order;
       });
 
-      // 5. Genera proforma FiC (async, non blocca il checkout)
+      // 5. Genera proforma FiC (async, non blocca il checkout) — M11.C per-company
       let ficProformaId: number | null = null;
       let ficProformaNumber: string | null = null;
       try {
-        const [retailer] = await db
-          .select({
-            ficClientId: retailers.ficClientId,
-            name: retailers.name,
-          })
-          .from(retailers)
-          .where(eq(retailers.id, ctx.retailerId))
-          .limit(1);
+        const retailerFicClientId = await getRetailerFicClientId(ctx.retailerId, ctx.activeCompanyId);
 
-        if (retailer?.ficClientId) {
+        if (retailerFicClientId) {
           // Fetch items con batch info per proforma
           const items = await db
             .select({
@@ -303,12 +296,11 @@ export const retailerCheckoutRouter = router({
             };
           });
 
-          const proforma = await createFicProforma({
-            ficClientId: retailer.ficClientId,
+          const proforma = await createFicProformaForCompany(ctx.activeCompanyId, {
+            ficClientId: retailerFicClientId,
             date: new Date().toISOString().split("T")[0],
             orderNumber: result.orderNumber ?? undefined,
-            totalGross: result.totalGross ? parseFloat(result.totalGross) : undefined,
-            notesInternal: `Ordine ${result.orderNumber} — portale partner ${retailer.name}`,
+            notesInternal: `Ordine ${result.orderNumber} — portale partner`,
             items: ficItems,
           });
 

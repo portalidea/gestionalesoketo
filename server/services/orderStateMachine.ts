@@ -85,6 +85,7 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
       totalGross: orders.totalGross,
       notes: orders.notes,
       notesInternal: orders.notesInternal,
+      companyId: orders.companyId,
     })
     .from(orders)
     .where(eq(orders.id, orderId))
@@ -130,14 +131,12 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
       }
 
       // Create proforma on FiC if not already created and it's a retailer order
-      if (!ficProformaId && order.retailerId) {
-        const [retailer] = await db
-          .select({ ficClientId: retailers.ficClientId, name: retailers.name })
-          .from(retailers)
-          .where(eq(retailers.id, order.retailerId))
-          .limit(1);
+      if (!ficProformaId && order.retailerId && order.companyId) {
+        // M11.C: usa retailerFicMapping per-company
+        const { getRetailerFicClientId } = await import("../fic-integration");
+        const retailerFicClientId = await getRetailerFicClientId(order.retailerId, order.companyId);
 
-        if (retailer?.ficClientId) {
+        if (retailerFicClientId) {
           const ficItems = await db
             .select({
               productName: orderItems.productName,
@@ -157,7 +156,7 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
             const proforma = await ficDocService.createProforma({
               orderId,
               orderNumber: order.orderNumber ?? "",
-              retailerFicClientId: retailer.ficClientId,
+              retailerFicClientId,
               items: ficItems.map((it) => ({
                 productName: it.productName,
                 quantity: it.quantity,
@@ -491,6 +490,7 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
       orderNumber: orders.orderNumber,
       ficProformaId: orders.ficProformaId,
       notesInternal: orders.notesInternal,
+      companyId: orders.companyId,
     })
     .from(orders)
     .where(eq(orders.id, input.orderId))
@@ -612,14 +612,12 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
   let commissionRecalculated = false;
 
   // 4. Update FiC proforma if exists (SOLO ordini retailer)
-  if (!isEventOrder && order.ficProformaId && order.retailerId) {
-    const [retailer] = await db
-      .select({ ficClientId: retailers.ficClientId })
-      .from(retailers)
-      .where(eq(retailers.id, order.retailerId))
-      .limit(1);
+  if (!isEventOrder && order.ficProformaId && order.retailerId && order.companyId) {
+    // M11.C: usa retailerFicMapping per-company
+    const { getRetailerFicClientId } = await import("../fic-integration");
+    const retailerFicClientId = await getRetailerFicClientId(order.retailerId, order.companyId);
 
-    if (retailer?.ficClientId) {
+    if (retailerFicClientId) {
       const updatedItems = await db
         .select({
           productName: orderItems.productName,
@@ -638,7 +636,7 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
         await ficDocService.modifyProforma(order.ficProformaId, {
           orderId: input.orderId,
           orderNumber: order.orderNumber ?? "",
-          retailerFicClientId: retailer.ficClientId,
+          retailerFicClientId,
           items: updatedItems.map((it) => ({
             productName: it.productName,
             quantity: it.quantity,

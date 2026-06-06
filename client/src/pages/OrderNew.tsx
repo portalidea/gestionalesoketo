@@ -481,11 +481,7 @@ export default function OrderNew() {
                       ) : (
                         <Badge variant="outline">Nessun pacchetto (prezzo pieno)</Badge>
                       )}
-                      {selectedRetailer.ficClientId ? (
-                        <Badge variant="secondary">FiC collegato</Badge>
-                      ) : (
-                        <Badge variant="outline">FiC non collegato</Badge>
-                      )}
+                      {/* M11.C: FiC mapping gestito via retailerFicMapping, backend verifica */}
                     </div>
                     {/* M11.A.markup: override markup per ordine */}
                     {selectedRetailer.pricingModel === "cost_markup" && (

@@ -149,7 +149,7 @@ export default function Warehouse() {
   const proformaPreconditions = {
     ficConnected: !!ficStatus?.connected,
     hasPackage: !!selectedRetailer?.pricingPackageId,
-    hasFicClient: !!selectedRetailer?.ficClientId,
+    hasFicClient: true, // M11.C: mapping FiC ora gestito via retailerFicMapping, backend verifica
   };
   const proformaAllowed =
     proformaPreconditions.ficConnected &&

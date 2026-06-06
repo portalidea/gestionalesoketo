@@ -27,9 +27,6 @@ import {
   pricingPackages,
   PricingPackage,
   InsertPricingPackage,
-  systemIntegrations,
-  SystemIntegration,
-  InsertSystemIntegration,
   proformaQueue,
   ProformaQueue,
   InsertProformaQueue,
@@ -157,15 +154,10 @@ export async function getAllRetailers(companyId?: string) {
       phone: retailers.phone,
       email: retailers.email,
       contactPerson: retailers.contactPerson,
-      fattureInCloudCompanyId: retailers.fattureInCloudCompanyId,
-      fattureInCloudAccessToken: retailers.fattureInCloudAccessToken,
-      fattureInCloudRefreshToken: retailers.fattureInCloudRefreshToken,
-      fattureInCloudTokenExpiresAt: retailers.fattureInCloudTokenExpiresAt,
       lastSyncAt: retailers.lastSyncAt,
       syncEnabled: retailers.syncEnabled,
       notes: retailers.notes,
       pricingPackageId: retailers.pricingPackageId,
-      ficClientId: retailers.ficClientId,
       affiliateId: retailers.affiliateId,
       affiliateAssignedAt: retailers.affiliateAssignedAt,
       pricingModel: retailers.pricingModel,
@@ -1894,17 +1886,8 @@ export async function assignPackageToRetailer(
     .where(eq(retailers.id, retailerId));
 }
 
-export async function assignFicClientToRetailer(
-  retailerId: string,
-  ficClientId: number | null,
-): Promise<void> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  await db
-    .update(retailers)
-    .set({ ficClientId, updatedAt: new Date() })
-    .where(eq(retailers.id, retailerId));
-}
+// M11.C: assignFicClientToRetailer removed — ficClientId now lives in retailerFicMapping.
+// Use the assignFicClient tRPC procedure or getRetailerFicClientId() from fic-integration.ts.
 
 /**
  * Calcola anteprima prezzi proforma per un retailer.
@@ -2022,53 +2005,8 @@ export async function calculatePricingForRetailer(input: {
   };
 }
 
-// ============= SYSTEM INTEGRATIONS (Phase B M3) =============
-
-export async function getSystemIntegration(
-  type: string,
-): Promise<SystemIntegration | undefined> {
-  const db = await getDb();
-  if (!db) return undefined;
-  const r = await db
-    .select()
-    .from(systemIntegrations)
-    .where(eq(systemIntegrations.type, type))
-    .limit(1);
-  return r[0];
-}
-
-export async function upsertSystemIntegration(
-  data: InsertSystemIntegration,
-): Promise<SystemIntegration> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const existing = await getSystemIntegration(data.type);
-  if (existing) {
-    const [row] = await db
-      .update(systemIntegrations)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(systemIntegrations.id, existing.id))
-      .returning();
-    return row;
-  }
-  const [row] = await db.insert(systemIntegrations).values(data).returning();
-  return row;
-}
-
-export async function deleteSystemIntegration(type: string): Promise<number> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  // Defense-in-depth (M3.0.4): usa .returning() per ottenere conto reale delle
-  // righe cancellate. Throw esplicito se 0: copre il caso ipotetico di RLS
-  // silenzioso (oggi connection postgres con BYPASSRLS=true, ma se in futuro
-  // si passa a service_role o ad altra connection, lo vediamo subito).
-  const deleted = await db
-    .delete(systemIntegrations)
-    .where(eq(systemIntegrations.type, type))
-    .returning({ id: systemIntegrations.id });
-  console.log(`[systemIntegrations] DELETE type=${type} affected=${deleted.length}`);
-  return deleted.length;
-}
+// M11.C: systemIntegrations helpers removed — FiC tokens now live in ficConnections per-company.
+// Use getActiveFicConnection() / saveFicConnection() from fic-integration.ts.
 
 // ============= PROFORMA QUEUE (Phase B M3) =============
 

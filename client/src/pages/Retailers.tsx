@@ -199,10 +199,7 @@ export default function Retailers() {
     const { markupPercentage, ...rest } = formData;
     createMutation.mutate({
       ...rest,
-      // Pass ficClientId only when set (zod schema is .optional())
-      ...(selectedFicClientId !== null
-        ? { ficClientId: selectedFicClientId }
-        : {}),
+      // M11.C: ficClientId rimosso da schema — mapping ora via retailerFicMapping
       // M7-A: affiliato opzionale
       ...(selectedAffiliateId && selectedAffiliateId !== "__none__" ? { affiliateId: selectedAffiliateId } : {}),
       // M11.A.markup: pricing model
@@ -235,7 +232,7 @@ export default function Retailers() {
   function clearFicImport() {
     setSelectedFicClientId(null);
     // Lascia i campi pre-popolati intatti: l'utente potrebbe voler
-    // mantenere i dati senza il binding al ficClientId.
+    // mantenere i dati. Il mapping FiC avverrà via syncRetailerMappings.
   }
 
   return (

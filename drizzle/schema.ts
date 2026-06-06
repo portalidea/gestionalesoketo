@@ -164,10 +164,7 @@ export const retailers = pgTable("retailers", {
   phone: varchar("phone", { length: 50 }),
   email: varchar("email", { length: 320 }),
   contactPerson: varchar("contactPerson", { length: 255 }),
-  fattureInCloudCompanyId: varchar("fattureInCloudCompanyId", { length: 100 }),
-  fattureInCloudAccessToken: text("fattureInCloudAccessToken"),
-  fattureInCloudRefreshToken: text("fattureInCloudRefreshToken"),
-  fattureInCloudTokenExpiresAt: timestamp("fattureInCloudTokenExpiresAt", { withTimezone: true }),
+
   lastSyncAt: timestamp("lastSyncAt", { withTimezone: true }),
   syncEnabled: integer("syncEnabled").default(0).notNull(),
   notes: text("notes"),
@@ -175,8 +172,7 @@ export const retailers = pgTable("retailers", {
   pricingPackageId: uuid("pricingPackageId").references(() => pricingPackages.id, {
     onDelete: "set null",
   }),
-  // M3: ID cliente in anagrafica FiC single-tenant (NULL = blocca generazione proforma)
-  ficClientId: integer("ficClientId"),
+
   // M6.2.B: condizioni di pagamento default per il retailer
   paymentTerms: paymentTermsEnum("paymentTerms").default("advance_transfer").notNull(),
   // M7-A: affiliato che ha portato questo retailer
@@ -526,26 +522,47 @@ export type PricingPackage = typeof pricingPackages.$inferSelect;
 export type InsertPricingPackage = typeof pricingPackages.$inferInsert;
 
 /**
- * System integrations — token OAuth e config delle integrazioni a livello
- * sistema (singleton per type). Phase B M3 introduce single-tenant FiC:
- * type='fattureincloud' con i token dell'account E-Keto Food Srls.
- * RLS admin-only (contiene access/refresh token).
+ * ficConnections — connessioni OAuth FiC per-company (M11.C).
+ * Ogni company ha la propria connessione con token separati.
  */
-export const systemIntegrations = pgTable("systemIntegrations", {
+export const ficConnections = pgTable("ficConnections", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  type: varchar("type", { length: 50 }).notNull().unique(),
+  companyId: uuid("companyId")
+    .notNull()
+    .unique()
+    .references(() => companies.id, { onDelete: "cascade" }),
+  ficCompanyId: varchar("ficCompanyId", { length: 100 }),
   accessToken: text("accessToken"),
   refreshToken: text("refreshToken"),
-  expiresAt: timestamp("expiresAt", { withTimezone: true }),
-  accountId: varchar("accountId", { length: 100 }),
-  scopes: text("scopes"),
-  metadata: jsonb("metadata").default(sql`'{}'::jsonb`).notNull(),
+  tokenExpiresAt: timestamp("tokenExpiresAt", { withTimezone: true }),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export type SystemIntegration = typeof systemIntegrations.$inferSelect;
-export type InsertSystemIntegration = typeof systemIntegrations.$inferInsert;
+export type FicConnection = typeof ficConnections.$inferSelect;
+export type InsertFicConnection = typeof ficConnections.$inferInsert;
+
+/**
+ * retailerFicMapping — mapping retailer ↔ ficClientId per-company (M11.C).
+ * Lo stesso retailer può avere ficClientId diversi su FiC di company diverse.
+ */
+export const retailerFicMapping = pgTable("retailerFicMapping", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  retailerId: uuid("retailerId")
+    .notNull()
+    .references(() => retailers.id, { onDelete: "cascade" }),
+  companyId: uuid("companyId")
+    .notNull()
+    .references(() => companies.id, { onDelete: "cascade" }),
+  ficClientId: integer("ficClientId").notNull(),
+  createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  uniqueRetailerCompany: sql`UNIQUE ("retailerId", "companyId")`,
+}));
+
+export type RetailerFicMapping = typeof retailerFicMapping.$inferSelect;
+export type InsertRetailerFicMapping = typeof retailerFicMapping.$inferInsert;
 
 /**
  * Proforma queue — coda retry per generazione proforma FiC fallite (M3).

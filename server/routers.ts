@@ -13,12 +13,20 @@ import { supabaseAdmin } from "./_core/supabase";
 import { ENV } from "./_core/env";
 import * as db from "./db";
 import {
-  createFicProforma,
+  createFicProformaForCompany,
   disconnectFic,
+  disconnectFicForCompany,
   getFicAuthorizationUrl,
+  getFicAuthorizationUrlForCompany,
   getFicClients,
   getFicStatus,
+  getFicStatusForCompany,
   refreshFicClients,
+  refreshFicClientsForCompany,
+  getRetailerFicClientId,
+  syncRetailerFicMappings,
+  getActiveFicConnection,
+  getFicConnection,
 } from "./fic-integration";
 import { ddtImportsRouter } from "./ddt-imports-router";
 import { retailerPortalRouter } from "./retailer-portal-router";
@@ -305,10 +313,7 @@ export const appRouter = router({
           phone: z.string().optional(),
           email: z.string().email().optional(),
           contactPerson: z.string().optional(),
-          fattureInCloudCompanyId: z.string().optional(),
           notes: z.string().optional(),
-          // M3.0.6: ficClientId in creazione (workflow "import da FiC")
-          ficClientId: z.number().int().positive().optional(),
           // M7-A: affiliato opzionale in creazione
           affiliateId: z.string().uuid().optional(),
           // M11.A.markup: pricing model
@@ -343,7 +348,6 @@ export const appRouter = router({
           phone: z.string().optional(),
           email: z.string().email().optional(),
           contactPerson: z.string().optional(),
-          fattureInCloudCompanyId: z.string().optional(),
           syncEnabled: z.number().optional(),
           notes: z.string().optional(),
           // M11.A.markup: pricing model
@@ -404,6 +408,10 @@ export const appRouter = router({
      * Phase B M3: associa retailer a cliente FiC (single-tenant).
      * Pre-condition per generazione proforma su TRANSFER.
      */
+    /**
+     * M11.C: assignFicClient ora scrive su retailerFicMapping per-company.
+     * Mantiene backward-compat per UI legacy.
+     */
     assignFicClient: writerProcedure
       .input(
         z.object({
@@ -411,8 +419,30 @@ export const appRouter = router({
           ficClientId: z.number().int().positive().nullable(),
         }),
       )
-      .mutation(async ({ input }) => {
-        await db.assignFicClientToRetailer(input.retailerId, input.ficClientId);
+      .mutation(async ({ input, ctx }) => {
+        const { retailerFicMapping } = await import("../drizzle/schema");
+        const { eq: eqFn, and: andFn } = await import("drizzle-orm");
+        const db2 = await db.getDb();
+        if (!db2) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+        if (input.ficClientId === null) {
+          // Rimuovi mapping
+          await db2.delete(retailerFicMapping).where(
+            andFn(
+              eqFn(retailerFicMapping.retailerId, input.retailerId),
+              eqFn(retailerFicMapping.companyId, ctx.activeCompanyId),
+            ),
+          );
+        } else {
+          // Upsert mapping
+          await db2.insert(retailerFicMapping).values({
+            retailerId: input.retailerId,
+            companyId: ctx.activeCompanyId,
+            ficClientId: input.ficClientId,
+          }).onConflictDoUpdate({
+            target: [retailerFicMapping.retailerId, retailerFicMapping.companyId],
+            set: { ficClientId: input.ficClientId, updatedAt: new Date() },
+          });
+        }
         return { success: true };
       }),
     /**
@@ -850,14 +880,16 @@ export const appRouter = router({
                 "Pacchetto commerciale non assegnato al rivenditore — assegnalo prima di generare proforma",
             });
           }
-          if (!retailer.ficClientId) {
+          // M11.C: verifica ficClientId via retailerFicMapping
+          const transferFicClientId = await getRetailerFicClientId(input.retailerId, ctx.activeCompanyId);
+          if (!transferFicClientId) {
             throw new TRPCError({
               code: "PRECONDITION_FAILED",
               message:
-                "Cliente FiC non mappato per questo rivenditore — mappalo prima di generare proforma",
+                "Cliente FiC non mappato per questo rivenditore — configura il mapping in Impostazioni → Integrazioni",
             });
           }
-          const fic = await getFicStatus();
+          const fic = await getFicStatusForCompany(ctx.activeCompanyId);
           if (!fic.connected) {
             throw new TRPCError({
               code: "PRECONDITION_FAILED",
@@ -877,7 +909,13 @@ export const appRouter = router({
           companyId: ctx.activeCompanyId, // M11.A
         });
 
-        if (!input.generateProforma || !retailer || !retailer.ficClientId) {
+        if (!input.generateProforma) {
+          return { movement, proforma: null };
+        }
+
+        // M11.C: recupera ficClientId per-company
+        const ficClientIdForProforma = await getRetailerFicClientId(input.retailerId, ctx.activeCompanyId);
+        if (!ficClientIdForProforma) {
           return { movement, proforma: null };
         }
 
@@ -901,7 +939,7 @@ export const appRouter = router({
           : "";
 
         const payload = {
-          ficClientId: retailer.ficClientId,
+          ficClientId: ficClientIdForProforma,
           date: new Date().toISOString().slice(0, 10),
           totalGross: parseFloat(pricingResult.total),
           notesInternal: `Generato da TRANSFER ${movement.id}${batchSuffix}`,
@@ -916,7 +954,7 @@ export const appRouter = router({
         };
 
         try {
-          const proforma = await createFicProforma(payload);
+          const proforma = await createFicProformaForCompany(ctx.activeCompanyId, payload);
           await db.setStockMovementProforma(movement.id, proforma.id, proforma.number);
           return {
             movement: { ...movement, ficProformaId: proforma.id, ficProformaNumber: proforma.number },
@@ -1435,6 +1473,7 @@ export const appRouter = router({
 
   // ============= FIC INTEGRATION (Phase B M3) =============
   ficIntegration: router({
+    // Legacy: status senza companyId (backward compat)
     getStatus: staffProcedure.query(async () => {
       const t = Date.now();
       const r = await getFicStatus();
@@ -1443,6 +1482,39 @@ export const appRouter = router({
       return r;
     }),
 
+    // M11.C: status per company specifica
+    getStatusForCompany: staffProcedure
+      .input(z.object({ companyId: uuid }))
+      .query(async ({ input }) => {
+        return await getFicStatusForCompany(input.companyId);
+      }),
+
+    // M11.C: lista status per tutte le company accessibili
+    listConnections: staffProcedure.query(async ({ ctx }) => {
+      // Get all companies the user can access
+      const userCompanies = (ctx as any).userCompanies ?? [];
+      const results = [];
+      for (const comp of userCompanies) {
+        const status = await getFicStatusForCompany(comp.id);
+        results.push({
+          companyId: comp.id,
+          companyName: comp.name,
+          ...status,
+        });
+      }
+      // If no userCompanies in context, fallback to known companies
+      if (results.length === 0) {
+        const eKetoStatus = await getFicStatusForCompany("00000000-0000-0000-0000-000000000001");
+        const soKetoStatus = await getFicStatusForCompany("00000000-0000-0000-0000-000000000002");
+        results.push(
+          { companyId: "00000000-0000-0000-0000-000000000001", companyName: "E-Keto Food Srls", ...eKetoStatus },
+          { companyId: "00000000-0000-0000-0000-000000000002", companyName: "SoKeto Srl", ...soKetoStatus },
+        );
+      }
+      return results;
+    }),
+
+    // Legacy: startOAuth senza companyId
     startOAuth: adminProcedure
       .input(z.object({ forceLogin: z.boolean().optional() }).optional())
       .query(async ({ input }) => {
@@ -1456,10 +1528,47 @@ export const appRouter = router({
         }
       }),
 
+    // M11.C: startOAuth per company specifica
+    startOAuthForCompany: adminProcedure
+      .input(z.object({ companyId: uuid, forceLogin: z.boolean().optional() }))
+      .query(async ({ input }) => {
+        try {
+          return { url: getFicAuthorizationUrlForCompany(input.companyId, { forceLogin: input.forceLogin }) };
+        } catch (e) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: (e as Error).message,
+          });
+        }
+      }),
+
+    // Legacy: disconnect senza companyId
     disconnect: adminProcedure.mutation(async () => {
       const result = await disconnectFic();
       return { success: true, deleted: result.deleted };
     }),
+
+    // M11.C: disconnect per company specifica
+    disconnectForCompany: adminProcedure
+      .input(z.object({ companyId: uuid }))
+      .mutation(async ({ input }) => {
+        const result = await disconnectFicForCompany(input.companyId);
+        return { success: true, deleted: result.deleted };
+      }),
+
+    // M11.C: sincronizza mapping retailer ↔ FiC client per company
+    syncRetailerMappings: adminProcedure
+      .input(z.object({ companyId: uuid }))
+      .mutation(async ({ input }) => {
+        try {
+          return await syncRetailerFicMappings(input.companyId);
+        } catch (e) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: (e as Error).message,
+          });
+        }
+      }),
   }),
 
   // ============= FIC CLIENTS CACHE (Phase B M3) =============
@@ -1521,7 +1630,7 @@ export const appRouter = router({
      */
     retry: writerProcedure
       .input(z.object({ id: uuid }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
         const list = await db.getProformaQueueList();
         const row = list.find((r) => r.id === input.id);
         if (!row) {
@@ -1542,8 +1651,8 @@ export const appRouter = router({
 
         await db.markProformaQueueProcessing(row.id);
         try {
-          const payload = row.payload as Parameters<typeof createFicProforma>[0];
-          const proforma = await createFicProforma(payload);
+          const payload = row.payload as Parameters<typeof createFicProformaForCompany>[1];
+          const proforma = await createFicProformaForCompany(ctx.activeCompanyId, payload);
           await db.setStockMovementProforma(
             row.transferMovementId,
             proforma.id,
@@ -1618,11 +1727,9 @@ export const appRouter = router({
     disconnect: writerProcedure
       .input(z.object({ retailerId: uuid }))
       .mutation(async ({ input }) => {
+        // M11.C: dead FiC columns removed from retailers table.
+        // Legacy sync disconnect now only resets syncEnabled.
         await db.updateRetailer(input.retailerId, {
-          fattureInCloudCompanyId: null,
-          fattureInCloudAccessToken: null,
-          fattureInCloudRefreshToken: null,
-          fattureInCloudTokenExpiresAt: null,
           syncEnabled: 0,
         });
         return { success: true };

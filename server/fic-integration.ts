@@ -1,28 +1,37 @@
 /**
- * Phase B M3 — Fatture in Cloud single-tenant integration.
+ * M11.C — Fatture in Cloud multi-tenant integration.
  *
- * Single-tenant: 1 sola installazione FiC per l'intero sistema (account
- * E-Keto Food Srls). Token salvati in `systemIntegrations` con type='fattureincloud'.
+ * Multi-tenant: ogni company ha la propria connessione FiC salvata in
+ * `ficConnections` (una riga per company). Il token viene selezionato
+ * in base a ctx.activeCompanyId passato dal caller.
  *
- * Differenza con `fattureincloud-oauth.ts` legacy (per-retailer): qui il
- * companyId è l'account FiC di SoKeto, e l'integrazione mantiene l'unico
- * accessToken usato per tutte le operazioni (creazione clienti FiC,
- * generazione proforma, ecc.).
- *
- * Il modulo legacy resta in piedi per ora (rollback safety); cleanup
- * pianificato in 0006 con MIGRATION_LOG.
+ * Sostituisce il vecchio modello single-tenant basato su `systemIntegrations`.
  */
 import axios from "axios";
 import {
   exchangeCodeForTokens,
-  getOAuthConfig,
   isTokenExpired,
   refreshAccessToken,
 } from "./fattureincloud-oauth";
-import * as db from "./db";
+import { eq, and } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+import {
+  ficConnections,
+  FicConnection,
+  retailerFicMapping,
+  companies,
+  retailers,
+} from "../drizzle/schema";
 
 export const FIC_INTEGRATION_TYPE = "fattureincloud";
 const FIC_API_BASE = "https://api-v2.fattureincloud.it";
+
+// ─── Company → env slug mapping ────────────────────────────────────────────
+const COMPANY_ENV_SLUG_MAP: Record<string, string> = {
+  "00000000-0000-0000-0000-000000000001": "EKETO_FOOD",
+  "00000000-0000-0000-0000-000000000002": "SOKETO_SRL",
+};
 
 export interface FicCompanyInfo {
   id: number;
@@ -30,12 +39,6 @@ export interface FicCompanyInfo {
   type?: string;
 }
 
-/**
- * Shape parziale di un cliente FiC. I campi address_* + contact sono
- * usati dal flow "Crea retailer da cliente FiC" (M3.0.6) per auto-popolare
- * il form. Per l'elenco completo vedi:
- * https://developers.fattureincloud.it/docs/api-reference/c/companyId/entities/clients
- */
 export interface FicClientInfo {
   id: number;
   name: string;
@@ -54,102 +57,246 @@ export interface FicClientInfo {
   contact_person?: string;
 }
 
-interface FicIntegrationMetadata {
-  companyId?: number;
-  companyName?: string;
-  clientsCache?: FicClientInfo[];
-  clientsCacheRefreshedAt?: string;
+export interface FicVatType {
+  id: number;
+  value: number;
+  description: string;
+  is_disabled: boolean;
 }
 
-/**
- * Stato integrazione FiC esposto in UI.
- */
+export interface FicPaymentMethod {
+  id: number;
+  name: string;
+  type: string;
+  is_default: boolean;
+}
+
 export interface FicIntegrationStatus {
   connected: boolean;
   expired: boolean;
+  ficCompanyId: string | null;
+  tokenExpiresAt: string | null;
+  configured: boolean;
+}
+
+// ─── DB helper (internal) ──────────────────────────────────────────────────
+
+let _db: ReturnType<typeof drizzle> | null = null;
+function getDb() {
+  if (!_db) {
+    const url = process.env.DATABASE_URL;
+    if (!url) throw new Error("DATABASE_URL not set");
+    const client = postgres(url);
+    _db = drizzle(client);
+  }
+  return _db;
+}
+
+// ─── Credentials lookup ────────────────────────────────────────────────────
+
+export interface FicOAuthCredentials {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+}
+
+/**
+ * Ritorna le credenziali OAuth FiC per una specifica company.
+ * Legge da env vars: FATTUREINCLOUD_CLIENT_ID_<SLUG>, FATTUREINCLOUD_CLIENT_SECRET_<SLUG>
+ * Fallback: FATTUREINCLOUD_CLIENT_ID / FATTUREINCLOUD_CLIENT_SECRET (legacy single-tenant)
+ */
+export function getFicClientCredentials(companyId: string): FicOAuthCredentials | null {
+  const slug = COMPANY_ENV_SLUG_MAP[companyId];
+  const redirectUri = process.env.FATTUREINCLOUD_REDIRECT_URI;
+  if (!redirectUri) return null;
+
+  // Try per-company env vars first
+  if (slug) {
+    const clientId = process.env[`FATTUREINCLOUD_CLIENT_ID_${slug}`];
+    const clientSecret = process.env[`FATTUREINCLOUD_CLIENT_SECRET_${slug}`];
+    if (clientId && clientSecret) {
+      return { clientId, clientSecret, redirectUri };
+    }
+  }
+
+  // Fallback to legacy single env vars
+  const clientId = process.env.FATTUREINCLOUD_CLIENT_ID;
+  const clientSecret = process.env.FATTUREINCLOUD_CLIENT_SECRET;
+  if (clientId && clientSecret) {
+    return { clientId, clientSecret, redirectUri };
+  }
+
+  return null;
+}
+
+// ─── Connection helpers ────────────────────────────────────────────────────
+
+/**
+ * Recupera la connessione FiC per una company specifica.
+ */
+export async function getFicConnection(companyId: string): Promise<FicConnection | null> {
+  const db = getDb();
+  const [row] = await db
+    .select()
+    .from(ficConnections)
+    .where(eq(ficConnections.companyId, companyId))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Recupera la connessione FiC attiva per una company, con auto-refresh del token.
+ * Throw se non connessa o se il refresh fallisce.
+ */
+export async function getActiveFicConnection(companyId: string): Promise<{
+  accessToken: string;
+  ficCompanyId: number;
+}> {
+  const conn = await getFicConnection(companyId);
+  if (!conn || !conn.accessToken) {
+    throw new FicNotConnectedError(companyId);
+  }
+  if (!conn.ficCompanyId) {
+    throw new Error("Connessione FiC senza ficCompanyId — riconnetti l'integrazione");
+  }
+
+  const ficCompanyId = parseInt(conn.ficCompanyId, 10);
+
+  // Check token expiry and refresh if needed
+  if (conn.tokenExpiresAt && isTokenExpired(conn.tokenExpiresAt) && conn.refreshToken) {
+    const creds = getFicClientCredentials(companyId);
+    if (!creds) throw new FicReauthRequiredError(companyId);
+
+    try {
+      const refreshed = await refreshAccessToken(creds, conn.refreshToken);
+      const newExpiresAt = new Date(Date.now() + refreshed.expires_in * 1000);
+
+      const db = getDb();
+      await db
+        .update(ficConnections)
+        .set({
+          accessToken: refreshed.access_token,
+          refreshToken: refreshed.refresh_token,
+          tokenExpiresAt: newExpiresAt,
+          updatedAt: new Date(),
+        })
+        .where(eq(ficConnections.companyId, companyId));
+
+      console.log(`[fic] Token refreshed for company ${companyId}, expires ${newExpiresAt.toISOString()}`);
+      return { accessToken: refreshed.access_token, ficCompanyId };
+    } catch (e) {
+      console.error(`[fic] Token refresh failed for company ${companyId}:`, e);
+      throw new FicReauthRequiredError(companyId);
+    }
+  }
+
+  // Token expired and no refresh token
+  if (conn.tokenExpiresAt && isTokenExpired(conn.tokenExpiresAt)) {
+    throw new FicReauthRequiredError(companyId);
+  }
+
+  return { accessToken: conn.accessToken, ficCompanyId };
+}
+
+// ─── Status ────────────────────────────────────────────────────────────────
+
+export async function getFicStatusForCompany(companyId: string): Promise<FicIntegrationStatus> {
+  const creds = getFicClientCredentials(companyId);
+  const conn = await getFicConnection(companyId);
+
+  if (!conn || !conn.accessToken) {
+    return {
+      connected: false,
+      expired: false,
+      ficCompanyId: null,
+      tokenExpiresAt: null,
+      configured: !!creds,
+    };
+  }
+
+  const expired = conn.tokenExpiresAt ? isTokenExpired(conn.tokenExpiresAt) : false;
+
+  return {
+    connected: true,
+    expired,
+    ficCompanyId: conn.ficCompanyId ?? null,
+    tokenExpiresAt: conn.tokenExpiresAt?.toISOString() ?? null,
+    configured: !!creds,
+  };
+}
+
+/**
+ * Legacy wrapper — getFicStatus() senza companyId.
+ * Usa la prima connessione trovata (backward compat per UI che non passa companyId).
+ */
+export async function getFicStatus(): Promise<FicIntegrationStatus & {
   accountId: string | null;
   companyId: number | null;
   companyName: string | null;
-  expiresAt: string | null;
   scopes: string | null;
-  configured: boolean; // env vars presenti
-}
-
-export async function getFicStatus(): Promise<FicIntegrationStatus> {
-  const config = getOAuthConfig();
-  const integration = await db.getSystemIntegration(FIC_INTEGRATION_TYPE);
-
-  if (!integration || !integration.accessToken) {
+}> {
+  const db = getDb();
+  const [conn] = await db.select().from(ficConnections).limit(1);
+  if (!conn || !conn.accessToken) {
     return {
       connected: false,
       expired: false,
       accountId: null,
       companyId: null,
       companyName: null,
-      expiresAt: null,
+      ficCompanyId: null,
+      tokenExpiresAt: null,
       scopes: null,
-      configured: !!config,
+      configured: !!process.env.FATTUREINCLOUD_CLIENT_ID,
     };
   }
-
-  const meta = (integration.metadata ?? {}) as FicIntegrationMetadata;
-  const expired = integration.expiresAt
-    ? isTokenExpired(integration.expiresAt)
-    : false;
-
+  const expired = conn.tokenExpiresAt ? isTokenExpired(conn.tokenExpiresAt) : false;
   return {
     connected: true,
     expired,
-    accountId: integration.accountId ?? null,
-    companyId: meta.companyId ?? null,
-    companyName: meta.companyName ?? null,
-    expiresAt: integration.expiresAt?.toISOString() ?? null,
-    scopes: integration.scopes ?? null,
-    configured: !!config,
+    accountId: conn.ficCompanyId ?? null,
+    companyId: conn.ficCompanyId ? parseInt(conn.ficCompanyId, 10) : null,
+    companyName: null,
+    ficCompanyId: conn.ficCompanyId ?? null,
+    tokenExpiresAt: conn.tokenExpiresAt?.toISOString() ?? null,
+    scopes: null,
+    configured: true,
   };
 }
 
+// ─── OAuth flow ────────────────────────────────────────────────────────────
+
+const OAUTH_SCOPES = [
+  "entity.clients:r",
+  "entity.clients:a",
+  "issued_documents.proformas:a",
+  "settings:r",
+].join(" ");
+
 /**
- * Costruisce URL OAuth single-tenant. Il `state` è solo un marker statico
- * dato che non c'è un retailer-id da preservare nello stato (single-tenant
- * = 1 sola integrazione di sistema).
- *
- * `forceLogin=true` aggiunge `prompt=login` (param OIDC standard, non
- * documentato esplicitamente da FiC ma RFC 6749 §3.1 dice che il provider
- * DEVE ignorare param sconosciuti → safe da inviare). Se FiC lo onora
- * forza re-autenticazione interrompendo la sessione cookie e rimostrando
- * il selettore azienda quando l'utente ha più company. Se lo ignora,
- * comportamento identico al default. Bug M3.0.2.
+ * Genera URL OAuth per una specifica company.
+ * Il state include il companyId per il callback.
  */
-export function getFicAuthorizationUrl(opts?: { forceLogin?: boolean }): string {
-  const config = getOAuthConfig();
-  if (!config)
+export function getFicAuthorizationUrlForCompany(
+  companyId: string,
+  opts?: { forceLogin?: boolean },
+): string {
+  const creds = getFicClientCredentials(companyId);
+  if (!creds) {
     throw new Error(
-      "OAuth FiC non configurato — mancano FATTUREINCLOUD_CLIENT_ID/SECRET/REDIRECT_URI",
+      `OAuth FiC non configurato per company ${companyId} — mancano env vars FATTUREINCLOUD_CLIENT_ID/SECRET`,
     );
-  // FiC scope format: RESOURCE:LEVEL dove `issued_documents` deve essere
-  // specificato per tipo documento (proformas, invoices, ...). Lo scope
-  // generico `issued_documents:a` NON esiste e provoca "scope is not valid".
-  // Ref: https://developers.fattureincloud.it/docs/basics/scopes/
-  // M3 ha bisogno di:
-  // - entity.clients:r → leggere lista clienti FiC (cache + dropdown UI)
-  // - entity.clients:a → riservato per future auto-creazione clienti FiC
-  //   da retailer (M4+); inclusa ora per evitare re-consent OAuth dopo.
-  // - issued_documents.proformas:a → POST /issued_documents type=proforma.
-  //   `:a` (full write) include implicitamente `:r`.
-  // - settings:r → endpoint /user/companies durante discovery + future
-  //   letture di config account.
+  }
+
+  const state = JSON.stringify({ companyId, ts: Date.now() });
+  const stateEncoded = Buffer.from(state).toString("base64url");
+
   const params: Record<string, string> = {
     response_type: "code",
-    client_id: config.clientId,
-    redirect_uri: config.redirectUri,
-    scope: [
-      "entity.clients:r",
-      "entity.clients:a",
-      "issued_documents.proformas:a",
-      "settings:r",
-    ].join(" "),
-    state: "soketo-single-tenant",
+    client_id: creds.clientId,
+    redirect_uri: creds.redirectUri,
+    scope: OAUTH_SCOPES,
+    state: stateEncoded,
   };
   if (opts?.forceLogin) {
     params.prompt = "login";
@@ -158,90 +305,90 @@ export function getFicAuthorizationUrl(opts?: { forceLogin?: boolean }): string 
 }
 
 /**
- * Completa il flusso OAuth: scambia code → token, chiama /user/companies
- * per scoprire la company FiC, salva tutto in systemIntegrations.
+ * Legacy wrapper for backward compat.
+ */
+export function getFicAuthorizationUrl(opts?: { forceLogin?: boolean }): string {
+  // Default to SoKeto Srl for backward compat
+  return getFicAuthorizationUrlForCompany(
+    "00000000-0000-0000-0000-000000000002",
+    opts,
+  );
+}
+
+/**
+ * Completa il flusso OAuth per una company specifica.
+ * Scambia code → token, chiama /user/companies per scoprire la company FiC,
+ * UPSERT su ficConnections.
+ */
+export async function completeFicOAuthForCompany(
+  code: string,
+  companyId: string,
+): Promise<{ ficCompanyId: number; ficCompanyName: string }> {
+  const creds = getFicClientCredentials(companyId);
+  if (!creds) throw new Error(`OAuth FiC non configurato per company ${companyId}`);
+
+  const tokens = await exchangeCodeForTokens(creds, code);
+  const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
+
+  // Discovery: prendi la prima company FiC disponibile
+  const ficCompanies = await listFicCompanies(tokens.access_token);
+  const ficCompany = ficCompanies[0];
+  if (!ficCompany) throw new Error("Account FiC senza alcuna company associata");
+
+  const db = getDb();
+  await db
+    .insert(ficConnections)
+    .values({
+      companyId,
+      ficCompanyId: String(ficCompany.id),
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      tokenExpiresAt: expiresAt,
+    })
+    .onConflictDoUpdate({
+      target: ficConnections.companyId,
+      set: {
+        ficCompanyId: String(ficCompany.id),
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        tokenExpiresAt: expiresAt,
+        updatedAt: new Date(),
+      },
+    });
+
+  console.log(`[fic] OAuth completed for company ${companyId} → FiC company ${ficCompany.id} (${ficCompany.name})`);
+  return { ficCompanyId: ficCompany.id, ficCompanyName: ficCompany.name };
+}
+
+/**
+ * Legacy wrapper — completeFicOAuth senza companyId (backward compat).
  */
 export async function completeFicOAuth(code: string): Promise<{
   companyId: number;
   companyName: string;
 }> {
-  const config = getOAuthConfig();
-  if (!config) throw new Error("OAuth FiC non configurato");
-
-  const tokens = await exchangeCodeForTokens(config, code);
-  const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
-
-  // Discovery: prendi la prima company disponibile come "company di lavoro"
-  // single-tenant. Se l'account ha più companies (raro per E-Keto Food),
-  // l'admin dovrà eventualmente cambiare in futuro via env override o UI.
-  const companies = await listFicCompanies(tokens.access_token);
-  const company = companies[0];
-  if (!company) throw new Error("Account FiC senza alcuna company associata");
-
-  const metadata: FicIntegrationMetadata = {
-    companyId: company.id,
-    companyName: company.name,
-  };
-
-  await db.upsertSystemIntegration({
-    type: FIC_INTEGRATION_TYPE,
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token,
-    expiresAt,
-    accountId: String(company.id),
-    scopes: tokens.token_type ?? null,
-    metadata,
-  });
-
-  return { companyId: company.id, companyName: company.name };
-}
-
-export async function disconnectFic(): Promise<{ deleted: number }> {
-  const deleted = await db.deleteSystemIntegration(FIC_INTEGRATION_TYPE);
-  console.log(`[fic] disconnectFic — righe rimosse da systemIntegrations: ${deleted}`);
-  return { deleted };
+  const result = await completeFicOAuthForCompany(code, "00000000-0000-0000-0000-000000000002");
+  return { companyId: result.ficCompanyId, companyName: result.ficCompanyName };
 }
 
 /**
- * Recupera l'access token corrente, rinfrescandolo via refresh_token se
- * scaduto. Persiste i nuovi token in DB.
+ * Disconnette la company da FiC (DELETE ficConnections row).
  */
-export async function getValidFicAccessToken(): Promise<{
-  accessToken: string;
-  companyId: number;
-}> {
-  const integration = await db.getSystemIntegration(FIC_INTEGRATION_TYPE);
-  if (!integration || !integration.accessToken) {
-    throw new Error("Integrazione Fatture in Cloud non connessa");
-  }
-  const meta = (integration.metadata ?? {}) as FicIntegrationMetadata;
-  if (!meta.companyId) {
-    throw new Error("Integrazione FiC senza companyId — riconnetti l'integrazione");
-  }
-
-  if (
-    integration.expiresAt &&
-    isTokenExpired(integration.expiresAt) &&
-    integration.refreshToken
-  ) {
-    const config = getOAuthConfig();
-    if (!config) throw new Error("OAuth FiC non configurato");
-    const refreshed = await refreshAccessToken(config, integration.refreshToken);
-    const newExpiresAt = new Date(Date.now() + refreshed.expires_in * 1000);
-    await db.upsertSystemIntegration({
-      type: FIC_INTEGRATION_TYPE,
-      accessToken: refreshed.access_token,
-      refreshToken: refreshed.refresh_token,
-      expiresAt: newExpiresAt,
-      accountId: integration.accountId,
-      scopes: integration.scopes,
-      metadata: integration.metadata,
-    });
-    return { accessToken: refreshed.access_token, companyId: meta.companyId };
-  }
-
-  return { accessToken: integration.accessToken, companyId: meta.companyId };
+export async function disconnectFicForCompany(companyId: string): Promise<{ deleted: number }> {
+  const db = getDb();
+  const deleted = await db
+    .delete(ficConnections)
+    .where(eq(ficConnections.companyId, companyId))
+    .returning();
+  console.log(`[fic] disconnectFic company=${companyId} — righe rimosse: ${deleted.length}`);
+  return { deleted: deleted.length };
 }
+
+export async function disconnectFic(): Promise<{ deleted: number }> {
+  return disconnectFicForCompany("00000000-0000-0000-0000-000000000002");
+}
+
+// ─── FiC API helpers ───────────────────────────────────────────────────────
 
 async function listFicCompanies(accessToken: string): Promise<FicCompanyInfo[]> {
   try {
@@ -259,52 +406,23 @@ async function listFicCompanies(accessToken: string): Promise<FicCompanyInfo[]> 
 }
 
 /**
- * Recupera lista clienti dalla cache locale (systemIntegrations.metadata).
- *
- * M3.0.7 BUGFIX: la versione precedente cadeva in `refreshFicClients()` se
- * la cache era vuota, paginando fino a 50 pagine FiC API in modo SINCRONO
- * davanti a query frontend hot (es. /retailers/:id). Per N centinaia di
- * clienti FiC, l'utente vedeva la pagina caricare per minuti.
- *
- * Comportamento M3.0.7+: se cache vuota e `!forceRefresh`, ritorna
- * `{ clients: [], refreshedAt: null }` immediatamente. Il refresh diventa
- * **strettamente esplicito** — solo dal pulsante "Aggiorna lista clienti
- * FiC" su /settings/integrations o dal bottone inline "Aggiorna ora" nei
- * dropdown FiC client. Così le query frontend sono O(1) DB read e gli
- * empty state UI guidano l'utente al primo refresh manuale.
+ * Recupera lista clienti FiC per una company specifica.
+ * Pagina fino a 50 pagine (5000 clienti max).
  */
-export async function getFicClients(forceRefresh = false): Promise<{
-  clients: FicClientInfo[];
-  refreshedAt: string | null;
-}> {
-  const integration = await db.getSystemIntegration(FIC_INTEGRATION_TYPE);
-  if (!integration) throw new Error("Integrazione FiC non connessa");
-  const meta = (integration.metadata ?? {}) as FicIntegrationMetadata;
-  if (forceRefresh) {
-    return await refreshFicClients();
-  }
-  return {
-    clients: meta.clientsCache ?? [],
-    refreshedAt: meta.clientsCacheRefreshedAt ?? null,
-  };
-}
-
-export async function refreshFicClients(): Promise<{
+export async function refreshFicClientsForCompany(companyId: string): Promise<{
   clients: FicClientInfo[];
   refreshedAt: string;
 }> {
-  const { accessToken, companyId } = await getValidFicAccessToken();
+  const { accessToken, ficCompanyId } = await getActiveFicConnection(companyId);
   const clients: FicClientInfo[] = [];
   let page = 1;
-  // FiC paginazione: per_page max 100. Loop fino a esaurimento.
-  // Cap di sicurezza a 50 pagine (5000 clienti).
   while (page <= 50) {
     try {
       const r = await axios.get<{
         data: FicClientInfo[];
         current_page: number;
         last_page: number;
-      }>(`${FIC_API_BASE}/c/${companyId}/entities/clients`, {
+      }>(`${FIC_API_BASE}/c/${ficCompanyId}/entities/clients`, {
         headers: { Authorization: `Bearer ${accessToken}` },
         params: { per_page: 100, page },
       });
@@ -320,177 +438,137 @@ export async function refreshFicClients(): Promise<{
       );
     }
   }
-
-  const refreshedAt = new Date().toISOString();
-  const integration = await db.getSystemIntegration(FIC_INTEGRATION_TYPE);
-  if (integration) {
-    const meta = (integration.metadata ?? {}) as FicIntegrationMetadata;
-    await db.upsertSystemIntegration({
-      type: FIC_INTEGRATION_TYPE,
-      accessToken: integration.accessToken,
-      refreshToken: integration.refreshToken,
-      expiresAt: integration.expiresAt,
-      accountId: integration.accountId,
-      scopes: integration.scopes,
-      metadata: {
-        ...meta,
-        clientsCache: clients,
-        clientsCacheRefreshedAt: refreshedAt,
-      } satisfies FicIntegrationMetadata,
-    });
-  }
-
-  return { clients, refreshedAt };
+  return { clients, refreshedAt: new Date().toISOString() };
 }
 
-// ─── Single FiC Client fetch (by id) with cache ─────────────────────────
-const ficClientByIdCache = new Map<number, { data: FicClientInfo; fetchedAt: number }>();
-const FIC_CLIENT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 min
+/**
+ * Legacy wrapper — refreshFicClients senza companyId.
+ */
+export async function refreshFicClients(): Promise<{
+  clients: FicClientInfo[];
+  refreshedAt: string;
+}> {
+  return refreshFicClientsForCompany("00000000-0000-0000-0000-000000000002");
+}
 
 /**
- * Fetch un singolo cliente FiC per id.
- * Prima cerca nella clientsCache locale (metadata DB), poi fallback a API diretta.
- * Cache in-memory 5 min per evitare chiamate ripetute.
+ * Legacy wrapper — getFicClients (reads from first connection).
+ * M11.C: la cache clienti non è più in metadata DB, ma viene fetchata on-demand.
  */
-export async function getFicClientById(clientId: number): Promise<FicClientInfo> {
-  // Check in-memory cache
-  const cached = ficClientByIdCache.get(clientId);
+export async function getFicClients(forceRefresh = false): Promise<{
+  clients: FicClientInfo[];
+  refreshedAt: string | null;
+}> {
+  if (forceRefresh) {
+    return await refreshFicClients();
+  }
+  // Without metadata cache, return empty (UI should trigger refresh)
+  return { clients: [], refreshedAt: null };
+}
+
+// ─── Single FiC Client fetch (by id) with cache ───────────────────────────
+const ficClientByIdCache = new Map<string, { data: FicClientInfo; fetchedAt: number }>();
+const FIC_CLIENT_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Fetch un singolo cliente FiC per id, per una company specifica.
+ */
+export async function getFicClientByIdForCompany(
+  clientId: number,
+  companyId: string,
+): Promise<FicClientInfo> {
+  const cacheKey = `${companyId}:${clientId}`;
+  const cached = ficClientByIdCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < FIC_CLIENT_CACHE_TTL_MS) {
-    console.log(`[fic:getClientById] cache HIT id=${clientId}`);
     return cached.data;
   }
 
-  // Try clientsCache from DB metadata first (no API call)
-  try {
-    const { clients } = await getFicClients();
-    const fromCache = clients.find((c) => c.id === clientId);
-    if (fromCache) {
-      console.log(`[fic:getClientById] found in clientsCache id=${clientId} name=${fromCache.name}`);
-      ficClientByIdCache.set(clientId, { data: fromCache, fetchedAt: Date.now() });
-      return fromCache;
-    }
-  } catch (e) {
-    console.warn("[fic:getClientById] clientsCache lookup failed, trying API", e);
-  }
-
-  // Fallback: direct API call
-  console.log(`[fic:getClientById] API fetch id=${clientId}`);
-  const { accessToken, companyId } = await getValidFicAccessToken();
+  const { accessToken, ficCompanyId } = await getActiveFicConnection(companyId);
   try {
     const r = await axios.get<{ data: FicClientInfo }>(
-      `${FIC_API_BASE}/c/${companyId}/entities/clients/${clientId}`,
+      `${FIC_API_BASE}/c/${ficCompanyId}/entities/clients/${clientId}`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     const client = r.data?.data;
     if (!client) throw new Error(`FiC client id=${clientId} non trovato`);
-    ficClientByIdCache.set(clientId, { data: client, fetchedAt: Date.now() });
+    ficClientByIdCache.set(cacheKey, { data: client, fetchedAt: Date.now() });
     return client;
   } catch (e: any) {
-    console.error(`[fic:getClientById] API error for id=${clientId}:`, e?.response?.data ?? e?.message);
-    throw new Error(`Impossibile recuperare cliente FiC id=${clientId}: ${e?.response?.data?.error?.message ?? e?.message}`);
+    throw new Error(
+      `Impossibile recuperare cliente FiC id=${clientId}: ${e?.response?.data?.error?.message ?? e?.message}`,
+    );
   }
 }
 
-// ─── VAT Types cache in-memory ───────────────────────────────────────────
-
-export interface FicVatType {
-  id: number;
-  value: number; // es. 10, 22, 4
-  description: string;
-  is_disabled: boolean;
+/**
+ * Legacy wrapper — getFicClientById senza companyId (usa SoKeto default).
+ */
+export async function getFicClientById(clientId: number): Promise<FicClientInfo> {
+  return getFicClientByIdForCompany(clientId, "00000000-0000-0000-0000-000000000002");
 }
 
-const vatTypesCache = new Map<number, { data: FicVatType[]; fetchedAt: number }>();
-const VAT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minuti
+// ─── VAT Types cache ───────────────────────────────────────────────────────
+const vatTypesCache = new Map<string, { data: FicVatType[]; fetchedAt: number }>();
+const VAT_CACHE_TTL_MS = 5 * 60 * 1000;
 
-/**
- * Fetch vat_types da FiC per la company corrente, con cache in-memory 5 min.
- */
-export async function getFicVatTypes(): Promise<FicVatType[]> {
-  const { accessToken, companyId } = await getValidFicAccessToken();
-
-  const cached = vatTypesCache.get(companyId);
+export async function getFicVatTypesForCompany(companyId: string): Promise<FicVatType[]> {
+  const cacheKey = companyId;
+  const cached = vatTypesCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < VAT_CACHE_TTL_MS) {
     return cached.data;
   }
 
-  console.log(`[fic:vatTypes] Fetching vat_types for company ${companyId}...`);
-  try {
-    const r = await axios.get<{ data: FicVatType[] }>(
-      `${FIC_API_BASE}/c/${companyId}/info/vat_types`,
-      { headers: { Authorization: `Bearer ${accessToken}` } },
-    );
-    const types = (r.data?.data ?? []).filter((t) => !t.is_disabled);
-    vatTypesCache.set(companyId, { data: types, fetchedAt: Date.now() });
-    console.log(`[fic:vatTypes] Cached ${types.length} vat_types: ${types.map((t) => `${t.id}=${t.value}%`).join(", ")}`);
-    return types;
-  } catch (e: any) {
-    console.error("[fic:vatTypes] ERROR:", e?.response?.data ?? e?.message);
-    throw new Error(
-      `Impossibile leggere vat_types da FiC: ${e?.response?.data?.error?.message ?? e?.message}`,
-    );
-  }
+  const { accessToken, ficCompanyId } = await getActiveFicConnection(companyId);
+  const r = await axios.get<{ data: FicVatType[] }>(
+    `${FIC_API_BASE}/c/${ficCompanyId}/info/vat_types`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  const types = (r.data?.data ?? []).filter((t) => !t.is_disabled);
+  vatTypesCache.set(cacheKey, { data: types, fetchedAt: Date.now() });
+  return types;
 }
 
-/**
- * Trova il vat_type FiC corrispondente a una aliquota IVA (es. 10, 22, 4).
- * Throw se non trovato.
- */
+export async function getFicVatTypes(): Promise<FicVatType[]> {
+  return getFicVatTypesForCompany("00000000-0000-0000-0000-000000000002");
+}
+
+// ─── Payment Methods cache ─────────────────────────────────────────────────
+const paymentMethodsCache = new Map<string, { data: FicPaymentMethod[]; fetchedAt: number }>();
+const PM_CACHE_TTL_MS = 5 * 60 * 1000;
+
+export async function getFicPaymentMethodsForCompany(companyId: string): Promise<FicPaymentMethod[]> {
+  const cacheKey = companyId;
+  const cached = paymentMethodsCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < PM_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const { accessToken, ficCompanyId } = await getActiveFicConnection(companyId);
+  const r = await axios.get<{ data: FicPaymentMethod[] }>(
+    `${FIC_API_BASE}/c/${ficCompanyId}/info/payment_methods`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  const methods = r.data?.data ?? [];
+  paymentMethodsCache.set(cacheKey, { data: methods, fetchedAt: Date.now() });
+  return methods;
+}
+
+export async function getFicPaymentMethods(): Promise<FicPaymentMethod[]> {
+  return getFicPaymentMethodsForCompany("00000000-0000-0000-0000-000000000002");
+}
+
+// ─── Utility functions ─────────────────────────────────────────────────────
+
 function findVatTypeId(vatTypes: FicVatType[], vatRate: number): number {
   const match = vatTypes.find((t) => t.value === vatRate);
   if (!match) {
     throw new Error(
-      `VAT rate ${vatRate}% non configurata su FiC. Configurala manualmente prima. Disponibili: ${vatTypes.map((t) => `${t.value}% (id=${t.id})`).join(", ")}`,
+      `VAT rate ${vatRate}% non configurata su FiC. Disponibili: ${vatTypes.map((t) => `${t.value}% (id=${t.id})`).join(", ")}`,
     );
   }
   return match.id;
 }
 
-// ─── Payment Methods cache in-memory ──────────────────────────────────────
-
-export interface FicPaymentMethod {
-  id: number;
-  name: string;
-  type: string; // 'standard', etc.
-  is_default: boolean;
-}
-
-const paymentMethodsCache = new Map<number, { data: FicPaymentMethod[]; fetchedAt: number }>();
-const PM_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minuti
-
-/**
- * Fetch payment_methods da FiC per la company corrente, con cache in-memory 5 min.
- */
-export async function getFicPaymentMethods(): Promise<FicPaymentMethod[]> {
-  const { accessToken, companyId } = await getValidFicAccessToken();
-
-  const cached = paymentMethodsCache.get(companyId);
-  if (cached && Date.now() - cached.fetchedAt < PM_CACHE_TTL_MS) {
-    return cached.data;
-  }
-
-  console.log(`[fic:paymentMethods] Fetching payment_methods for company ${companyId}...`);
-  try {
-    const r = await axios.get<{ data: FicPaymentMethod[] }>(
-      `${FIC_API_BASE}/c/${companyId}/info/payment_methods`,
-      { headers: { Authorization: `Bearer ${accessToken}` } },
-    );
-    const methods = r.data?.data ?? [];
-    paymentMethodsCache.set(companyId, { data: methods, fetchedAt: Date.now() });
-    console.log(`[fic:paymentMethods] Cached ${methods.length} methods: ${methods.map((m) => `${m.id}="${m.name}"`).join(", ")}`);
-    return methods;
-  } catch (e: any) {
-    console.error("[fic:paymentMethods] ERROR:", e?.response?.data ?? e?.message);
-    throw new Error(
-      `Impossibile leggere payment_methods da FiC: ${e?.response?.data?.error?.message ?? e?.message}`,
-    );
-  }
-}
-
-/**
- * Trova il payment_method FiC per nome (case-insensitive, partial match).
- * Fallback: ritorna il default, o il primo disponibile.
- */
 function findPaymentMethodId(methods: FicPaymentMethod[], nameHint: string): number {
   const lower = nameHint.toLowerCase();
   const exact = methods.find((m) => m.name.toLowerCase() === lower);
@@ -498,22 +576,11 @@ function findPaymentMethodId(methods: FicPaymentMethod[], nameHint: string): num
   const partial = methods.find((m) => m.name.toLowerCase().includes(lower));
   if (partial) return partial.id;
   const def = methods.find((m) => m.is_default);
-  if (def) {
-    console.warn(`[fic:paymentMethod] "${nameHint}" non trovato, uso default "${def.name}" (id=${def.id})`);
-    return def.id;
-  }
-  if (methods.length > 0) {
-    console.warn(`[fic:paymentMethod] "${nameHint}" non trovato, uso primo disponibile "${methods[0].name}" (id=${methods[0].id})`);
-    return methods[0].id;
-  }
-  throw new Error(`Nessun metodo di pagamento configurato su FiC. Configura almeno un metodo.`);
+  if (def) return def.id;
+  if (methods.length > 0) return methods[0].id;
+  throw new Error(`Nessun metodo di pagamento configurato su FiC.`);
 }
 
-/**
- * Compute payments_list amount using Italian fiscal rule:
- * VAT is calculated on the total net per VAT group, NOT per-row.
- * This matches how FiC calculates amount_gross internally.
- */
 function computePaymentsAmount(items: Array<{
   quantity: number;
   unitPrice: number;
@@ -535,84 +602,62 @@ function computePaymentsAmount(items: Array<{
   return Math.round((totalGross + Number.EPSILON) * 100) / 100;
 }
 
-/**
- * Crea proforma su FiC dato payload retailer-side.
- *
- * Ritorna {id, number} su success, throw su qualsiasi errore (rete, 4xx,
- * 5xx). Il caller decide se enqueue per retry o fail hard.
- *
- * M6.2.A FIX:
- * - vat.id (ID del vat_type FiC) invece di vat.value
- * - payment_method.id (ID del payment_method FiC) invece di name
- * - payments_list con singola rata calcolata con regola fiscale italiana
- */
-export async function createFicProforma(input: {
-  ficClientId: number;
-  date: string; // YYYY-MM-DD
-  notesInternal: string;
-  orderNumber?: string;
-  totalGross?: number; // totale lordo per payments_list
-  items: Array<{
-    code?: string; // SKU (opzionale — non visibile al cliente)
-    name: string; // nome prodotto (grassetto su PDF FiC)
-    description: string; // lotto + scadenza (testo normale su PDF FiC)
-    qty: number;
-    unitPriceFinal: string; // 2 decimali
-    vatRate: string; // es. "10.00" / "22.00"
-  }>;
-}): Promise<{ id: number; number: string }> {
-  const { accessToken, companyId } = await getValidFicAccessToken();
+// ─── Proforma creation (multi-tenant) ──────────────────────────────────────
 
-  // Fetch vat_types + payment_methods (cached 5 min)
+/**
+ * Crea proforma su FiC per una company specifica.
+ * Il companyId determina quale connessione FiC usare.
+ */
+export async function createFicProformaForCompany(
+  companyId: string,
+  input: {
+    ficClientId: number;
+    date: string;
+    notesInternal: string;
+    orderNumber?: string;
+    items: Array<{
+      code?: string;
+      name: string;
+      description: string;
+      qty: number;
+      unitPriceFinal: string;
+      vatRate: string;
+    }>;
+  },
+): Promise<{ id: number; number: string }> {
+  const { accessToken, ficCompanyId } = await getActiveFicConnection(companyId);
+
   const [vatTypes, paymentMethods] = await Promise.all([
-    getFicVatTypes(),
-    getFicPaymentMethods(),
+    getFicVatTypesForCompany(companyId),
+    getFicPaymentMethodsForCompany(companyId),
   ]);
 
   const paymentMethodId = findPaymentMethodId(paymentMethods, "Bonifico");
 
-  // Mappa items con vat.id corretto — name (grassetto) + description (normale) su PDF FiC
   const items_list = input.items.map((it) => {
     const vatRateNum = parseFloat(it.vatRate);
     const vatId = findVatTypeId(vatTypes, vatRateNum);
     return {
-      product_id: 0, // no link a prodotto FiC
-      ...(it.code ? { code: it.code } : {}), // code opzionale
-      name: it.name,               // ← grassetto su PDF
-      description: it.description, // ← testo normale sotto (lotto + scadenza)
+      product_id: 0,
+      ...(it.code ? { code: it.code } : {}),
+      name: it.name,
+      description: it.description,
       qty: it.qty,
       net_price: parseFloat(it.unitPriceFinal),
       vat: { id: vatId },
       not_taxable: false,
     };
   });
-  // Compute payments amount using Italian fiscal rule: VAT on total net per VAT group
+
   const paymentsAmount = computePaymentsAmount(
     input.items.map((it) => ({
       quantity: it.qty,
       unitPrice: parseFloat(it.unitPriceFinal),
       vatRate: parseFloat(it.vatRate),
-    }))
+    })),
   );
 
-  console.log('[fic:createProforma] payments calc', {
-    itemsCount: items_list.length,
-    itemsSumNet: items_list.reduce((s, i) => s + i.qty * i.net_price, 0).toFixed(2),
-    totalGross: paymentsAmount.toFixed(2),
-  });
-
-  // payments_list: singola rata = totale lordo documento (regola fiscale italiana)
-  const payments_list = [
-    {
-      amount: paymentsAmount,
-      due_date: input.date,
-      status: "not_paid" as const,
-    },
-  ];
-
-  // Fetch entity completa da FiC API (cached 5 min)
-  const ficEntity = await getFicClientById(input.ficClientId);
-  console.log(`[fic:createProforma] entity: ${ficEntity.name} (id=${ficEntity.id})`);
+  const ficEntity = await getFicClientByIdForCompany(input.ficClientId, companyId);
 
   const body = {
     data: {
@@ -621,38 +666,34 @@ export async function createFicProforma(input: {
       date: input.date,
       currency: { id: "EUR" },
       payment_method: { id: paymentMethodId },
-      subject: input.orderNumber ? `Ordine ${input.orderNumber}` : "Proforma SoKeto",
-      visible_subject: input.orderNumber ? `Ordine ${input.orderNumber}` : "Proforma SoKeto",
+      subject: input.orderNumber ? `Ordine ${input.orderNumber}` : "Proforma",
+      visible_subject: input.orderNumber ? `Ordine ${input.orderNumber}` : "Proforma",
       items_list,
-      payments_list,
+      payments_list: [{
+        amount: paymentsAmount,
+        due_date: input.date,
+        status: "not_paid" as const,
+      }],
       notes: input.notesInternal,
     },
   };
 
-  // === DIAGNOSTIC LOGGING ===
-  console.log("[fic:createProforma] Payload →", JSON.stringify(body, null, 2));
-  console.log(`[fic:createProforma] URL → ${FIC_API_BASE}/c/${companyId}/issued_documents`);
+  console.log(`[fic:createProforma] company=${companyId} ficCompany=${ficCompanyId} client=${input.ficClientId}`);
 
   try {
     const r = await axios.post<{
       data: { id: number; number: string };
-    }>(`${FIC_API_BASE}/c/${companyId}/issued_documents`, body, {
+    }>(`${FIC_API_BASE}/c/${ficCompanyId}/issued_documents`, body, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
-    console.log("[fic:createProforma] Response OK →", JSON.stringify(r.data, null, 2));
     const out = r.data?.data;
     if (!out?.id) throw new Error("FiC non ha restituito proforma id");
+    console.log(`[fic:createProforma] OK → id=${out.id} number=${out.number}`);
     return { id: out.id, number: out.number ?? `${out.id}` };
   } catch (e: any) {
-    // Log completo della response di errore
-    console.error("[fic:createProforma] ERROR status →", e?.response?.status);
-    console.error("[fic:createProforma] ERROR data →", JSON.stringify(e?.response?.data, null, 2));
-    console.error("[fic:createProforma] ERROR headers →", JSON.stringify(e?.response?.headers, null, 2));
-
-    // Estrai messaggio più dettagliato possibile
     const validationFields = e?.response?.data?.error?.validation_result?.fields;
     const validationMsg = validationFields
       ? validationFields.map((f: any) => `${f.field}: ${f.message}`).join("; ")
@@ -664,5 +705,141 @@ export async function createFicProforma(input: {
       e?.message ??
       "errore sconosciuto";
     throw new Error(`FiC API (${e?.response?.status ?? "??"}): ${msg}`);
+  }
+}
+
+/**
+ * Legacy wrapper — createFicProforma senza companyId (usa SoKeto default).
+ */
+export async function createFicProforma(input: {
+  ficClientId: number;
+  date: string;
+  notesInternal: string;
+  orderNumber?: string;
+  totalGross?: number;
+  items: Array<{
+    code?: string;
+    name: string;
+    description: string;
+    qty: number;
+    unitPriceFinal: string;
+    vatRate: string;
+  }>;
+}): Promise<{ id: number; number: string }> {
+  return createFicProformaForCompany("00000000-0000-0000-0000-000000000002", input);
+}
+
+// ─── Legacy getValidFicAccessToken (backward compat) ───────────────────────
+
+export async function getValidFicAccessToken(): Promise<{
+  accessToken: string;
+  companyId: number;
+}> {
+  const result = await getActiveFicConnection("00000000-0000-0000-0000-000000000002");
+  return { accessToken: result.accessToken, companyId: result.ficCompanyId };
+}
+
+// ─── RetailerFicMapping helpers ────────────────────────────────────────────
+
+/**
+ * Recupera il ficClientId per un retailer in una company specifica.
+ * Ritorna null se non mappato.
+ */
+export async function getRetailerFicClientId(
+  retailerId: string,
+  companyId: string,
+): Promise<number | null> {
+  const db = getDb();
+  const [row] = await db
+    .select({ ficClientId: retailerFicMapping.ficClientId })
+    .from(retailerFicMapping)
+    .where(
+      and(
+        eq(retailerFicMapping.retailerId, retailerId),
+        eq(retailerFicMapping.companyId, companyId),
+      ),
+    )
+    .limit(1);
+  return row?.ficClientId ?? null;
+}
+
+/**
+ * Sincronizza i mapping retailer ↔ FiC client per una company.
+ * Match per vatNumber tra retailer locali e clienti FiC.
+ */
+export async function syncRetailerFicMappings(companyId: string): Promise<{
+  mapped: number;
+  unmatched: string[];
+}> {
+  const { clients } = await refreshFicClientsForCompany(companyId);
+
+  // Get all retailers for this company
+  const db = getDb();
+  const allRetailers = await db
+    .select({
+      id: retailers.id,
+      name: retailers.name,
+    })
+    .from(retailers)
+    .where(eq(retailers.companyId, companyId));
+
+  // Build vatNumber → ficClientId map from FiC clients
+  const ficByVat = new Map<string, number>();
+  for (const c of clients) {
+    if (c.vat_number) {
+      ficByVat.set(c.vat_number.replace(/\s/g, "").toUpperCase(), c.id);
+    }
+  }
+
+  let mapped = 0;
+  const unmatched: string[] = [];
+
+  for (const retailer of allRetailers) {
+    // Match by name (case-insensitive) between local retailer and FiC client
+    const ficClient = clients.find(
+      (c) => c.name?.toLowerCase().trim() === retailer.name?.toLowerCase().trim(),
+    );
+
+    if (ficClient) {
+      await db
+        .insert(retailerFicMapping)
+        .values({
+          retailerId: retailer.id,
+          companyId,
+          ficClientId: ficClient.id,
+        })
+        .onConflictDoUpdate({
+          target: [retailerFicMapping.retailerId, retailerFicMapping.companyId],
+          set: {
+            ficClientId: ficClient.id,
+            updatedAt: new Date(),
+          },
+        });
+      mapped++;
+    } else {
+      unmatched.push(retailer.name);
+    }
+  }
+
+  return { mapped, unmatched };
+}
+
+// ─── Error classes ─────────────────────────────────────────────────────────
+
+export class FicNotConnectedError extends Error {
+  constructor(companyId: string) {
+    super(
+      `Questa company non è connessa a Fatture in Cloud. Vai in Impostazioni → Integrazioni per connetterla.`,
+    );
+    this.name = "FicNotConnectedError";
+  }
+}
+
+export class FicReauthRequiredError extends Error {
+  constructor(companyId: string) {
+    super(
+      `Il token FiC per questa company è scaduto e non è possibile rinnovarlo. Riconnetti da Impostazioni → Integrazioni.`,
+    );
+    this.name = "FicReauthRequiredError";
   }
 }
