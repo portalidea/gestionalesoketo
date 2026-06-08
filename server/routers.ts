@@ -1315,8 +1315,134 @@ export const appRouter = router({
           return { success: true, previousQuantity, newQuantity, delta };
         });
       }),
-  }),
 
+    /**
+     * M11.E: Vista magazzino aggregato cross-company.
+     *
+     * SECURITY: This procedure intentionally bypasses per-company isolation.
+     * It is SAFE because:
+     * - User's authorized companies are fetched from userCompanyAccess FIRST
+     * - Only stock from those companies is queried
+     * - Backend enforces minimum 2 companies (otherwise FORBIDDEN)
+     * - Output never exposes data from unauthorized companies
+     */
+    getAggregatedStock: staffProcedure
+      .input(z.object({ lowStockOnly: z.boolean().optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        const { getUserCompanyIds } = await import("./services/multiCompanyAccess");
+        const userCompanyIds = await getUserCompanyIds(ctx.user!.id);
+        if (userCompanyIds.length < 2) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: `La vista aggregata richiede accesso ad almeno 2 company. Hai accesso solo a ${userCompanyIds.length}.`,
+          });
+        }
+        const database = await db.getDb();
+        if (!database) return [];
+        const { sql } = await import("drizzle-orm");
+        const rows = await database.execute(sql`
+          SELECT
+            p."id" AS "productId",
+            p."sku",
+            p."name" AS "productName",
+            p."imageUrl" AS "productImage",
+            p."minStockThreshold" AS "reorderThreshold",
+            COALESCE(SUM(per_company_qty.company_qty), 0)::int AS "totalQuantity",
+            jsonb_agg(jsonb_build_object(
+              'companyId', per_company_qty."companyId",
+              'companyName', c."name",
+              'quantity', per_company_qty.company_qty
+            ) ORDER BY c."name") AS "perCompany"
+          FROM (
+            SELECT
+              pb."productId",
+              pb."companyId",
+              COALESCE(SUM(ibb."quantity"), 0)::int AS company_qty
+            FROM "inventoryByBatch" ibb
+            JOIN "productBatches" pb ON pb."id" = ibb."batchId"
+            JOIN "locations" l ON l."id" = ibb."locationId"
+            WHERE pb."companyId" = ANY(${sql.raw(`ARRAY[${userCompanyIds.map(id => `'${id}'::uuid`).join(',')}]`)})
+              AND l."type" = 'central_warehouse'
+              AND ibb."quantity" > 0
+            GROUP BY pb."productId", pb."companyId"
+          ) per_company_qty
+          JOIN "products" p ON p."id" = per_company_qty."productId"
+          JOIN "companies" c ON c."id" = per_company_qty."companyId"
+          GROUP BY p."id", p."sku", p."name", p."imageUrl", p."minStockThreshold"
+          ORDER BY p."name"
+        `);
+
+        const results = (rows as any[]).map((r: any) => {
+          const totalQuantity = Number(r.totalQuantity || 0);
+          const threshold = Number(r.reorderThreshold || 10);
+          let status: 'normal' | 'low' | 'critical' = 'normal';
+          if (totalQuantity < threshold * 0.5) status = 'critical';
+          else if (totalQuantity < threshold) status = 'low';
+          return {
+            productId: r.productId,
+            sku: r.sku,
+            productName: r.productName,
+            productImage: r.productImage,
+            totalQuantity,
+            perCompany: r.perCompany || [],
+            reorderThreshold: threshold,
+            status,
+          };
+        });
+
+        if (input?.lowStockOnly) {
+          return results.filter((r) => r.status === 'low' || r.status === 'critical');
+        }
+        return results;
+      }),
+
+    /**
+     * M11.E: Summary for dashboard widget (counts only).
+     */
+    getAggregatedStockSummary: staffProcedure.query(async ({ ctx }) => {
+      const { getUserCompanies } = await import("./services/multiCompanyAccess");
+      const userCompanies = await getUserCompanies(ctx.user!.id);
+      if (userCompanies.length < 2) {
+        return null; // Not eligible for aggregated view
+      }
+      const database = await db.getDb();
+      if (!database) return null;
+      const { sql } = await import("drizzle-orm");
+      const companyIds = userCompanies.map((c) => c.companyId);
+      const rows = await database.execute(sql`
+        SELECT
+          p."id" AS "productId",
+          p."minStockThreshold" AS "reorderThreshold",
+          COALESCE(SUM(ibb."quantity"), 0)::int AS "totalQuantity"
+        FROM "inventoryByBatch" ibb
+        JOIN "productBatches" pb ON pb."id" = ibb."batchId"
+        JOIN "locations" l ON l."id" = ibb."locationId"
+        JOIN "products" p ON p."id" = pb."productId"
+        WHERE pb."companyId" = ANY(${sql.raw(`ARRAY[${companyIds.map(id => `'${id}'::uuid`).join(',')}]`)})
+          AND l."type" = 'central_warehouse'
+          AND ibb."quantity" > 0
+        GROUP BY p."id", p."minStockThreshold"
+      `);
+
+      let totalProducts = 0;
+      let lowStockCount = 0;
+      let criticalCount = 0;
+      for (const r of rows as any[]) {
+        totalProducts++;
+        const qty = Number(r.totalQuantity || 0);
+        const threshold = Number(r.reorderThreshold || 10);
+        if (qty < threshold * 0.5) criticalCount++;
+        else if (qty < threshold) lowStockCount++;
+      }
+
+      return {
+        totalProducts,
+        lowStockCount,
+        criticalCount,
+        companiesAggregated: userCompanies.map((c) => ({ id: c.companyId, name: c.companyName })),
+      };
+    }),
+  }),
   // ============= ALERTS =============
   alerts: router({
     getActive: staffProcedure.query(async () => {

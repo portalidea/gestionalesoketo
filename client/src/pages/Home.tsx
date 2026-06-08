@@ -11,6 +11,7 @@ import {
   ArrowDown,
   Clock,
   ShoppingCart,
+  Layers,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -41,6 +42,8 @@ export default function Home() {
   const { data: activeAlerts } = trpc.alerts.getActive.useQuery();
   const { data: stockAlerts } = trpc.dashboard.getStockAlerts.useQuery();
   const { data: expiringBatches } = trpc.dashboard.getExpiringBatches.useQuery();
+  // M11.E: Aggregated stock summary (only shown if user has multi-company access)
+  const { data: aggregatedSummary } = trpc.warehouse.getAggregatedStockSummary.useQuery();
 
   return (
     <DashboardLayout>
@@ -350,6 +353,48 @@ export default function Home() {
                       </Link>
                     </div>
                   )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* M11.E: Stock Globale cross-company widget */}
+            {aggregatedSummary && (
+              <Card className="border-border bg-card">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-lg text-foreground flex items-center gap-2">
+                        <Layers className="h-5 w-5 text-indigo-500" />
+                        Stock Globale
+                      </CardTitle>
+                      <CardDescription>
+                        Vista aggregata cross-company ({aggregatedSummary.companiesAggregated.map(c => c.name).join(" + ")})
+                      </CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-3 gap-4 mb-4">
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-foreground">{aggregatedSummary.totalProducts}</div>
+                      <div className="text-xs text-muted-foreground">Prodotti totali</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-orange-500">{aggregatedSummary.lowStockCount}</div>
+                      <div className="text-xs text-muted-foreground">Scorta bassa</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-red-500">{aggregatedSummary.criticalCount}</div>
+                      <div className="text-xs text-muted-foreground">Critico</div>
+                    </div>
+                  </div>
+                  <div className="text-center">
+                    <Link href="/warehouse">
+                      <Button variant="outline" size="sm">
+                        Apri Magazzino Aggregato
+                      </Button>
+                    </Link>
+                  </div>
                 </CardContent>
               </Card>
             )}

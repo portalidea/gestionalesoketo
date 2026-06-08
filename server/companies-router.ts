@@ -365,6 +365,27 @@ export const companiesRouter = router({
     }),
 
   /**
+   * M11.E: Check if current user has access to 2+ companies.
+   * Used by frontend to show/hide aggregated warehouse view toggle and dashboard widget.
+   */
+  checkMultiAccess: staffProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { hasMultiCompanyAccess: false, companies: [] as { id: string; name: string }[] };
+    const rows = await db
+      .select({
+        companyId: userCompanyAccess.companyId,
+        companyName: companies.name,
+      })
+      .from(userCompanyAccess)
+      .innerJoin(companies, eq(companies.id, userCompanyAccess.companyId))
+      .where(eq(userCompanyAccess.userId, ctx.user!.id));
+    return {
+      hasMultiCompanyAccess: rows.length >= 2,
+      companies: rows.map((r) => ({ id: r.companyId, name: r.companyName })),
+    };
+  }),
+
+  /**
    * M11.B: Lista utenti per la select "Aggiungi utente" (admin only).
    * Ritorna tutti gli utenti staff (admin/operator/viewer).
    */

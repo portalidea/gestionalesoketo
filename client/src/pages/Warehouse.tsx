@@ -41,6 +41,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Switch } from "@/components/ui/switch";
 import { trpc } from "@/lib/trpc";
 import { format } from "date-fns";
 import {
@@ -59,6 +60,7 @@ import {
   Wallet,
   Warehouse as WarehouseIcon,
   XCircle,
+  Layers,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useLocation } from "wouter";
@@ -104,6 +106,16 @@ type SortOrder = "asc" | "desc";
 export default function Warehouse() {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
+
+  // M11.E: Check multi-company access for aggregated view toggle
+  const { data: multiAccess } = trpc.companies.checkMultiAccess.useQuery();
+  const [aggregatedView, setAggregatedView] = useState(false);
+
+  // M11.E: Aggregated stock query (only enabled when toggle is active)
+  const { data: aggregatedStock, isLoading: isLoadingAggregated } =
+    trpc.warehouse.getAggregatedStock.useQuery(undefined, {
+      enabled: aggregatedView && !!multiAccess?.hasMultiCompanyAccess,
+    });
 
   const { data: overview, isLoading } =
     trpc.warehouse.getStockOverview.useQuery();
@@ -456,15 +468,31 @@ export default function Warehouse() {
   return (
     <DashboardLayout>
       <div className="space-y-8">
-        <div>
-          <h1 className="text-4xl font-bold text-foreground mb-2">
-            Magazzino Centrale
-          </h1>
-          <p className="text-muted-foreground">
-            Stock SoKeto E-Keto Food per prodotto e lotto. Click su una riga per
-            vedere il dettaglio dei lotti, oppure usa il bottone Trasferisci per
-            inviare stock a un rivenditore.
-          </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-4xl font-bold text-foreground mb-2">
+              {aggregatedView ? "Magazzino Aggregato" : "Magazzino Centrale"}
+            </h1>
+            <p className="text-muted-foreground">
+              {aggregatedView
+                ? `Vista cross-company: ${multiAccess?.companies.map(c => c.name).join(" + ") ?? ""}`
+                : "Stock SoKeto E-Keto Food per prodotto e lotto. Click su una riga per vedere il dettaglio dei lotti, oppure usa il bottone Trasferisci per inviare stock a un rivenditore."}
+            </p>
+          </div>
+          {/* M11.E: Toggle aggregated view (only if user has multi-company access) */}
+          {multiAccess?.hasMultiCompanyAccess && (
+            <div className="flex items-center gap-2 shrink-0 pt-2">
+              <Layers className="h-4 w-4 text-indigo-500" />
+              <Label htmlFor="aggregated-toggle" className="text-sm font-medium cursor-pointer">
+                Vista Aggregata
+              </Label>
+              <Switch
+                id="aggregated-toggle"
+                checked={aggregatedView}
+                onCheckedChange={setAggregatedView}
+              />
+            </div>
+          )}
         </div>
 
         {/* M8.2: Value stat cards */}
@@ -557,8 +585,86 @@ export default function Warehouse() {
           </Card>
         </div>
 
-        {/* Tabella prodotti con colonne valore */}
-        {isLoading ? (
+        {/* M11.E: Aggregated stock table (shown when toggle is active) */}
+        {aggregatedView && multiAccess?.hasMultiCompanyAccess && (
+          <Card className="border-border bg-card">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Layers className="h-5 w-5 text-indigo-500" />
+                Stock Aggregato Cross-Company
+              </CardTitle>
+              <CardDescription>
+                Quantità totali per prodotto, suddivise per company
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="overflow-x-auto">
+              {isLoadingAggregated ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                </div>
+              ) : !aggregatedStock || aggregatedStock.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  Nessun prodotto a magazzino nelle company aggregate
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Prodotto</TableHead>
+                      <TableHead>SKU</TableHead>
+                      <TableHead className="text-right">Totale</TableHead>
+                      {multiAccess.companies.map((c) => (
+                        <TableHead key={c.id} className="text-right">{c.name}</TableHead>
+                      ))}
+                      <TableHead className="text-center">Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {aggregatedStock.map((row) => (
+                      <TableRow key={row.productId} className={row.status === 'critical' ? 'bg-red-50/50 dark:bg-red-950/20' : row.status === 'low' ? 'bg-amber-50/50 dark:bg-amber-950/20' : ''}>
+                        <TableCell className="font-medium">
+                          <button
+                            type="button"
+                            onClick={() => setLocation(`/products/${row.productId}`)}
+                            className="text-left hover:text-primary transition-colors"
+                          >
+                            {row.productName}
+                          </button>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground text-xs font-mono">
+                          {row.sku}
+                        </TableCell>
+                        <TableCell className="text-right font-bold tabular-nums">
+                          {row.totalQuantity}
+                        </TableCell>
+                        {multiAccess.companies.map((c) => {
+                          const companyData = (row.perCompany as any[])?.find((pc: any) => pc.companyId === c.id);
+                          return (
+                            <TableCell key={c.id} className="text-right tabular-nums text-muted-foreground">
+                              {companyData ? companyData.quantity : 0}
+                            </TableCell>
+                          );
+                        })}
+                        <TableCell className="text-center">
+                          {row.status === 'critical' ? (
+                            <Badge variant="destructive" className="text-xs">Critico</Badge>
+                          ) : row.status === 'low' ? (
+                            <Badge className="text-xs bg-orange-500 hover:bg-orange-600 text-white">Basso</Badge>
+                          ) : (
+                            <Badge variant="secondary" className="text-xs">OK</Badge>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Tabella prodotti con colonne valore (hidden when aggregated view is active) */}
+        {!aggregatedView && (isLoading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
@@ -847,7 +953,7 @@ export default function Warehouse() {
               </p>
             </CardContent>
           </Card>
-        )}
+        ))}
       </div>
 
       {/* ====================== Dialog TRANSFER ====================== */}
