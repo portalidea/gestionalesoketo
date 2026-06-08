@@ -190,16 +190,19 @@ export async function calculateOrderPricing(
     let markupPercentStr: string | undefined;
 
     if (pricingModel === "cost_markup") {
-      // M11.A.markup: prezzo = costPrice × (1 + markup/100)
-      const costBase = parseFloat(product.costPrice || "0");
-      if (!costBase || costBase === 0) {
+      // M11.A.markup: prezzo = costPrice × piecesPerUnit × (1 + markup/100)
+      // costPrice in DB è per singolo pezzo; il prezzo di vendita è per confezione
+      const costPerPiece = parseFloat(product.costPrice || "0");
+      if (!costPerPiece || costPerPiece === 0) {
         throw new Error(
           `Costo non valorizzato per il prodotto "${product.name}". Imposta costPrice in anagrafica prima di creare ordini con pricing markup-su-costo.`,
         );
       }
-      unitPriceBase = costBase;
-      unitPriceFinal = roundTo2(costBase * (1 + effectiveMarkup / 100));
-      costPriceStr = costBase.toFixed(2);
+      const ppu = product.piecesPerUnit ?? 1;
+      const costPerUnit = costPerPiece * ppu; // costo per confezione
+      unitPriceBase = costPerUnit;
+      unitPriceFinal = roundTo2(costPerUnit * (1 + effectiveMarkup / 100));
+      costPriceStr = costPerUnit.toFixed(2);
       markupPercentStr = effectiveMarkup.toFixed(2);
     } else {
       // Tier discount: logica invariata
