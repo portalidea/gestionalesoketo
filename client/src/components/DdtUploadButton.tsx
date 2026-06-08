@@ -120,7 +120,13 @@ export default function DdtUploadButton({
         extractedData,
       });
 
-      toast.success(`DDT caricato — ${confirmResult.itemCount} righe estratte`);
+      if (confirmResult.failedItemCount && confirmResult.failedItemCount > 0) {
+        toast.warning(
+          `DDT caricato. ${confirmResult.validItemCount} righe OK, ${confirmResult.failedItemCount} con estrazione parziale.`
+        );
+      } else {
+        toast.success(`DDT caricato — ${confirmResult.itemCount} righe estratte`);
+      }
       setOpen(false);
       setFile(null);
       setStep("idle");

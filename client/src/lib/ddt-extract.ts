@@ -13,10 +13,10 @@ import { supabase } from "./supabase";
 export interface DdtExtractedItem {
   productCode: string | null;
   productName: string;
-  quantityPieces: number;
+  quantityPieces: number | null;
   quantityKg: number | null;
-  batchNumber: string;
-  expirationDate: string;
+  batchNumber: string | null;
+  expirationDate: string | null;
 }
 
 export interface DdtExtractedData {

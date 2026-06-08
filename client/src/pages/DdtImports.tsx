@@ -305,9 +305,15 @@ function UploadDialog({
 
       // ─── Successo ────────────────────────────────────────────────────
       setStep("done");
-      toast.success(
-        `DDT caricato con successo. ${confirmResult.itemCount} righe estratte.`
-      );
+      if (confirmResult.failedItemCount && confirmResult.failedItemCount > 0) {
+        toast.warning(
+          `DDT caricato. ${confirmResult.validItemCount} righe OK, ${confirmResult.failedItemCount} con estrazione parziale (da completare manualmente).`
+        );
+      } else {
+        toast.success(
+          `DDT caricato con successo. ${confirmResult.itemCount} righe estratte.`
+        );
+      }
       onSuccess(ddtImportId);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);

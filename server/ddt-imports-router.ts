@@ -24,6 +24,26 @@ import { uploadDdtPdf, getSignedUrl, deleteDdtPdf } from "../lib/storage";
 import { findBestMatch } from "../lib/fuzzyMatch";
 import { uuidSchema } from "../shared/schemas";
 
+/**
+ * Detect unit weight in kg from product name.
+ * E.g. "Penne High Protein 250g" → 0.250
+ */
+function detectUnitWeightFromName(productName: string): number {
+  const name = (productName ?? "").toLowerCase();
+  // Match patterns like "250g", "250 g", "500g", "1kg", "1,5kg"
+  const gMatch = name.match(/(\d+(?:[.,]\d+)?)\s*g(?:r|rammi)?(?:\b|\s|$)/i);
+  if (gMatch) {
+    const grams = parseFloat(gMatch[1].replace(",", "."));
+    if (grams > 0 && grams <= 5000) return grams / 1000;
+  }
+  const kgMatch = name.match(/(\d+(?:[.,]\d+)?)\s*kg(?:\b|\s|$)/i);
+  if (kgMatch) {
+    const kg = parseFloat(kgMatch[1].replace(",", "."));
+    if (kg > 0 && kg <= 50) return kg;
+  }
+  return 0;
+}
+
 const uuid = uuidSchema;
 
 export const ddtImportsRouter = router({
@@ -266,10 +286,10 @@ export const ddtImportsRouter = router({
       if (!importRow) {
         throw new TRPCError({ code: "NOT_FOUND" });
       }
-      if (importRow.status !== "failed") {
+      if (importRow.status !== "failed" && importRow.status !== "review") {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Solo DDT in stato 'failed' possono essere rielaborati",
+          message: "Solo DDT in stato 'failed' o 'review' possono essere rielaborati",
         });
       }
 
@@ -319,7 +339,7 @@ export const ddtImportsRouter = router({
             z.object({
               productCode: z.string().nullable(),
               productName: z.string(),
-              quantityPieces: z.number().int(),
+              quantityPieces: z.number().int().nullable(),
               quantityKg: z.number().nullable(),
               batchNumber: z.string().nullable(),
               expirationDate: z.string().nullable(),
@@ -406,65 +426,116 @@ export const ddtImportsRouter = router({
         };
 
         // Crea items con tentativo di match (M5.7: substring SKU primario, fuzzy fallback)
+        let validItemCount = 0;
+        let failedItemCount = 0;
+
         for (const item of input.extractedData.items) {
+          // --- Post-LLM validation: check required fields ---
+          const validationErrors: string[] = [];
+          const qtyPieces = item.quantityPieces;
+          
+          if (qtyPieces === null || qtyPieces === undefined || qtyPieces <= 0) {
+            validationErrors.push("quantityPieces mancante o non valido");
+          }
+          if (!item.batchNumber || item.batchNumber.trim() === "") {
+            validationErrors.push("batchNumber mancante");
+          }
+          // expirationDate can be missing (user can fill manually)
+
+          // If quantityPieces is invalid, try to recover from quantityKg
+          let finalQty = qtyPieces ?? 0;
+          if (finalQty <= 0 && item.quantityKg && item.quantityKg > 0) {
+            const unitWeight = detectUnitWeightFromName(item.productName);
+            if (unitWeight > 0) {
+              finalQty = Math.round(item.quantityKg / unitWeight);
+              // Remove the validation error if we recovered
+              const idx = validationErrors.indexOf("quantityPieces mancante o non valido");
+              if (idx >= 0) validationErrors.splice(idx, 1);
+            }
+          }
+
+          // If still invalid qty after recovery attempt, mark as extraction_failed
+          const isExtractionFailed = finalQty <= 0;
+          if (isExtractionFailed && !validationErrors.includes("quantityPieces mancante o non valido")) {
+            validationErrors.push("quantityPieces non calcolabile");
+          }
+
+          // --- Product matching (only if extraction is valid enough) ---
           let matchedProductId: string | null = null;
           let matchStatus: "matched" | "unmatched" = "unmatched";
 
-          // 1. PRIMARY: Substring-match SKU (M5.7)
-          const skuMatch = substringMatchSku(item.productName, allProducts);
-          if (skuMatch) {
-            matchedProductId = skuMatch.productId;
-            matchStatus = "matched";
-          }
+          if (!isExtractionFailed) {
+            // 1. PRIMARY: Substring-match SKU (M5.7)
+            const skuMatch = substringMatchSku(item.productName, allProducts);
+            if (skuMatch) {
+              matchedProductId = skuMatch.productId;
+              matchStatus = "matched";
+            }
 
-          // 2. SECONDARY: product_supplier_codes code-based match (M5.5, fallback)
-          if (!matchedProductId && item.productCode) {
-            const producerId = importRow.producerId;
-            if (producerId) {
-              const codes = await db
-                .select({
-                  supplierCode: productSupplierCodes.supplierCode,
-                  productId: productSupplierCodes.productId,
-                })
-                .from(productSupplierCodes)
-                .where(eq(productSupplierCodes.producerId, producerId));
-              const codeKey = item.productCode.toLowerCase().trim();
-              const codeMatch = codes.find(
-                (c) => c.supplierCode.toLowerCase().trim() === codeKey
-              );
-              if (codeMatch) {
-                matchedProductId = codeMatch.productId;
+            // 2. SECONDARY: product_supplier_codes code-based match (M5.5, fallback)
+            if (!matchedProductId && item.productCode) {
+              const producerId = importRow.producerId;
+              if (producerId) {
+                const codes = await db
+                  .select({
+                    supplierCode: productSupplierCodes.supplierCode,
+                    productId: productSupplierCodes.productId,
+                  })
+                  .from(productSupplierCodes)
+                  .where(eq(productSupplierCodes.producerId, producerId));
+                const codeKey = item.productCode.toLowerCase().trim();
+                const codeMatch = codes.find(
+                  (c) => c.supplierCode.toLowerCase().trim() === codeKey
+                );
+                if (codeMatch) {
+                  matchedProductId = codeMatch.productId;
+                  matchStatus = "matched";
+                }
+              }
+            }
+
+            // 3. TERTIARY: Fuzzy match nome prodotto (Jaro-Winkler, threshold 0.85)
+            if (!matchedProductId) {
+              const fuzzyResult = findBestMatch(item.productName, allProducts, 0.85);
+              if (fuzzyResult) {
+                matchedProductId = fuzzyResult.productId;
                 matchStatus = "matched";
               }
             }
           }
 
-          // 3. TERTIARY: Fuzzy match nome prodotto (Jaro-Winkler, threshold 0.85)
-          if (!matchedProductId) {
-            const fuzzyResult = findBestMatch(item.productName, allProducts, 0.85);
-            if (fuzzyResult) {
-              matchedProductId = fuzzyResult.productId;
-              matchStatus = "matched";
-            }
-          }
+          // Determine final status and notes
+          const itemStatus = isExtractionFailed ? "unmatched" : matchStatus;
+          const itemNotes = validationErrors.length > 0
+            ? `[ESTRAZIONE PARZIALE] ${validationErrors.join("; ")}`
+            : null;
 
           await db.insert(ddtImportItems).values({
             ddtImportId: input.ddtImportId,
             productNameExtracted: item.productName,
             productCodeExtracted: item.productCode,
-            batchNumber: item.batchNumber,
-            expirationDate: item.expirationDate,
-            quantityPieces: item.quantityPieces,
+            batchNumber: item.batchNumber || null,
+            expirationDate: item.expirationDate || null,
+            quantityPieces: isExtractionFailed ? 1 : finalQty, // DB constraint: > 0, use 1 as placeholder
             unitOfMeasure: "PZ",
             productMatchedId: matchedProductId,
-            status: matchStatus,
+            status: itemStatus,
+            notes: itemNotes,
           });
+
+          if (isExtractionFailed) {
+            failedItemCount++;
+          } else {
+            validItemCount++;
+          }
         }
 
         return {
           id: input.ddtImportId,
           status: "review" as const,
           itemCount: input.extractedData.items.length,
+          validItemCount,
+          failedItemCount,
         };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);

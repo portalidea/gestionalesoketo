@@ -173,7 +173,10 @@ export default function DdtImportDetail() {
   const unmatchedCount = ddtImport.items.filter((i) => !i.productMatchedId).length;
   const missingBatchCount = ddtImport.items.filter((i) => !i.batchNumber).length;
   const missingExpiryCount = ddtImport.items.filter((i) => !i.expirationDate).length;
-  const canConfirm = ddtImport.status === "review" && unmatchedCount === 0 && missingBatchCount === 0 && missingExpiryCount === 0;
+  const extractionFailedCount = ddtImport.items.filter(
+    (i) => i.notes && i.notes.startsWith("[ESTRAZIONE PARZIALE]")
+  ).length;
+  const canConfirm = ddtImport.status === "review" && unmatchedCount === 0 && missingBatchCount === 0 && missingExpiryCount === 0 && extractionFailedCount === 0;
 
   return (
     <DashboardLayout>
@@ -200,14 +203,14 @@ export default function DdtImportDetail() {
           </div>
 
           <div className="flex items-center gap-2">
-            {ddtImport.status === "failed" && (
+            {(ddtImport.status === "failed" || (ddtImport.status === "review" && extractionFailedCount > 0)) && (
               <Button
                 variant="outline"
                 onClick={() => retryMutation.mutate({ id: id! })}
                 disabled={retryMutation.isPending}
               >
                 <RotateCcw className="mr-2 h-4 w-4" />
-                Riprova
+                Riprova estrazione
               </Button>
             )}
             {ddtImport.status === "review" && (
@@ -246,6 +249,25 @@ export default function DdtImportDetail() {
                   <p className="font-medium text-destructive">Estrazione fallita</p>
                   <p className="text-sm text-muted-foreground mt-1">
                     {ddtImport.errorMessage}
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {extractionFailedCount > 0 && ddtImport.status === "review" && (
+          <Card className="border-orange-500/50 bg-orange-50/30 dark:bg-orange-950/20">
+            <CardContent className="pt-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="h-5 w-5 text-orange-500 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <p className="font-medium text-orange-700 dark:text-orange-400">
+                    Estrazione parziale: {extractionFailedCount} {extractionFailedCount === 1 ? "riga" : "righe"} con dati incompleti
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    Le righe evidenziate in arancione hanno quantità o lotto non estratti correttamente.
+                    Modifica manualmente i campi mancanti oppure elimina le righe e riprova l'estrazione.
                   </p>
                 </div>
               </div>
@@ -526,6 +548,7 @@ function DdtItemRow({
     expirationDate: string | null;
     quantityPieces: number;
     status: string;
+    notes: string | null;
   };
   products: { id: string; name: string }[];
   isEditing: boolean;
@@ -636,8 +659,10 @@ function DdtItemRow({
     );
   }
 
+  const isExtractionFailed = item.notes && item.notes.startsWith("[ESTRAZIONE PARZIALE]");
+
   return (
-    <TableRow>
+    <TableRow className={isExtractionFailed ? "bg-orange-50/60 dark:bg-orange-950/20 border-l-2 border-l-orange-400" : ""}>
       <TableCell>
         <div>
           <span className="font-medium">{item.productNameExtracted}</span>
@@ -645,6 +670,12 @@ function DdtItemRow({
             <span className="text-xs text-muted-foreground ml-2">
               [{item.productCodeExtracted}]
             </span>
+          )}
+          {isExtractionFailed && (
+            <p className="text-xs text-orange-600 dark:text-orange-400 mt-0.5 flex items-center gap-1">
+              <AlertCircle className="h-3 w-3" />
+              {item.notes!.replace("[ESTRAZIONE PARZIALE] ", "")}
+            </p>
           )}
         </div>
       </TableCell>
