@@ -179,6 +179,10 @@ export default function Home() {
                             const pct = p.minStockThreshold > 0
                               ? Math.round((p.totalStock / p.minStockThreshold) * 100)
                               : 0;
+                            const ppu = (p as any).piecesPerUnit ?? 1;
+                            const stockDisplay = ppu > 1
+                              ? `${Math.floor(p.totalStock / ppu)} conf (${p.totalStock} pz)`
+                              : `${p.totalStock} pz`;
                             return (
                               <TableRow key={p.id}>
                                 <TableCell>
@@ -195,7 +199,7 @@ export default function Home() {
                                   <span className={`font-mono text-sm font-semibold ${
                                     p.totalStock === 0 ? "text-red-500" : "text-amber-500"
                                   }`}>
-                                    {p.totalStock}
+                                    {stockDisplay}
                                   </span>
                                   <span className="text-xs text-muted-foreground ml-1">
                                     ({pct}%)

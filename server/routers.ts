@@ -1347,6 +1347,7 @@ export const appRouter = router({
             p."name" AS "productName",
             p."imageUrl" AS "productImage",
             p."minStockThreshold" AS "reorderThreshold",
+            COALESCE(p."piecesPerUnit", 1)::int AS "piecesPerUnit",
             COALESCE(SUM(per_company_qty.company_qty), 0)::int AS "totalQuantity",
             jsonb_agg(jsonb_build_object(
               'companyId', per_company_qty."companyId",
@@ -1368,7 +1369,7 @@ export const appRouter = router({
           ) per_company_qty
           JOIN "products" p ON p."id" = per_company_qty."productId"
           JOIN "companies" c ON c."id" = per_company_qty."companyId"
-          GROUP BY p."id", p."sku", p."name", p."imageUrl", p."minStockThreshold"
+          GROUP BY p."id", p."sku", p."name", p."imageUrl", p."minStockThreshold", p."piecesPerUnit"
           ORDER BY p."name"
         `);
 
@@ -1383,6 +1384,7 @@ export const appRouter = router({
             sku: r.sku,
             productName: r.productName,
             productImage: r.productImage,
+            piecesPerUnit: Number(r.piecesPerUnit || 1),
             totalQuantity,
             perCompany: r.perCompany || [],
             reorderThreshold: threshold,

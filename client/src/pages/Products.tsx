@@ -866,6 +866,7 @@ export default function Products() {
                   <TableBody>
                     {products.map((p) => {
                       const minStock = p.minStockThreshold ?? 0;
+                      // minStockThreshold is in pieces (same unit as centralStock in DB)
                       const isLowCentral = p.centralStock < minStock;
                       return (
                         <TableRow
@@ -910,10 +911,24 @@ export default function Products() {
                               isLowCentral ? "text-yellow-500" : "text-foreground"
                             }`}
                           >
-                            {p.centralStock}
+                            {(() => {
+                              const ppu = p.piecesPerUnit ?? 1;
+                              if (ppu > 1) {
+                                const conf = Math.floor(p.centralStock / ppu);
+                                return <span title={`${p.centralStock} pz`}>{conf} <span className="text-xs text-muted-foreground">conf</span></span>;
+                              }
+                              return p.centralStock;
+                            })()}
                           </TableCell>
                           <TableCell className="text-right font-semibold">
-                            {p.totalStock}
+                            {(() => {
+                              const ppu = p.piecesPerUnit ?? 1;
+                              if (ppu > 1) {
+                                const conf = Math.floor(p.totalStock / ppu);
+                                return <span title={`${p.totalStock} pz`}>{conf} <span className="text-xs text-muted-foreground">conf</span> <span className="text-xs text-muted-foreground">({p.totalStock} pz)</span></span>;
+                              }
+                              return <span>{p.totalStock} <span className="text-xs text-muted-foreground">pz</span></span>;
+                            })()}
                           </TableCell>
                           <TableCell className="text-right">
                             {p.activeBatchCount}

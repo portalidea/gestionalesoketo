@@ -976,8 +976,9 @@ export default function ProductDetail() {
         {product && (() => {
           const ppu = product.piecesPerUnit ?? 1;
           const label = product.sellableUnitLabel ?? "PZ";
-          const totalConf = batches?.reduce((sum, b) => sum + (b.centralStock ?? 0), 0) ?? 0;
-          const totalPezzi = totalConf * ppu;
+          // centralStock in DB is in PIECES, not confezioni
+          const totalPezzi = batches?.reduce((sum, b) => sum + (b.centralStock ?? 0), 0) ?? 0;
+          const totalConf = Math.floor(totalPezzi / ppu);
           return ppu > 1 ? (
             <div className="mt-8 grid grid-cols-3 gap-4">
               <Card className="border-border bg-card">

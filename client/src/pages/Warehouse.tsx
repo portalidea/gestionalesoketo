@@ -635,13 +635,24 @@ export default function Warehouse() {
                           {row.sku}
                         </TableCell>
                         <TableCell className="text-right font-bold tabular-nums">
-                          {row.totalQuantity}
+                          {(() => {
+                            const ppu = (row as any).piecesPerUnit ?? 1;
+                            if (ppu > 1) {
+                              const conf = Math.floor(row.totalQuantity / ppu);
+                              return <span title={`${row.totalQuantity} pz`}>{conf} <span className="text-xs font-normal text-muted-foreground">conf</span> <span className="text-xs font-normal text-muted-foreground">({row.totalQuantity} pz)</span></span>;
+                            }
+                            return <span>{row.totalQuantity} <span className="text-xs font-normal text-muted-foreground">pz</span></span>;
+                          })()}
                         </TableCell>
                         {multiAccess.companies.map((c) => {
                           const companyData = (row.perCompany as any[])?.find((pc: any) => pc.companyId === c.id);
+                          const qty = companyData ? companyData.quantity : 0;
+                          const ppu = (row as any).piecesPerUnit ?? 1;
                           return (
                             <TableCell key={c.id} className="text-right tabular-nums text-muted-foreground">
-                              {companyData ? companyData.quantity : 0}
+                              {ppu > 1 ? (
+                                <span title={`${qty} pz`}>{Math.floor(qty / ppu)} <span className="text-xs">conf</span></span>
+                              ) : qty}
                             </TableCell>
                           );
                         })}
@@ -773,7 +784,14 @@ export default function Warehouse() {
                             {p.productSku}
                           </TableCell>
                           <TableCell className="text-right font-semibold tabular-nums">
-                            {p.totalStock}
+                            {p.ppu > 1 ? (
+                              <span title={`${p.totalStock} pz`}>
+                                {Math.floor(p.totalStock / p.ppu)} <span className="text-xs text-muted-foreground">conf</span>
+                                <span className="text-xs text-muted-foreground ml-1">({p.totalStock} pz)</span>
+                              </span>
+                            ) : (
+                              <span>{p.totalStock} <span className="text-xs text-muted-foreground">pz</span></span>
+                            )}
                           </TableCell>
                           <TableCell className="text-right text-muted-foreground tabular-nums">
                             {formatCurrency(p.costUnit)}

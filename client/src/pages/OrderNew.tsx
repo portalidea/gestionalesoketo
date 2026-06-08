@@ -573,10 +573,11 @@ export default function OrderNew() {
                           const inCart = cartProductIds.has(p.id);
                           const cartQty = cart.find((c) => c.productId === p.id)?.quantity;
                           const ppu = (p as any).piecesPerUnit ?? 1;
+                          const totalPieces = p.centralStock ?? 0;
                           const stockLabel =
                             ppu > 1
-                              ? `${p.centralStock ?? 0} conf (${(p.centralStock ?? 0) * ppu} pz)`
-                              : `${p.centralStock ?? 0}`;
+                              ? `${Math.floor(totalPieces / ppu)} conf (${totalPieces} pz)`
+                              : `${totalPieces} pz`;
                           return (
                             <TableRow
                               key={p.id}
