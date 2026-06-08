@@ -13,12 +13,13 @@ import {
   isTokenExpired,
   refreshAccessToken,
 } from "./fattureincloud-oauth";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
   ficConnections,
   FicConnection,
+  ficClientsCache,
   retailerFicMapping,
   companies,
   retailers,
@@ -460,7 +461,118 @@ export async function refreshFicClientsForCompany(companyId: string): Promise<{
       );
     }
   }
-  return { clients, refreshedAt: new Date().toISOString() };
+
+  // Persist to ficClientsCache (UPSERT)
+  const db = getDb();
+  const refreshedAt = new Date();
+  if (clients.length > 0) {
+    // Batch upsert in chunks of 50 to avoid query size limits
+    const CHUNK_SIZE = 50;
+    for (let i = 0; i < clients.length; i += CHUNK_SIZE) {
+      const chunk = clients.slice(i, i + CHUNK_SIZE);
+      await db
+        .insert(ficClientsCache)
+        .values(
+          chunk.map((c) => ({
+            companyId,
+            ficClientId: c.id,
+            name: c.name,
+            vatNumber: c.vat_number ?? null,
+            fiscalCode: c.tax_code ?? null,
+            email: c.email ?? null,
+            addressCity: c.address_city ?? null,
+            addressProvince: c.address_province ?? null,
+            country: c.country ?? null,
+            rawData: c as any,
+            refreshedAt,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [ficClientsCache.companyId, ficClientsCache.ficClientId],
+          set: {
+            name: sql`EXCLUDED."name"`,
+            vatNumber: sql`EXCLUDED."vatNumber"`,
+            fiscalCode: sql`EXCLUDED."fiscalCode"`,
+            email: sql`EXCLUDED."email"`,
+            addressCity: sql`EXCLUDED."addressCity"`,
+            addressProvince: sql`EXCLUDED."addressProvince"`,
+            country: sql`EXCLUDED."country"`,
+            rawData: sql`EXCLUDED."rawData"`,
+            refreshedAt: sql`EXCLUDED."refreshedAt"`,
+          },
+        });
+    }
+    // Delete stale entries (clients removed from FiC)
+    const freshIds = clients.map((c) => c.id);
+    const allCached = await db
+      .select({ ficClientId: ficClientsCache.ficClientId })
+      .from(ficClientsCache)
+      .where(eq(ficClientsCache.companyId, companyId));
+    const staleIds = allCached
+      .filter((row) => !freshIds.includes(row.ficClientId))
+      .map((row) => row.ficClientId);
+    if (staleIds.length > 0) {
+      for (const staleId of staleIds) {
+        await db
+          .delete(ficClientsCache)
+          .where(
+            and(
+              eq(ficClientsCache.companyId, companyId),
+              eq(ficClientsCache.ficClientId, staleId),
+            ),
+          );
+      }
+    }
+  }
+
+  console.log(`[fic] Refreshed ${clients.length} clients for company ${companyId} (ficCompanyId=${ficCompanyId})`);
+  return { clients, refreshedAt: refreshedAt.toISOString() };
+}
+
+/**
+ * Read cached FiC clients for a company from DB.
+ * Returns cached data without calling FiC API.
+ * If cache is empty, returns empty array (UI should trigger refresh).
+ */
+export async function getCachedFicClients(companyId: string): Promise<{
+  clients: FicClientInfo[];
+  refreshedAt: string | null;
+}> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(ficClientsCache)
+    .where(eq(ficClientsCache.companyId, companyId));
+
+  if (rows.length === 0) {
+    return { clients: [], refreshedAt: null };
+  }
+
+  const clients: FicClientInfo[] = rows.map((row) => {
+    if (row.rawData && typeof row.rawData === "object") {
+      return row.rawData as FicClientInfo;
+    }
+    return {
+      id: row.ficClientId,
+      name: row.name,
+      vat_number: row.vatNumber ?? undefined,
+      tax_code: row.fiscalCode ?? undefined,
+      email: row.email ?? undefined,
+      address_city: row.addressCity ?? undefined,
+      address_province: row.addressProvince ?? undefined,
+      country: row.country ?? undefined,
+    };
+  });
+
+  const latestRefresh = rows.reduce((max, r) => {
+    const t = r.refreshedAt?.getTime() ?? 0;
+    return t > max ? t : max;
+  }, 0);
+
+  return {
+    clients,
+    refreshedAt: latestRefresh > 0 ? new Date(latestRefresh).toISOString() : null,
+  };
 }
 
 /**
@@ -475,7 +587,7 @@ export async function refreshFicClients(): Promise<{
 
 /**
  * Legacy wrapper — getFicClients (reads from first connection).
- * M11.C: la cache clienti non è più in metadata DB, ma viene fetchata on-demand.
+ * M11.C: reads from DB cache (ficClientsCache).
  */
 export async function getFicClients(forceRefresh = false): Promise<{
   clients: FicClientInfo[];
@@ -484,8 +596,7 @@ export async function getFicClients(forceRefresh = false): Promise<{
   if (forceRefresh) {
     return await refreshFicClients();
   }
-  // Without metadata cache, return empty (UI should trigger refresh)
-  return { clients: [], refreshedAt: null };
+  return getCachedFicClients("00000000-0000-0000-0000-000000000002");
 }
 
 // ─── Single FiC Client fetch (by id) with cache ───────────────────────────

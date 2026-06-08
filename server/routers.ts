@@ -18,10 +18,9 @@ import {
   disconnectFicForCompany,
   getFicAuthorizationUrl,
   getFicAuthorizationUrlForCompany,
-  getFicClients,
+  getCachedFicClients,
   getFicStatus,
   getFicStatusForCompany,
-  refreshFicClients,
   refreshFicClientsForCompany,
   getRetailerFicClientId,
   syncRetailerFicMappings,
@@ -1573,12 +1572,12 @@ export const appRouter = router({
 
   // ============= FIC CLIENTS CACHE (Phase B M3) =============
   ficClients: router({
-    list: staffProcedure.query(async () => {
+    list: staffProcedure.query(async ({ ctx }) => {
       const t = Date.now();
       try {
-        const r = await getFicClients(false);
+        const r = await getCachedFicClients(ctx.activeCompanyId);
         const ms = Date.now() - t;
-        if (ms > 500) console.log(`[ficClients.list] ${ms}ms count=${r.clients.length}`);
+        if (ms > 500) console.log(`[ficClients.list] ${ms}ms count=${r.clients.length} company=${ctx.activeCompanyId}`);
         return r;
       } catch (e) {
         throw new TRPCError({
@@ -1588,9 +1587,9 @@ export const appRouter = router({
       }
     }),
 
-    refresh: writerProcedure.mutation(async () => {
+    refresh: writerProcedure.mutation(async ({ ctx }) => {
       try {
-        return await refreshFicClients();
+        return await refreshFicClientsForCompany(ctx.activeCompanyId);
       } catch (e) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",

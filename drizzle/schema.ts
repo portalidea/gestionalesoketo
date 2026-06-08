@@ -543,6 +543,33 @@ export type FicConnection = typeof ficConnections.$inferSelect;
 export type InsertFicConnection = typeof ficConnections.$inferInsert;
 
 /**
+ * ficClientsCache — cache persistente dei clienti FiC per company.
+ * Popolata da ficClients.refresh, letta da ficClients.list.
+ * Evita chiamate API FiC ripetute e funziona su serverless (no in-memory cache).
+ */
+export const ficClientsCache = pgTable("ficClientsCache", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: uuid("companyId")
+    .notNull()
+    .references(() => companies.id, { onDelete: "cascade" }),
+  ficClientId: integer("ficClientId").notNull(),
+  name: text("name").notNull(),
+  vatNumber: varchar("vatNumber", { length: 20 }),
+  fiscalCode: varchar("fiscalCode", { length: 20 }),
+  email: varchar("email", { length: 255 }),
+  addressCity: varchar("addressCity", { length: 100 }),
+  addressProvince: varchar("addressProvince", { length: 10 }),
+  country: varchar("country", { length: 50 }),
+  rawData: jsonb("rawData"),
+  refreshedAt: timestamp("refreshedAt", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  companyFicClientUnique: unique().on(table.companyId, table.ficClientId),
+  companyIdx: index("fic_clients_cache_company_idx").on(table.companyId),
+}));
+export type FicClientCache = typeof ficClientsCache.$inferSelect;
+export type InsertFicClientCache = typeof ficClientsCache.$inferInsert;
+
+/**
  * retailerFicMapping — mapping retailer ↔ ficClientId per-company (M11.C).
  * Lo stesso retailer può avere ficClientId diversi su FiC di company diverse.
  */
