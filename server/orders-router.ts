@@ -1192,6 +1192,7 @@ export const ordersRouter = router({
     .input(z.object({
       productId: uuidSchema,
       retailerId: uuidSchema,
+      markupPercentageOverride: z.number().min(0).max(100).nullish(),
     }))
     .query(async ({ input }) => {
       const db = await getDb();
@@ -1203,6 +1204,8 @@ export const ordersRouter = router({
           name: products.name,
           sku: products.sku,
           unitPrice: products.unitPrice,
+          costPrice: products.costPrice,
+          piecesPerUnit: products.piecesPerUnit,
           vatRate: products.vatRate,
         })
         .from(products)
@@ -1214,6 +1217,8 @@ export const ordersRouter = router({
       const [retailer] = await db
         .select({
           pricingPackageId: retailers.pricingPackageId,
+          pricingModel: retailers.pricingModel,
+          markupPercentage: retailers.markupPercentage,
         })
         .from(retailers)
         .where(eq(retailers.id, input.retailerId))
@@ -1221,6 +1226,33 @@ export const ordersRouter = router({
 
       if (!retailer) throw new TRPCError({ code: "NOT_FOUND", message: "Retailer non trovato" });
 
+      const pricingModel = retailer.pricingModel ?? "tier_discount";
+      const vatRate = parseFloat(product.vatRate);
+
+      if (pricingModel === "cost_markup") {
+        // Cost markup: costPrice × piecesPerUnit × (1 + markup/100)
+        const costPerPiece = parseFloat(product.costPrice || "0");
+        const ppu = product.piecesPerUnit ?? 1;
+        const costPerUnit = costPerPiece * ppu;
+        const effectiveMarkup = input.markupPercentageOverride != null
+          ? input.markupPercentageOverride
+          : parseFloat(retailer.markupPercentage || "0");
+        const discountedPrice = Math.round((costPerUnit * (1 + effectiveMarkup / 100) + Number.EPSILON) * 100) / 100;
+
+        return {
+          productId: product.id,
+          productName: product.name,
+          productSku: product.sku,
+          listPrice: costPerUnit, // base = costo per confezione
+          discountedPrice, // prezzo finale con markup
+          discountPercent: 0,
+          markupPercent: effectiveMarkup,
+          pricingModel: "cost_markup" as const,
+          vatRate,
+        };
+      }
+
+      // Tier discount: logica originale
       let discountPercent = 0;
       if (retailer.pricingPackageId) {
         const { pricingPackages } = await import("../drizzle/schema");
@@ -1234,7 +1266,6 @@ export const ordersRouter = router({
 
       const listPrice = parseFloat(product.unitPrice || "0");
       const discountedPrice = Math.round((listPrice * (1 - discountPercent / 100) + Number.EPSILON) * 100) / 100;
-      const vatRate = parseFloat(product.vatRate);
 
       return {
         productId: product.id,
@@ -1243,6 +1274,7 @@ export const ordersRouter = router({
         listPrice,
         discountedPrice,
         discountPercent,
+        pricingModel: "tier_discount" as const,
         vatRate,
       };
     }),
