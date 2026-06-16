@@ -1399,6 +1399,77 @@ export const appRouter = router({
       }),
 
     /**
+     * M11.E: Aggregated value overview (cross-company KPIs).
+     * Same shape as getValueOverview but aggregates across all authorized companies.
+     */
+    getAggregatedValueOverview: staffProcedure.query(async ({ ctx }) => {
+      const { getUserCompanies } = await import("./services/multiCompanyAccess");
+      const userCompanies = await getUserCompanies(ctx.user!.id);
+      if (userCompanies.length < 2) {
+        return null;
+      }
+      const database = await db.getDb();
+      if (!database) return null;
+      const { sql } = await import("drizzle-orm");
+      const companyIds = userCompanies.map((c) => c.companyId);
+      const companyArray = sql.raw(`ARRAY[${companyIds.map(id => `'${id}'::uuid`).join(',')}]`);
+
+      const rows = await database.execute(sql`
+        SELECT
+          COALESCE(SUM(ibb."quantity"), 0)::int AS "totalUnits",
+          COALESCE(SUM(ibb."quantity" * p."costPrice"::numeric), 0)::numeric(18,2) AS "totalValueAtCost",
+          COALESCE(SUM(
+            ibb."quantity" * COALESCE(NULLIF(p."unitPrice", '')::numeric, 0) / COALESCE(p."piecesPerUnit", 1)
+          ), 0)::numeric(18,2) AS "totalValueAtListPrice",
+          COUNT(DISTINCT p."id")::int AS "uniqueProductsCount",
+          COUNT(DISTINCT pb."id")::int AS "activeBatchesCount"
+        FROM "inventoryByBatch" ibb
+        INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
+        INNER JOIN "products" p ON p."id" = pb."productId"
+        INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'central_warehouse'
+        WHERE ibb."quantity" > 0
+          AND pb."companyId" = ANY(${companyArray})
+      `);
+
+      const expRows = await database.execute(sql`
+        SELECT
+          COALESCE(SUM(ibb."quantity"), 0)::int AS "expiringSoonUnits",
+          COALESCE(SUM(ibb."quantity" * p."costPrice"::numeric), 0)::numeric(18,2) AS "expiringSoonValue"
+        FROM "inventoryByBatch" ibb
+        INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
+        INNER JOIN "products" p ON p."id" = pb."productId"
+        INNER JOIN "locations" l ON l."id" = ibb."locationId" AND l."type" = 'central_warehouse'
+        WHERE ibb."quantity" > 0
+          AND pb."companyId" = ANY(${companyArray})
+          AND pb."expirationDate" IS NOT NULL
+          AND pb."expirationDate" < NOW() + INTERVAL '30 days'
+          AND pb."expirationDate" > NOW()
+      `);
+
+      const r = (rows as any[])[0] || {};
+      const e = (expRows as any[])[0] || {};
+
+      const totalValueAtCost = parseFloat(r.totalValueAtCost || "0");
+      const totalValueAtListPrice = parseFloat(r.totalValueAtListPrice || "0");
+      const potentialMargin = totalValueAtListPrice - totalValueAtCost;
+      const potentialMarginPercent = totalValueAtListPrice > 0
+        ? (potentialMargin / totalValueAtListPrice) * 100
+        : 0;
+
+      return {
+        totalUnits: Number(r.totalUnits || 0),
+        totalValueAtCost,
+        totalValueAtListPrice,
+        potentialMargin,
+        potentialMarginPercent,
+        uniqueProductsCount: Number(r.uniqueProductsCount || 0),
+        activeBatchesCount: Number(r.activeBatchesCount || 0),
+        expiringSoonValue: parseFloat(e.expiringSoonValue || "0"),
+        expiringSoonUnits: Number(e.expiringSoonUnits || 0),
+      };
+    }),
+
+    /**
      * M11.E: Summary for dashboard widget (counts only).
      */
     getAggregatedStockSummary: staffProcedure.query(async ({ ctx }) => {

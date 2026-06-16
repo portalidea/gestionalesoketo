@@ -116,11 +116,21 @@ export default function Warehouse() {
     trpc.warehouse.getAggregatedStock.useQuery(undefined, {
       enabled: aggregatedView && !!multiAccess?.hasMultiCompanyAccess,
     });
+  // M11.E: Aggregated value overview (cross-company KPIs)
+  const { data: aggregatedValueOverview } =
+    trpc.warehouse.getAggregatedValueOverview.useQuery(undefined, {
+      enabled: aggregatedView && !!multiAccess?.hasMultiCompanyAccess,
+    });
 
   const { data: overview, isLoading } =
     trpc.warehouse.getStockOverview.useQuery();
-  const { data: valueOverview } =
+  const { data: perCompanyValueOverview } =
     trpc.warehouse.getValueOverview.useQuery();
+
+  // KPI data: switch between per-company and aggregated based on toggle
+  const valueOverview = aggregatedView && aggregatedValueOverview
+    ? aggregatedValueOverview
+    : perCompanyValueOverview;
   const { data: warehouseLoc } = trpc.locations.getCentralWarehouse.useQuery();
   const { data: retailers } = trpc.retailers.list.useQuery();
   const { data: ficStatus } = trpc.ficIntegration.getStatus.useQuery();
