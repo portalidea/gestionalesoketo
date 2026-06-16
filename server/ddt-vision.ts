@@ -107,7 +107,9 @@ export async function extractFromPdf(pdfBuffer: Buffer): Promise<DdtExtractedDat
   const base64Pdf = pdfBuffer.toString("base64");
 
   const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
+    // Modello Claude: verificare validità periodicamente su
+    // https://docs.claude.com/en/docs/about-claude/models
+    model: "claude-sonnet-4-6",
     max_tokens: 4096,
     messages: [
       {

@@ -200,7 +200,9 @@ async function callClaudeVision(
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
+      // Modello Claude: verificare validità periodicamente su
+      // https://docs.claude.com/en/docs/about-claude/models
+      model: "claude-sonnet-4-6",
       max_tokens: 4096,
       system: SYSTEM_PROMPT,
       messages: [
