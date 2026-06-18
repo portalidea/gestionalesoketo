@@ -71,6 +71,7 @@ const baseMenuItems: MenuItem[] = [
   { icon: Warehouse, label: "Magazzino Centrale", path: "/warehouse" },
   { icon: ArrowLeftRight, label: "Movimenti", path: "/movements" },
   { icon: FileText, label: "DDT Import", path: "/ddt-imports" },
+  { icon: Tag, label: "Etichette", path: "/labels" },
   { icon: Store, label: "Rivenditori", path: "/retailers" },
   { icon: ShoppingCart, label: "Ordini", path: "/orders" },
   { icon: Handshake, label: "Affiliati", path: "/affiliates" },

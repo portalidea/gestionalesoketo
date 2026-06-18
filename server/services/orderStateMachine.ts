@@ -181,6 +181,56 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
       break;
     }
 
+    case "transferring→shipped": {
+      // M12: Consume labels on shipment (pool unico cross-company)
+      // Skip label consumption for inter-company transfers to Soketo Srl
+      const SOKETO_SRL_RETAILER_ID = 'd2955b43-4882-4543-a77b-7321cb333468';
+      const shouldConsumeLabels = order.retailerId !== SOKETO_SRL_RETAILER_ID;
+
+      if (shouldConsumeLabels) {
+        const items = await db
+          .select({
+            productId: orderItems.productId,
+            quantity: orderItems.quantity,
+            productName: orderItems.productName,
+          })
+          .from(orderItems)
+          .where(eq(orderItems.orderId, orderId));
+
+        for (const item of items) {
+          // Lock and read current label stock
+          const [product] = await db
+            .select({ labelStock: products.labelStock, name: products.name })
+            .from(products)
+            .where(eq(products.id, item.productId))
+            .for('update');
+
+          if (!product) continue;
+
+          const currentLabelStock = product.labelStock;
+          const newLabelStock = currentLabelStock - item.quantity;
+
+          if (newLabelStock < 0) {
+            throw new TRPCError({
+              code: 'PRECONDITION_FAILED',
+              message: `Etichette insufficienti per ${item.productName || product.name}: disponibili ${currentLabelStock}, richieste ${item.quantity}.`,
+            });
+          }
+
+          await db.update(products)
+            .set({ labelStock: newLabelStock })
+            .where(eq(products.id, item.productId));
+
+          // Record label movement
+          await db.execute(sql`
+            INSERT INTO "labelMovements" ("productId", "type", "quantity", "previousStock", "newStock", "sourceOrderId", "notes", "createdBy")
+            VALUES (${item.productId}::uuid, 'CONSUMPTION', ${-item.quantity}, ${currentLabelStock}, ${newLabelStock}, ${orderId}::uuid, ${'Spedizione ordine ' + (order.orderNumber ?? orderId)}, ${actorUserId}::uuid)
+          `);
+        }
+      }
+      break;
+    }
+
     case "shipped→delivered": {
       // Transform proforma → invoice when payment is already done
       if (ficProformaId && order.paymentStatus === "paid") {

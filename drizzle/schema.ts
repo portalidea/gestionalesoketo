@@ -221,12 +221,35 @@ export const products = pgTable("products", {
   costPrice: numeric("costPrice", { precision: 10, scale: 4 }).default("0").notNull(),
   // M8.4: backorder support — if true, product can be ordered even when stock=0
   isBackorderable: boolean("isBackorderable").default(true).notNull(),
+  // M12: gestione inventario etichette (pool unico cross-company)
+  labelStock: integer("labelStock").default(0).notNull(),
+  labelReorderThreshold: integer("labelReorderThreshold").default(100).notNull(),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export type Product = typeof products.$inferSelect;
 export type InsertProduct = typeof products.$inferInsert;
+
+/**
+ * M12: Label movements — audit trail per movimenti etichette.
+ * Pool unico cross-company (nessuna dimensione companyId).
+ */
+export const labelMovements = pgTable("labelMovements", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  productId: uuid("productId").notNull().references(() => products.id, { onDelete: "cascade" }),
+  type: varchar("type", { length: 20 }).notNull(), // 'LOAD' | 'CONSUMPTION' | 'ADJUSTMENT'
+  quantity: integer("quantity").notNull(),
+  previousStock: integer("previousStock").notNull(),
+  newStock: integer("newStock").notNull(),
+  sourceOrderId: uuid("sourceOrderId"),
+  notes: text("notes"),
+  createdBy: uuid("createdBy"),
+  createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type LabelMovement = typeof labelMovements.$inferSelect;
+export type InsertLabelMovement = typeof labelMovements.$inferInsert;
 
 /**
  * Producers — anagrafica produttori (Phase B M1).

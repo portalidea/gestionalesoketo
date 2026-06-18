@@ -1516,6 +1516,158 @@ export const appRouter = router({
       };
     }),
   }),
+  // ============= LABELS (M12) =============
+  labels: router({
+    /**
+     * M12: Get label overview for all products.
+     * Returns labelStock, threshold, status for each product.
+     */
+    getOverview: staffProcedure.query(async () => {
+      const database = await db.getDb();
+      if (!database) return [];
+      const { sql } = await import("drizzle-orm");
+      const rows = await database.execute(sql`
+        SELECT p."id" AS "productId", p."name", p."sku",
+               p."labelStock", p."labelReorderThreshold"
+        FROM products p
+        ORDER BY p."name"
+      `);
+      return (rows as any[]).map((r: any) => {
+        const stock = Number(r.labelStock || 0);
+        const threshold = Number(r.labelReorderThreshold || 100);
+        let status: 'normal' | 'low' | 'critical' = 'normal';
+        if (stock < threshold * 0.5) status = 'critical';
+        else if (stock < threshold) status = 'low';
+        return {
+          productId: r.productId,
+          name: r.name,
+          sku: r.sku,
+          labelStock: stock,
+          labelReorderThreshold: threshold,
+          status,
+        };
+      });
+    }),
+
+    /**
+     * M12: Get label movement history for a product.
+     */
+    getHistory: staffProcedure
+      .input(z.object({ productId: uuid, limit: z.number().int().min(1).max(200).optional() }))
+      .query(async ({ input }) => {
+        const database = await db.getDb();
+        if (!database) return [];
+        const { sql } = await import("drizzle-orm");
+        const limit = input.limit ?? 50;
+        const rows = await database.execute(sql`
+          SELECT lm.*, u."name" AS "createdByName"
+          FROM "labelMovements" lm
+          LEFT JOIN users u ON u."id" = lm."createdBy"
+          WHERE lm."productId" = ${input.productId}::uuid
+          ORDER BY lm."createdAt" DESC
+          LIMIT ${limit}
+        `);
+        return (rows as any[]).map((r: any) => ({
+          id: r.id,
+          productId: r.productId,
+          type: r.type as 'LOAD' | 'CONSUMPTION' | 'ADJUSTMENT',
+          quantity: Number(r.quantity),
+          previousStock: Number(r.previousStock),
+          newStock: Number(r.newStock),
+          sourceOrderId: r.sourceOrderId,
+          notes: r.notes,
+          createdBy: r.createdBy,
+          createdByName: r.createdByName || null,
+          createdAt: r.createdAt,
+        }));
+      }),
+
+    /**
+     * M12: Get alert count for dashboard widget.
+     */
+    getAlertCount: staffProcedure.query(async () => {
+      const database = await db.getDb();
+      if (!database) return { totalAlerts: 0, criticalCount: 0 };
+      const { sql } = await import("drizzle-orm");
+      const rows = await database.execute(sql`
+        SELECT
+          COUNT(*) FILTER (WHERE "labelStock" < "labelReorderThreshold") AS "totalAlerts",
+          COUNT(*) FILTER (WHERE "labelStock" < "labelReorderThreshold" * 0.5) AS "criticalCount"
+        FROM products
+      `);
+      const r = (rows as any[])[0] || {};
+      return {
+        totalAlerts: Number(r.totalAlerts || 0),
+        criticalCount: Number(r.criticalCount || 0),
+      };
+    }),
+
+    /**
+     * M12: Update label stock (LOAD or ADJUSTMENT).
+     * RBAC: LOAD = writer+admin, ADJUSTMENT = admin only.
+     */
+    updateStock: writerProcedure
+      .input(z.object({
+        productId: uuid,
+        delta: z.number().int(),
+        type: z.enum(['LOAD', 'ADJUSTMENT']),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        // ADJUSTMENT is admin-only
+        if (input.type === 'ADJUSTMENT' && ctx.user?.role !== 'admin') {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Solo admin può effettuare rettifiche' });
+        }
+        const database = await db.getDb();
+        if (!database) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+        const { sql } = await import("drizzle-orm");
+
+        // Lock and read current stock
+        const lockRows = await database.execute(sql`
+          SELECT "labelStock" FROM products WHERE id = ${input.productId}::uuid FOR UPDATE
+        `);
+        const current = (lockRows as any[])[0];
+        if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Prodotto non trovato' });
+
+        const previousStock = Number(current.labelStock);
+        const newStock = previousStock + input.delta;
+        if (newStock < 0) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: `Stock etichette non può andare negativo. Attuale: ${previousStock}, delta: ${input.delta}`,
+          });
+        }
+
+        // Update product
+        await database.execute(sql`
+          UPDATE products SET "labelStock" = ${newStock} WHERE id = ${input.productId}::uuid
+        `);
+
+        // Insert movement
+        await database.execute(sql`
+          INSERT INTO "labelMovements" ("productId", "type", "quantity", "previousStock", "newStock", "notes", "createdBy")
+          VALUES (${input.productId}::uuid, ${input.type}, ${input.delta}, ${previousStock}, ${newStock}, ${input.notes || null}, ${ctx.user?.id || null}::uuid)
+        `);
+
+        return { previousStock, newStock };
+      }),
+
+    /**
+     * M12: Update label reorder threshold (admin only).
+     */
+    updateThreshold: adminProcedure
+      .input(z.object({ productId: uuid, threshold: z.number().int().min(0) }))
+      .mutation(async ({ input }) => {
+        const database = await db.getDb();
+        if (!database) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+        const { sql } = await import("drizzle-orm");
+        await database.execute(sql`
+          UPDATE products SET "labelReorderThreshold" = ${input.threshold} WHERE id = ${input.productId}::uuid
+        `);
+        return { ok: true };
+      }),
+  }),
+
   // ============= ALERTS =============
   alerts: router({
     getActive: staffProcedure.query(async () => {

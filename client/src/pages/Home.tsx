@@ -44,6 +44,8 @@ export default function Home() {
   const { data: expiringBatches } = trpc.dashboard.getExpiringBatches.useQuery();
   // M11.E: Aggregated stock summary (only shown if user has multi-company access)
   const { data: aggregatedSummary } = trpc.warehouse.getAggregatedStockSummary.useQuery();
+  // M12: Label inventory alert count
+  const { data: labelAlerts } = trpc.labels.getAlertCount.useQuery();
 
   return (
     <DashboardLayout>
@@ -399,6 +401,29 @@ export default function Home() {
                       </Button>
                     </Link>
                   </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* M12: Label Inventory Alert Widget */}
+            {labelAlerts && labelAlerts.totalAlerts > 0 && (
+              <Card className="border-border bg-card ring-1 ring-amber-500/30">
+                <CardHeader>
+                  <CardTitle className="text-lg text-foreground flex items-center gap-2">
+                    <AlertTriangle className="h-5 w-5 text-amber-500" />
+                    Etichette sotto soglia
+                  </CardTitle>
+                  <CardDescription>
+                    {labelAlerts.totalAlerts} prodotti con stock etichette insufficiente
+                    {labelAlerts.criticalCount > 0 && ` (${labelAlerts.criticalCount} critici)`}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Link href="/labels?filter=under_threshold">
+                    <Button variant="outline" size="sm">
+                      Gestisci Etichette
+                    </Button>
+                  </Link>
                 </CardContent>
               </Card>
             )}

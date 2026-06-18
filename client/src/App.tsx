@@ -58,6 +58,7 @@ import SalesReport from "./pages/reports/SalesReport";
 import MarketplaceReport from "./pages/reports/MarketplaceReport";
 import InventoryExport from "./pages/InventoryExport";
 import Companies from "./pages/Companies";
+import Labels from "./pages/Labels";
 
 const ADMIN_ROLES = ["admin", "operator", "viewer"];
 const RETAILER_ROLES = ["retailer_admin", "retailer_user"];
@@ -165,6 +166,9 @@ function Router() {
       </Route>
       <Route path="/movements">
         <RequireRole allowedRoles={ADMIN_ROLES}><Movements /></RequireRole>
+      </Route>
+      <Route path="/labels">
+        <RequireRole allowedRoles={ADMIN_ROLES}><Labels /></RequireRole>
       </Route>
       <Route path="/ddt-imports">
         <RequireRole allowedRoles={ADMIN_ROLES}><DdtImports /></RequireRole>

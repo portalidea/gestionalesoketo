@@ -860,6 +860,7 @@ export default function Products() {
                       <SortableTableHead sortKey="totalStock" sort={sortFromUrl} onSort={setSort} className="text-right">Stock totale</SortableTableHead>
                       <SortableTableHead sortKey="activeBatchCount" sort={sortFromUrl} onSort={setSort} className="text-right">Lotti attivi</SortableTableHead>
                       <SortableTableHead sortKey="nearestExpiration" sort={sortFromUrl} onSort={setSort}>Scadenza più vicina</SortableTableHead>
+                      <SortableTableHead sortKey="labelStock" sort={sortFromUrl} onSort={setSort} className="text-right">Etichette</SortableTableHead>
                       {isAdmin && <SortableTableHead sortKey="costPrice" sort={sortFromUrl} onSort={setSort} className="text-right">Costo</SortableTableHead>}
                     </TableRow>
                   </TableHeader>
@@ -938,6 +939,19 @@ export default function Products() {
                               <span>{formatDate(p.nearestExpiration)}</span>
                               {expirationBadge(p.nearestExpiration, p.expiryWarningDays ?? 30)}
                             </div>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {(() => {
+                              const ls = (p as any).labelStock ?? 0;
+                              const lt = (p as any).labelReorderThreshold ?? 100;
+                              const isLow = ls < lt;
+                              const isCritical = ls < lt * 0.5;
+                              return (
+                                <span className={isCritical ? "text-red-600 font-semibold" : isLow ? "text-amber-600 font-semibold" : "text-muted-foreground"}>
+                                  {ls}
+                                </span>
+                              );
+                            })()}
                           </TableCell>
                           {isAdmin && (
                             <TableCell className="text-right font-mono text-xs">

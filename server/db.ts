@@ -336,6 +336,8 @@ export async function getAllProducts() {
       sellableUnitLabel: products.sellableUnitLabel,
       createdAt: products.createdAt,
       updatedAt: products.updatedAt,
+      labelStock: products.labelStock,
+      labelReorderThreshold: products.labelReorderThreshold,
       centralStock: centralStockExpr,
       totalStock: totalStockExpr,
       activeBatchCount: batchCountExpr,

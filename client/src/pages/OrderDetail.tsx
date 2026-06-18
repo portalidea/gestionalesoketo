@@ -403,9 +403,19 @@ export default function OrderDetail() {
     onSuccess: () => { toast.success("Trasferimento avviato"); invalidateOrder(); },
     onError: (err) => toast.error(err.message),
   });
+  const [labelErrorMsg, setLabelErrorMsg] = useState<string | null>(null);
   const markShipped = trpc.orders.markShipped.useMutation({
-    onSuccess: () => { toast.success("Ordine spedito"); invalidateOrder(); },
-    onError: (err) => toast.error(err.message),
+    onSuccess: () => {
+      toast.success("Ordine spedito — etichette scalate dal magazzino");
+      invalidateOrder();
+    },
+    onError: (err) => {
+      if (err.data?.code === 'PRECONDITION_FAILED' && err.message.includes('Etichette insufficienti')) {
+        setLabelErrorMsg(err.message);
+      } else {
+        toast.error(err.message);
+      }
+    },
   });
   const markDelivered = trpc.orders.markDelivered.useMutation({
     onSuccess: () => { toast.success("Ordine consegnato"); invalidateOrder(); },
@@ -1330,6 +1340,26 @@ export default function OrderDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* M12: Label insufficiency error dialog */}
+      <AlertDialog open={!!labelErrorMsg} onOpenChange={(open) => { if (!open) setLabelErrorMsg(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" />
+              Etichette insufficienti
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-base">
+              {labelErrorMsg}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col sm:flex-row gap-2">
+            <AlertDialogCancel onClick={() => setLabelErrorMsg(null)}>Chiudi</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { setLabelErrorMsg(null); window.open('/labels', '_blank'); }}>
+              Vai a Gestione Etichette
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </DashboardLayout>
   );
 }
