@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/select";
 import { Tag, Plus, Settings, History, AlertTriangle, Search, Filter } from "lucide-react";
 import { toast } from "sonner";
+import DashboardLayout from "@/components/DashboardLayout";
 
 type LabelProduct = {
   productId: string;
@@ -156,6 +157,7 @@ export default function Labels() {
   };
 
   return (
+    <DashboardLayout>
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -367,6 +369,7 @@ export default function Labels() {
         </DialogContent>
       </Dialog>
     </div>
+    </DashboardLayout>
   );
 }
 
