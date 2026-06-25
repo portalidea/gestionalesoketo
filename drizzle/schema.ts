@@ -917,6 +917,7 @@ export const salesStores = pgTable(
     isActive: boolean("isActive").default(true).notNull(),
     lastSyncAt: timestamp("lastSyncAt", { withTimezone: true }),
     notes: text("notes"),
+    companyId: uuid("companyId").references(() => companies.id),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },

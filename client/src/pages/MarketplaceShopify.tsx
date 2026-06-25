@@ -204,6 +204,9 @@ export default function MarketplaceShopify() {
                   <div>
                     <p className="font-medium">{store.name}</p>
                     <p className="text-sm text-muted-foreground">{store.storeIdentifier}</p>
+                    {store.companyName && (
+                      <p className="text-xs text-muted-foreground mt-0.5">Azienda: <span className="font-medium">{store.companyName}</span></p>
+                    )}
                   </div>
                 </div>
                 <div className="text-right text-sm text-muted-foreground">

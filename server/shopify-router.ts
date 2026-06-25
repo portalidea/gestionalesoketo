@@ -11,6 +11,7 @@ import { getDb } from "./db";
 import {
   channelVariants,
   channelVariantComponents,
+  companies,
   inventoryByBatch,
   locations,
   marketplaceOrderItems,
@@ -52,12 +53,24 @@ export const shopifyRouter = router({
           isActive: salesStores.isActive,
           lastSyncAt: salesStores.lastSyncAt,
           apiCredentials: salesStores.apiCredentials,
+          companyId: salesStores.companyId,
         })
         .from(salesStores)
         .where(and(eq(salesStores.channel, "shopify"), eq(salesStores.isActive, true)))
         .limit(1);
 
       if (!store) return null;
+
+      // Resolve company name if companyId is set
+      let companyName: string | null = null;
+      if (store.companyId) {
+        const [company] = await db
+          .select({ name: companies.name })
+          .from(companies)
+          .where(eq(companies.id, store.companyId))
+          .limit(1);
+        companyName = company?.name || null;
+      }
 
       return {
         id: store.id,
@@ -66,6 +79,8 @@ export const shopifyRouter = router({
         isActive: store.isActive,
         lastSyncAt: store.lastSyncAt,
         isConfigured: !!(store.apiCredentials as any)?.accessToken,
+        companyId: store.companyId,
+        companyName,
       };
     }),
 
@@ -500,10 +515,10 @@ export const shopifyRouter = router({
 
             imported++;
 
-            // Process stock (M11.A: pass companyId)
+            // Process stock: use store.companyId (linked company) for correct warehouse
             const stockResult = await processStockForMarketplaceOrder(
               importResult.marketplaceOrderId,
-              ctx.activeCompanyId,
+              store.companyId || undefined,
             );
 
             if (stockResult.status === "processed") {
@@ -692,7 +707,8 @@ export const shopifyRouter = router({
           .set({ stockProcessingError: null, updatedAt: new Date() })
           .where(eq(marketplaceOrders.id, input.marketplaceOrderId));
 
-        const result = await processStockForMarketplaceOrder(input.marketplaceOrderId, ctx.activeCompanyId);
+        // Let processStockForMarketplaceOrder resolve companyId from the store
+        const result = await processStockForMarketplaceOrder(input.marketplaceOrderId);
 
         return {
           success: result.status === "processed",

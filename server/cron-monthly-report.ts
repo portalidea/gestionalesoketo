@@ -214,6 +214,7 @@ cronRoutes.get("/cron/shopify-stock-sync", async (req: Request, res: Response) =
         imported++;
         const stockResult = await processStockForMarketplaceOrder(
           importResult.marketplaceOrderId,
+          store.companyId || undefined,
         );
         if (stockResult.status === "processed") processedStock++;
         else failed++;

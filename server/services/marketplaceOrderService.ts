@@ -12,6 +12,7 @@ import {
   marketplaceOrderItems,
   marketplaceOrders,
   productBatches,
+  salesStores,
   stockMovements,
 } from "../../drizzle/schema";
 import type { ShopifyOrder } from "./shopifyService";
@@ -169,15 +170,31 @@ export async function processStockForMarketplaceOrder(
     return { status: "processed", errors: [] };
   }
 
+  // 2b. Resolve companyId from sales_store if not explicitly passed
+  let resolvedCompanyId = companyId;
+  if (!resolvedCompanyId && order.storeId) {
+    const [store] = await db
+      .select({ companyId: salesStores.companyId })
+      .from(salesStores)
+      .where(eq(salesStores.id, order.storeId))
+      .limit(1);
+    if (store?.companyId) {
+      resolvedCompanyId = store.companyId;
+      console.log(
+        `[marketplaceOrderService.processStock] resolved companyId=${resolvedCompanyId} from store ${order.storeId}`,
+      );
+    }
+  }
+
   // 3. Load items
   const items = await db
     .select()
     .from(marketplaceOrderItems)
     .where(eq(marketplaceOrderItems.marketplaceOrderId, marketplaceOrderId));
 
-  // 4. Find central warehouse (M11.A: filtro companyId)
+  // 4. Find central warehouse (uses resolved companyId from store)
   const warehouseConditions: any[] = [eq(locations.type, "central_warehouse")];
-  if (companyId) warehouseConditions.push(eq(locations.companyId, companyId));
+  if (resolvedCompanyId) warehouseConditions.push(eq(locations.companyId, resolvedCompanyId));
   const [warehouse] = await db
     .select({ id: locations.id })
     .from(locations)
