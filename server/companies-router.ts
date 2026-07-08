@@ -389,10 +389,9 @@ export const companiesRouter = router({
    * M11.B: Lista utenti per la select "Aggiungi utente" (admin only).
    * Ritorna tutti gli utenti staff (admin/operator/viewer).
    */
-  listUsers: adminProcedure.query(async ({ ctx }) => {
+    listUsers: adminProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
-
     const rows = await db
       .select({
         id: users.id,
@@ -402,7 +401,26 @@ export const companiesRouter = router({
       })
       .from(users)
       .orderBy(users.email);
-
     return rows;
   }),
+
+  /**
+   * Lista company assegnate a un utente specifico (admin only).
+   */
+  listUserCompanies: adminProcedure
+    .input(z.object({ userId: uuidSchema }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const rows = await db
+        .select({
+          companyId: companies.id,
+          companyName: companies.name,
+          isDefault: userCompanyAccess.isDefault,
+        })
+        .from(userCompanyAccess)
+        .innerJoin(companies, eq(companies.id, userCompanyAccess.companyId))
+        .where(eq(userCompanyAccess.userId, input.userId));
+      return rows;
+    }),
 });

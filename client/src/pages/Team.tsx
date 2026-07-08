@@ -27,7 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { trpc } from "@/lib/trpc";
-import { KeyRound, Loader2, Mail, Trash2, UserPlus } from "lucide-react";
+import { Building2, KeyRound, Loader2, Mail, Pencil, Trash2, UserPlus } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -38,7 +38,8 @@ import {
   DialogTrigger,
   DialogClose,
 } from "@/components/ui/dialog";
-import { useState, type FormEvent } from "react";
+import { useState, useEffect, type FormEvent } from "react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 
 type Role = "admin" | "operator" | "viewer";
@@ -87,6 +88,167 @@ function SendResetButton({ email }: { email: string }) {
           >
             {mutation.isPending ? "Invio..." : "Invia link"}
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditProfileButton({ user }: { user: { id: string; email: string; name: string | null } }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState(user.name ?? "");
+  const [email, setEmail] = useState(user.email);
+  const utils = trpc.useUtils();
+
+  const mutation = trpc.users.updateProfile.useMutation({
+    onSuccess: () => {
+      toast.success("Profilo aggiornato");
+      utils.users.list.invalidate();
+      setOpen(false);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  useEffect(() => {
+    if (open) {
+      setName(user.name ?? "");
+      setEmail(user.email);
+    }
+  }, [open, user.name, user.email]);
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm" className="gap-1">
+          <Pencil className="w-3.5 h-3.5" />
+          Modifica
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Modifica profilo</DialogTitle>
+          <DialogDescription>Modifica nome e email dell'operatore.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-2">
+            <Label htmlFor="edit-name">Nome</Label>
+            <Input
+              id="edit-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Nome completo"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="edit-email">Email</Label>
+            <Input
+              id="edit-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline">Annulla</Button>
+          </DialogClose>
+          <Button
+            onClick={() => {
+              const updates: { id: string; name?: string; email?: string } = { id: user.id };
+              if (name !== (user.name ?? "")) updates.name = name;
+              if (email !== user.email) updates.email = email;
+              mutation.mutate(updates);
+            }}
+            disabled={mutation.isPending}
+          >
+            {mutation.isPending ? "Salvataggio..." : "Salva"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ManageCompaniesButton({ user }: { user: { id: string; email: string } }) {
+  const [open, setOpen] = useState(false);
+  const utils = trpc.useUtils();
+
+  const companiesQuery = trpc.companies.listAll.useQuery(undefined, { enabled: open });
+  const userCompaniesQuery = trpc.companies.listUserCompanies.useQuery(
+    { userId: user.id },
+    { enabled: open },
+  );
+
+  const grantAccess = trpc.companies.grantUserAccess.useMutation({
+    onSuccess: () => {
+      toast.success("Accesso concesso");
+      utils.companies.listUserCompanies.invalidate({ userId: user.id });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const revokeAccess = trpc.companies.revokeUserAccess.useMutation({
+    onSuccess: () => {
+      toast.success("Accesso revocato");
+      utils.companies.listUserCompanies.invalidate({ userId: user.id });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const assignedIds = new Set(
+    (userCompaniesQuery.data ?? []).map((c) => c.companyId),
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm" className="gap-1">
+          <Building2 className="w-3.5 h-3.5" />
+          Aziende
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Aziende assegnate</DialogTitle>
+          <DialogDescription>
+            Seleziona le aziende a cui <strong>{user.email}</strong> ha accesso.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          {companiesQuery.isLoading ? (
+            <div className="flex justify-center py-4">
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </div>
+          ) : (
+            companiesQuery.data?.map((company) => {
+              const isAssigned = assignedIds.has(company.id);
+              return (
+                <div key={company.id} className="flex items-center gap-3">
+                  <Checkbox
+                    id={`company-${company.id}`}
+                    checked={isAssigned}
+                    disabled={grantAccess.isPending || revokeAccess.isPending}
+                    onCheckedChange={(checked) => {
+                      if (checked) {
+                        grantAccess.mutate({ userId: user.id, companyId: company.id });
+                      } else {
+                        revokeAccess.mutate({ userId: user.id, companyId: company.id });
+                      }
+                    }}
+                  />
+                  <label htmlFor={`company-${company.id}`} className="text-sm font-medium cursor-pointer">
+                    {company.name}
+                  </label>
+                </div>
+              );
+            })
+          )}
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline">Chiudi</Button>
+          </DialogClose>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -336,7 +498,9 @@ export default function Team() {
                           </Select>
                         </TableCell>
                         <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-2">
+                          <div className="flex items-center justify-end gap-2 flex-wrap">
+                            <EditProfileButton user={u} />
+                            <ManageCompaniesButton user={u} />
                             <SendResetButton email={u.email} />
                             <Button
                               variant="ghost"

@@ -131,6 +131,16 @@ export default function RetailerDetail() {
     },
     onError: (e) => toast.error(e.message),
   });
+
+  // Pricing model edit
+  const updateRetailerMut = trpc.retailers.update.useMutation({
+    onSuccess: () => {
+      utils.retailers.getDetails.invalidate({ id: retailerId });
+      utils.retailers.getById.invalidate({ id: retailerId });
+      toast.success("Modello listino aggiornato");
+    },
+    onError: (e) => toast.error(e.message),
+  });
   // M11.C: assignFicClient rimosso — mapping ora via syncRetailerMappings in /settings/integrations
 
   // M7-A: affiliate assignment
@@ -539,12 +549,60 @@ export default function RetailerDetail() {
           <CardHeader>
             <CardTitle>Configurazione commerciale</CardTitle>
             <CardDescription>
-              Pacchetto sconto e mapping cliente FiC. Entrambi sono obbligatori per
-              generare proforma su transfer.
+              Modello listino, pacchetto sconto e mapping cliente FiC.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Modello listino */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <Tag className="h-4 w-4 text-primary" />
+                  Modello listino
+                </Label>
+                <Select
+                  value={retailer.pricingModel ?? "tier_discount"}
+                  onValueChange={(v) => {
+                    updateRetailerMut.mutate({
+                      id: retailer.id,
+                      pricingModel: v as "tier_discount" | "cost_markup",
+                      ...(v === "tier_discount" ? { markupPercentage: null } : {}),
+                    });
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="tier_discount">Sconto su listino (tier_discount)</SelectItem>
+                    <SelectItem value="cost_markup">Markup su costo (cost_markup)</SelectItem>
+                  </SelectContent>
+                </Select>
+                {retailer.pricingModel === "cost_markup" && (
+                  <div className="flex items-center gap-2 mt-2">
+                    <Label className="text-xs whitespace-nowrap">Markup %</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="100"
+                      className="w-24 h-8 text-sm"
+                      defaultValue={retailer.markupPercentage ? parseFloat(retailer.markupPercentage) : ""}
+                      onBlur={(e) => {
+                        const val = parseFloat(e.target.value);
+                        if (!isNaN(val) && val >= 0 && val <= 100) {
+                          updateRetailerMut.mutate({
+                            id: retailer.id,
+                            markupPercentage: val,
+                          });
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Pacchetto commerciale */}
               <div className="space-y-2">
                 <Label className="flex items-center gap-2">
                   <Tag className="h-4 w-4 text-primary" />
@@ -571,7 +629,7 @@ export default function RetailerDetail() {
                     ))}
                   </SelectContent>
                 </Select>
-                {!retailer.pricingPackageId && (
+                {!retailer.pricingPackageId && retailer.pricingModel !== "cost_markup" && (
                   <p className="text-xs text-yellow-500">
                     Senza pacchetto non è possibile generare proforma.
                   </p>

@@ -157,6 +157,35 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    updateProfile: adminProcedure
+      .input(
+        z.object({
+          id: uuid,
+          name: z.string().min(1).max(200).optional(),
+          email: z.string().email().optional(),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        const { eq } = await import("drizzle-orm");
+        const { users } = await import("../drizzle/schema");
+        const database = await db.getDb();
+        if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const updates: Record<string, unknown> = { updatedAt: new Date() };
+        if (input.name !== undefined) updates.name = input.name;
+        if (input.email !== undefined) updates.email = input.email;
+        await database
+          .update(users)
+          .set(updates)
+          .where(eq(users.id, input.id));
+        // If email changed, also update in Supabase auth
+        if (input.email) {
+          await supabaseAdmin.auth.admin.updateUserById(input.id, {
+            email: input.email,
+          });
+        }
+        return { success: true };
+      }),
+
     /**
      * M10: Invia link "imposta password" a tutti gli utenti esistenti.
      * Da usare una tantum dopo la migrazione da magic-link a email+password.
