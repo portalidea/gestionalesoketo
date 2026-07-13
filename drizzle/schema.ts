@@ -197,6 +197,7 @@ export type InsertRetailer = typeof retailers.$inferInsert;;
 export const products = pgTable("products", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   sku: varchar("sku", { length: 100 }).notNull().unique(),
+  internalCode: varchar("internalCode", { length: 50 }),
   name: varchar("name", { length: 255 }).notNull(),
   description: text("description"),
   category: varchar("category", { length: 100 }),

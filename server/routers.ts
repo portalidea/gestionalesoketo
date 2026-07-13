@@ -519,6 +519,7 @@ export const appRouter = router({
       .input(
         z.object({
           sku: z.string().min(1),
+          internalCode: z.string().max(50).optional(),
           name: z.string().min(1),
           description: z.string().optional(),
           category: z.string().optional(),
@@ -548,6 +549,7 @@ export const appRouter = router({
         z.object({
           id: uuid,
           sku: z.string().optional(),
+          internalCode: z.string().max(50).nullish(),
           name: z.string().optional(),
           description: z.string().optional(),
           category: z.string().optional(),
@@ -589,6 +591,7 @@ export const appRouter = router({
       .input(
         z.object({
           sku: z.string().min(1),
+          internalCode: z.string().max(50).optional(),
           name: z.string().min(1),
           description: z.string().optional(),
           category: z.string().optional(),

@@ -152,6 +152,7 @@ export default function Products() {
       switch (key) {
         case "name": return item.name;
         case "sku": return item.sku;
+        case "internalCode": return item.internalCode ?? "";
         case "category": return item.category ?? "";
         case "unitPrice": return item.unitPrice ? parseFloat(item.unitPrice) : 0;
         case "vatRate": return parseFloat(item.vatRate);
@@ -852,6 +853,7 @@ export default function Products() {
                     <TableRow>
                       <SortableTableHead sortKey="name" sort={sortFromUrl} onSort={setSort}>Nome</SortableTableHead>
                       <SortableTableHead sortKey="sku" sort={sortFromUrl} onSort={setSort}>SKU</SortableTableHead>
+                      <SortableTableHead sortKey="internalCode" sort={sortFromUrl} onSort={setSort}>Cod. Articolo</SortableTableHead>
                       <SortableTableHead sortKey="category" sort={sortFromUrl} onSort={setSort}>Categoria</SortableTableHead>
                       <SortableTableHead sortKey="unitPrice" sort={sortFromUrl} onSort={setSort} className="text-right">Prezzo</SortableTableHead>
                       <SortableTableHead sortKey="vatRate" sort={sortFromUrl} onSort={setSort} className="text-right">IVA</SortableTableHead>
@@ -883,6 +885,9 @@ export default function Products() {
                           </TableCell>
                           <TableCell className="font-mono text-xs text-muted-foreground">
                             {p.sku}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">
+                            {p.internalCode ?? "-"}
                           </TableCell>
                           <TableCell className="text-muted-foreground">
                             {p.category ?? "-"}

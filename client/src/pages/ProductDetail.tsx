@@ -70,6 +70,7 @@ import { useLocation, useRoute } from "wouter";
 
 type FormState = {
   sku: string;
+  internalCode: string;
   name: string;
   description: string;
   category: string;
@@ -89,6 +90,7 @@ type FormState = {
 
 const EMPTY_FORM: FormState = {
   sku: "",
+  internalCode: "",
   name: "",
   description: "",
   category: "",
@@ -375,6 +377,7 @@ export default function ProductDetail() {
     if (product) {
       setForm({
         sku: product.sku ?? "",
+        internalCode: product.internalCode ?? "",
         name: product.name ?? "",
         description: product.description ?? "",
         category: product.category ?? "",
@@ -417,6 +420,7 @@ export default function ProductDetail() {
     updateMutation.mutate({
       id: productId,
       sku: form.sku,
+      internalCode: form.internalCode || null,
       name: form.name,
       description: form.description || undefined,
       category: form.category || undefined,
@@ -687,7 +691,7 @@ export default function ProductDetail() {
             </Button>
             <h1 className="text-3xl font-bold text-foreground">{product.name}</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              SKU: {product.sku} · Aggiornato il{" "}
+              SKU: {product.sku}{product.internalCode ? ` · Cod. Articolo: ${product.internalCode}` : ""} · Aggiornato il{" "}
               {format(new Date(product.updatedAt), "dd/MM/yyyy HH:mm")}
             </p>
           </div>
@@ -732,7 +736,7 @@ export default function ProductDetail() {
               <CardDescription>SKU, nome, descrizione, categoria.</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <div className="grid gap-2">
                   <Label htmlFor="sku">SKU *</Label>
                   <Input
@@ -740,6 +744,18 @@ export default function ProductDetail() {
                     value={form.sku}
                     onChange={(e) => setForm({ ...form, sku: e.target.value })}
                     required
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="internalCode">Codice Articolo</Label>
+                  <Input
+                    id="internalCode"
+                    value={form.internalCode}
+                    maxLength={50}
+                    placeholder="Opzionale"
+                    onChange={(e) =>
+                      setForm({ ...form, internalCode: e.target.value })
+                    }
                   />
                 </div>
                 <div className="grid gap-2">

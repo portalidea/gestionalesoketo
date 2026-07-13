@@ -316,6 +316,7 @@ export async function getAllProducts() {
     .select({
       id: products.id,
       sku: products.sku,
+      internalCode: products.internalCode,
       name: products.name,
       description: products.description,
       category: products.category,
