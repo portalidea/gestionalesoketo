@@ -725,7 +725,7 @@ export const ordersRouter = router({
    */
   batchesForProduct: staffProcedure
     .input(z.object({ productId: uuidSchema }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -736,7 +736,10 @@ export const ordersRouter = router({
           expirationDate: productBatches.expirationDate,
         })
         .from(productBatches)
-        .where(eq(productBatches.productId, input.productId))
+        .where(and(
+          eq(productBatches.productId, input.productId),
+          eq(productBatches.companyId, ctx.activeCompanyId),
+        ))
         .orderBy(productBatches.expirationDate);
 
       return batches;
@@ -747,7 +750,7 @@ export const ordersRouter = router({
    */
   suggestBatchForItem: staffProcedure
     .input(z.object({ orderItemId: uuidSchema }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -760,16 +763,16 @@ export const ordersRouter = router({
 
       if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item non trovato" });
 
-      // Find central warehouse
+      // Find central warehouse for the active company (M11.A)
       const [warehouse] = await db
         .select({ id: locations.id })
         .from(locations)
-        .where(eq(locations.type, "central_warehouse"))
+        .where(and(eq(locations.type, "central_warehouse"), eq(locations.companyId, ctx.activeCompanyId)))
         .limit(1);
 
       if (!warehouse) return { batches: [], requiredQuantity: item.quantity };
 
-      // All batches with stock > 0, ordered FEFO
+      // All batches with stock > 0, ordered FEFO — filtered by active company
       const candidates = await db
         .select({
           batchId: productBatches.id,
@@ -788,6 +791,7 @@ export const ordersRouter = router({
         .where(
           and(
             eq(productBatches.productId, item.productId),
+            eq(productBatches.companyId, ctx.activeCompanyId),
             gt(inventoryByBatch.quantity, 0),
           ),
         )

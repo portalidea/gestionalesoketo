@@ -754,8 +754,8 @@ export const appRouter = router({
   productBatches: router({
     listByProduct: staffProcedure
       .input(z.object({ productId: uuid }))
-      .query(async ({ input }) => {
-        return await db.getBatchesByProduct(input.productId);
+      .query(async ({ input, ctx }) => {
+        return await db.getBatchesByProduct(input.productId, ctx.activeCompanyId);
       }),
 
     /**
@@ -869,8 +869,8 @@ export const appRouter = router({
      */
     suggestForTransfer: staffProcedure
       .input(z.object({ productId: uuid, retailerId: uuid }))
-      .query(async ({ input }) => {
-        return await db.getBatchesAvailableForTransfer(input.productId);
+      .query(async ({ input, ctx }) => {
+        return await db.getBatchesAvailableForTransfer(input.productId, ctx.activeCompanyId);
       }),
   }),
 

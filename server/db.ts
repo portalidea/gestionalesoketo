@@ -628,11 +628,11 @@ export async function getRetailerLocation(retailerId: string): Promise<Location 
  * Lista lotti di un prodotto, arricchiti con nome produttore e stock
  * corrente nel magazzino centrale (lookup inventoryByBatch).
  */
-export async function getBatchesByProduct(productId: string) {
+export async function getBatchesByProduct(productId: string, companyId?: string) {
   const db = await getDb();
   if (!db) return [];
 
-  const warehouse = await getCentralWarehouseLocation();
+  const warehouse = await getCentralWarehouseLocation(companyId);
   if (!warehouse) return [];
 
   const retailerStockExpr = sql<number>`COALESCE((
@@ -642,6 +642,12 @@ export async function getBatchesByProduct(productId: string) {
     WHERE ibb."batchId" = ${productBatches.id}
       AND l."type" = 'retailer'
   ), 0)`;
+
+  // Build WHERE conditions
+  const conditions: SQL[] = [eq(productBatches.productId, productId)];
+  if (companyId) {
+    conditions.push(eq(productBatches.companyId, companyId));
+  }
 
   const rows = await db
     .select({
@@ -668,7 +674,7 @@ export async function getBatchesByProduct(productId: string) {
         eq(inventoryByBatch.locationId, warehouse.id),
       ),
     )
-    .where(eq(productBatches.productId, productId))
+    .where(and(...conditions))
     .orderBy(productBatches.expirationDate);
 
   return rows;
@@ -942,12 +948,21 @@ export async function deleteBatchIfFresh(batchId: string): Promise<void> {
  * Returns: solo lotti con `centralStock > 0`, ordinati per
  * `expirationDate ASC`. La UI usa il primo come default suggerimento.
  */
-export async function getBatchesAvailableForTransfer(productId: string) {
+export async function getBatchesAvailableForTransfer(productId: string, companyId?: string) {
   const db = await getDb();
   if (!db) return [];
 
-  const warehouse = await getCentralWarehouseLocation();
+  const warehouse = await getCentralWarehouseLocation(companyId);
   if (!warehouse) return [];
+
+  // Build WHERE conditions
+  const conditions: SQL[] = [
+    eq(productBatches.productId, productId),
+    sql`${inventoryByBatch.quantity} > 0`,
+  ];
+  if (companyId) {
+    conditions.push(eq(productBatches.companyId, companyId));
+  }
 
   const rows = await db
     .select({
@@ -969,12 +984,7 @@ export async function getBatchesAvailableForTransfer(productId: string) {
       ),
     )
     .leftJoin(producers, eq(productBatches.producerId, producers.id))
-    .where(
-      and(
-        eq(productBatches.productId, productId),
-        sql`${inventoryByBatch.quantity} > 0`,
-      ),
-    )
+    .where(and(...conditions))
     .orderBy(productBatches.expirationDate);
 
   return rows;
