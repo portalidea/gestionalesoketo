@@ -1087,9 +1087,9 @@ export const ordersRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
-      // Get order retailerId
+      // Get order retailerId + orderNumber
       const [order] = await db
-        .select({ retailerId: orders.retailerId })
+        .select({ retailerId: orders.retailerId, orderNumber: orders.orderNumber })
         .from(orders)
         .where(eq(orders.id, input.orderId))
         .limit(1);
@@ -1140,7 +1140,50 @@ export const ordersRouter = router({
       }
 
       console.log(`[startTransfer] orderId=${input.orderId} transfers completed:`, transferResults);
-      return { ...result, transfers: transferResults };
+
+      // ============= M11.D: Inter-company stock loading =============
+      // If this order targets retailer "Soketo Srl" (inter-company transfer),
+      // automatically load the same stock into SoKeto company's central warehouse.
+      const { isInterCompanyOrder, loadInterCompanyStock } = await import("./services/interCompanyTransfer");
+      let interCompanyResult: Awaited<ReturnType<typeof loadInterCompanyStock>> | null = null;
+
+      if (isInterCompanyOrder(order.retailerId)) {
+        const interCompanyItems = items
+          .filter((it) => it.batchId)
+          .map((it) => ({
+            productId: it.productId,
+            batchId: it.batchId!,
+            quantity: it.quantity * (it.piecesPerUnit ?? 1), // pieces
+            productName: it.productName ?? "Prodotto",
+          }));
+
+        try {
+          interCompanyResult = await loadInterCompanyStock({
+            orderId: input.orderId,
+            orderNumber: order.orderNumber,
+            items: interCompanyItems,
+            createdBy: ctx.user!.id,
+          });
+          console.log(
+            `[startTransfer][M11.D] Inter-company load completed:`,
+            interCompanyResult.loaded.map((l) => `${l.productName}: ${l.quantity} pz (batch ${l.batchNumber})`),
+          );
+          if (interCompanyResult.warnings.length > 0) {
+            console.warn(`[startTransfer][M11.D] Warnings:`, interCompanyResult.warnings);
+          }
+        } catch (e: any) {
+          // M11.D failure should NOT block the E-Keto transfer (already executed above)
+          // but we log prominently for manual reconciliation
+          console.error(`[startTransfer][M11.D] CRITICAL: Inter-company load FAILED for order ${input.orderId}: ${e.message}`);
+          console.error(e.stack);
+        }
+      }
+
+      return {
+        ...result,
+        transfers: transferResults,
+        ...(interCompanyResult && { interCompanyLoad: interCompanyResult }),
+      };
     }),
 
   /**
@@ -1180,12 +1223,71 @@ export const ordersRouter = router({
       reason: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
-      return transitionOrder({
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+      // Check if order was already transferred (transferring state) and is inter-company
+      const [orderInfo] = await db
+        .select({
+          status: orders.status,
+          retailerId: orders.retailerId,
+          orderNumber: orders.orderNumber,
+        })
+        .from(orders)
+        .where(eq(orders.id, input.orderId))
+        .limit(1);
+
+      const result = await transitionOrder({
         orderId: input.orderId,
         toStatus: "cancelled",
         actorUserId: ctx.user!.id,
         reason: input.reason,
       });
+
+      // M11.D: If the order was in 'transferring' state (stock already discharged)
+      // and it's an inter-company order, reverse the SoKeto stock loading
+      if (orderInfo && orderInfo.status === "transferring") {
+        const { isInterCompanyOrder, reverseInterCompanyStock } = await import("./services/interCompanyTransfer");
+        if (isInterCompanyOrder(orderInfo.retailerId)) {
+          const items = await db
+            .select({
+              productId: orderItems.productId,
+              batchId: orderItems.batchId,
+              quantity: orderItems.quantity,
+              productName: orderItems.productName,
+              piecesPerUnit: products.piecesPerUnit,
+            })
+            .from(orderItems)
+            .leftJoin(products, eq(orderItems.productId, products.id))
+            .where(eq(orderItems.orderId, input.orderId));
+
+          const reverseItems = items
+            .filter((it) => it.batchId)
+            .map((it) => ({
+              productId: it.productId,
+              batchId: it.batchId!,
+              quantity: it.quantity * (it.piecesPerUnit ?? 1),
+              productName: it.productName ?? "Prodotto",
+            }));
+
+          try {
+            const reversal = await reverseInterCompanyStock({
+              orderId: input.orderId,
+              orderNumber: orderInfo.orderNumber,
+              items: reverseItems,
+              createdBy: ctx.user!.id,
+            });
+            console.log(`[cancelOrder][M11.D] Inter-company reversal:`, reversal.reversed);
+            if (reversal.warnings.length > 0) {
+              console.warn(`[cancelOrder][M11.D] Warnings:`, reversal.warnings);
+            }
+          } catch (e: any) {
+            console.error(`[cancelOrder][M11.D] Reversal FAILED: ${e.message}`);
+          }
+        }
+      }
+
+      return result;
     }),
 
   /**

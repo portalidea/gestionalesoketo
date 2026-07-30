@@ -184,7 +184,7 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
     case "transferring→shipped": {
       // M12: Consume labels on shipment (pool unico cross-company)
       // Skip label consumption for inter-company transfers to Soketo Srl
-      const SOKETO_SRL_RETAILER_ID = 'd2955b43-4882-4543-a77b-7321cb333468';
+      const { SOKETO_SRL_RETAILER_ID } = await import("../../shared/const");
       const shouldConsumeLabels = order.retailerId !== SOKETO_SRL_RETAILER_ID;
 
       if (shouldConsumeLabels) {
