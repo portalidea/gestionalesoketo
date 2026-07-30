@@ -1017,11 +1017,12 @@ const promozioniRouter = router({
         retailerId: uuidSchema.optional(),
       }),
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new Error("DB non disponibile");
 
       const { dateFrom, dateTo } = parseDateRange(input);
+      const companyId = ctx.activeCompanyId; // M11.A: multi-tenant
 
       // Build dynamic WHERE conditions
       const conditions: string[] = [
@@ -1029,6 +1030,7 @@ const promozioniRouter = router({
         `o."status" != 'cancelled'`,
         `o."createdAt" >= '${dateFrom.toISOString()}'::timestamptz`,
         `o."createdAt" <= '${dateTo.toISOString()}'::timestamptz`,
+        `o."companyId" = '${companyId}'`,
       ];
       if (input.retailerId) {
         conditions.push(`o."retailerId" = '${input.retailerId}'::uuid`);
@@ -1048,6 +1050,7 @@ const promozioniRouter = router({
             COUNT(DISTINCT o."id")::int AS "numOrders",
             SUM(oi."quantity")::int AS "totalQuantity",
             COALESCE(SUM(oi."quantity" * p."costPrice"::numeric), 0)::float AS "totalCost",
+            COALESCE(SUM(oi."quantity" * oi."unitPriceBase"::numeric), 0)::float AS "totalListValue",
             COALESCE(SUM(oi."quantity" * oi."unitPriceBase"::numeric * ${discountMultiplier}), 0)::float AS "totalGiftValue"
           FROM "orders" o
           JOIN "orderItems" oi ON oi."orderId" = o."id"
@@ -1066,6 +1069,7 @@ const promozioniRouter = router({
         numOrders: number;
         totalQuantity: number;
         totalCost: number;
+        totalListValue: number;
         totalGiftValue: number;
       }>).map((r) => ({
         retailerName: r.retailerName,
@@ -1074,6 +1078,7 @@ const promozioniRouter = router({
         numOrders: r.numOrders,
         totalQuantity: r.totalQuantity,
         totalCost: Math.round(r.totalCost * 100) / 100,
+        totalListValue: Math.round(r.totalListValue * 100) / 100,
         totalGiftValue: Math.round(r.totalGiftValue * 100) / 100,
       }));
 
@@ -1083,9 +1088,10 @@ const promozioniRouter = router({
           numOrders: acc.numOrders + row.numOrders,
           totalQuantity: acc.totalQuantity + row.totalQuantity,
           totalCost: Math.round((acc.totalCost + row.totalCost) * 100) / 100,
+          totalListValue: Math.round((acc.totalListValue + row.totalListValue) * 100) / 100,
           totalGiftValue: Math.round((acc.totalGiftValue + row.totalGiftValue) * 100) / 100,
         }),
-        { numOrders: 0, totalQuantity: 0, totalCost: 0, totalGiftValue: 0 },
+        { numOrders: 0, totalQuantity: 0, totalCost: 0, totalListValue: 0, totalGiftValue: 0 },
       );
 
       return {

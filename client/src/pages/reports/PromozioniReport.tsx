@@ -57,6 +57,7 @@ export default function PromozioniReport() {
       "N° Ordini Omaggio",
       "Confezioni Regalate",
       "Costo Totale (€)",
+      "Valore Listino (€)",
       `Valore Regalato Premium ${referenceDiscount}% (€)`,
     ].join(";");
 
@@ -67,6 +68,7 @@ export default function PromozioniReport() {
         row.numOrders,
         row.totalQuantity,
         row.totalCost.toFixed(2).replace(".", ","),
+        row.totalListValue.toFixed(2).replace(".", ","),
         row.totalGiftValue.toFixed(2).replace(".", ","),
       ].join(";"),
     );
@@ -77,6 +79,7 @@ export default function PromozioniReport() {
       totals.numOrders,
       totals.totalQuantity,
       totals.totalCost.toFixed(2).replace(".", ","),
+      totals.totalListValue.toFixed(2).replace(".", ","),
       totals.totalGiftValue.toFixed(2).replace(".", ","),
     ].join(";");
 
@@ -205,6 +208,7 @@ export default function PromozioniReport() {
                     <TableHead className="text-right">N° Ordini</TableHead>
                     <TableHead className="text-right">Confezioni</TableHead>
                     <TableHead className="text-right">Costo (€)</TableHead>
+                    <TableHead className="text-right">Listino (€)</TableHead>
                     <TableHead className="text-right">Valore Regalato (€)</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -217,6 +221,9 @@ export default function PromozioniReport() {
                       <TableCell className="text-right">{formatNum(row.totalQuantity)}</TableCell>
                       <TableCell className="text-right text-destructive font-mono">
                         {formatEur(row.totalCost)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        {formatEur(row.totalListValue)}
                       </TableCell>
                       <TableCell className="text-right font-mono">
                         {formatEur(row.totalGiftValue)}
@@ -235,6 +242,9 @@ export default function PromozioniReport() {
                     </TableCell>
                     <TableCell className="text-right text-destructive font-mono">
                       {formatEur(report.data.totals.totalCost)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono">
+                      {formatEur(report.data.totals.totalListValue)}
                     </TableCell>
                     <TableCell className="text-right font-mono">
                       {formatEur(report.data.totals.totalGiftValue)}
