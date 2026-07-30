@@ -14,9 +14,10 @@
  */
 import { z } from "zod";
 import { sql } from "drizzle-orm";
-import { staffProcedure, router } from "./_core/trpc";
+import { staffProcedure, adminProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
 import { uuidSchema } from "../shared/schemas";
+import { PROMO_REFERENCE_DISCOUNT } from "../shared/const";
 
 // ============= HELPERS =============
 
@@ -1000,11 +1001,107 @@ function formatFilenameDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+// ============= PROMOZIONI (OMAGGI) REPORT =============
+
+
+const promozioniRouter = router({
+  /**
+   * Report aggregato ordini omaggio (unitPriceFinal = 0, non annullati).
+   * Raggruppato per rivenditore + mese. Solo admin.
+   */
+  getReport: adminProcedure
+    .input(
+      z.object({
+        dateFrom: z.string().optional(),
+        dateTo: z.string().optional(),
+        retailerId: uuidSchema.optional(),
+      }),
+    )
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("DB non disponibile");
+
+      const { dateFrom, dateTo } = parseDateRange(input);
+
+      // Build dynamic WHERE conditions
+      const conditions: string[] = [
+        `oi."unitPriceFinal"::numeric = 0`,
+        `o."status" != 'cancelled'`,
+        `o."createdAt" >= '${dateFrom.toISOString()}'::timestamptz`,
+        `o."createdAt" <= '${dateTo.toISOString()}'::timestamptz`,
+      ];
+      if (input.retailerId) {
+        conditions.push(`o."retailerId" = '${input.retailerId}'::uuid`);
+      }
+
+      const whereClause = conditions.join(" AND ");
+
+      // Use the configurable discount constant
+      const discountMultiplier = 1 - PROMO_REFERENCE_DISCOUNT / 100;
+
+      const rows = await db.execute<any>(
+        sql.raw(`
+          SELECT
+            r."name" AS "retailerName",
+            r."id" AS "retailerId",
+            DATE_TRUNC('month', o."createdAt") AS "month",
+            COUNT(DISTINCT o."id")::int AS "numOrders",
+            SUM(oi."quantity")::int AS "totalQuantity",
+            COALESCE(SUM(oi."quantity" * p."costPrice"::numeric), 0)::float AS "totalCost",
+            COALESCE(SUM(oi."quantity" * oi."unitPriceBase"::numeric * ${discountMultiplier}), 0)::float AS "totalGiftValue"
+          FROM "orders" o
+          JOIN "orderItems" oi ON oi."orderId" = o."id"
+          JOIN "products" p ON p."id" = oi."productId"
+          JOIN "retailers" r ON r."id" = o."retailerId"
+          WHERE ${whereClause}
+          GROUP BY r."name", r."id", DATE_TRUNC('month', o."createdAt")
+          ORDER BY DATE_TRUNC('month', o."createdAt") DESC, r."name" ASC
+        `),
+      );
+
+      const items = (rows as unknown as Array<{
+        retailerName: string;
+        retailerId: string;
+        month: string;
+        numOrders: number;
+        totalQuantity: number;
+        totalCost: number;
+        totalGiftValue: number;
+      }>).map((r) => ({
+        retailerName: r.retailerName,
+        retailerId: r.retailerId,
+        month: r.month,
+        numOrders: r.numOrders,
+        totalQuantity: r.totalQuantity,
+        totalCost: Math.round(r.totalCost * 100) / 100,
+        totalGiftValue: Math.round(r.totalGiftValue * 100) / 100,
+      }));
+
+      // Totals
+      const totals = items.reduce(
+        (acc, row) => ({
+          numOrders: acc.numOrders + row.numOrders,
+          totalQuantity: acc.totalQuantity + row.totalQuantity,
+          totalCost: Math.round((acc.totalCost + row.totalCost) * 100) / 100,
+          totalGiftValue: Math.round((acc.totalGiftValue + row.totalGiftValue) * 100) / 100,
+        }),
+        { numOrders: 0, totalQuantity: 0, totalCost: 0, totalGiftValue: 0 },
+      );
+
+      return {
+        items,
+        totals,
+        referenceDiscount: PROMO_REFERENCE_DISCOUNT,
+      };
+    }),
+});
+
 // ============= COMBINED ROUTER =============
 
 export const reportsRouter = router({
   warehouse: warehouseRouter,
   sales: salesRouter,
   marketplace: marketplaceRouter,
+  promozioni: promozioniRouter,
   export: exportRouter,
 });

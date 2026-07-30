@@ -56,6 +56,7 @@ import ReportsHub from "./pages/reports/ReportsHub";
 import WarehouseReport from "./pages/reports/WarehouseReport";
 import SalesReport from "./pages/reports/SalesReport";
 import MarketplaceReport from "./pages/reports/MarketplaceReport";
+import PromozioniReport from "./pages/reports/PromozioniReport";
 import InventoryExport from "./pages/InventoryExport";
 import Companies from "./pages/Companies";
 import Labels from "./pages/Labels";
@@ -226,6 +227,9 @@ function Router() {
       </Route>
       <Route path="/reports/marketplace">
         <RequireRole allowedRoles={ADMIN_ROLES}><MarketplaceReport /></RequireRole>
+      </Route>
+      <Route path="/reports/promozioni">
+        <RequireRole allowedRoles={["admin"]}><PromozioniReport /></RequireRole>
       </Route>
       <Route path="/reports">
         <RequireRole allowedRoles={ADMIN_ROLES}><ReportsHub /></RequireRole>

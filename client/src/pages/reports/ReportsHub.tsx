@@ -1,7 +1,7 @@
 import { Link } from "wouter";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Warehouse, ShoppingCart, ShoppingBag, ArrowRight } from "lucide-react";
+import { Warehouse, ShoppingCart, ShoppingBag, Gift, ArrowRight } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { formatEur, formatNum } from "@/components/reports";
 import { getDefaultDateRange } from "@/components/reports";
@@ -52,6 +52,13 @@ export default function ReportsHub() {
       preview: marketplaceOverview.data
         ? `Vendite: ${formatEur(marketplaceOverview.data.summary.totalGross)} · ${formatNum(marketplaceOverview.data.summary.ordersCount)} ordini`
         : "Caricamento...",
+    },
+    {
+      title: "Promozioni",
+      description: "Valore omaggi, costo per l'azienda, dettaglio per rivenditore",
+      href: "/reports/promozioni",
+      icon: <Gift className="h-8 w-8 text-green-700" />,
+      preview: "Report ordini omaggio",
     },
   ];
 

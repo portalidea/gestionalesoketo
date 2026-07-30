@@ -33,6 +33,7 @@ import {
   Euro,
   Factory,
   FileText,
+  Gift,
   Handshake,
   LayoutDashboard,
   LogOut,
@@ -87,6 +88,7 @@ const baseMenuItems: MenuItem[] = [
       { icon: Warehouse, label: "Magazzino", path: "/reports/warehouse" },
       { icon: TrendingUp, label: "Vendite & Ordini", path: "/reports/sales" },
       { icon: ShoppingBag, label: "Marketplace", path: "/reports/marketplace" },
+      { icon: Gift, label: "Promozioni", path: "/reports/promozioni" },
     ],
   },
 ];
