@@ -115,7 +115,7 @@ export const retailerSelfServiceRouter = router({
 
       // Get available stock
       const productIds = productRows.map((p) => p.id);
-      const stockMap = await getAvailableStock(productIds);
+      const stockMap = await getAvailableStock(productIds, ctx.activeCompanyId);
 
       // Map results with M8.4 stockStatus
       // NOTA: availableQty è in pezzi, convertiamo in confezioni per il retailer
@@ -198,7 +198,7 @@ export const retailerSelfServiceRouter = router({
 
       // Check stock warnings (converti pezzi in confezioni)
       const productIds = input.items.map((i) => i.productId);
-      const stockMap = await getAvailableStock(productIds);
+      const stockMap = await getAvailableStock(productIds, ctx.activeCompanyId);
       const warnings: Array<{ productId: string; message: string }> = [];
       for (const item of input.items) {
         const stock = stockMap.get(item.productId);
@@ -255,7 +255,7 @@ export const retailerSelfServiceRouter = router({
 
       // Validate stock (hard fail) — converti pezzi in confezioni
       const productIds = input.items.map((i) => i.productId);
-      const stockMap = await getAvailableStock(productIds);
+      const stockMap = await getAvailableStock(productIds, ctx.activeCompanyId);
       // Recupera piecesPerUnit per ogni prodotto
       const ppuRows = await database.execute<{ id: string; piecesPerUnit: number | null }>(sql`
         SELECT "id"::text, "piecesPerUnit" FROM "products"
@@ -601,7 +601,7 @@ export const retailerSelfServiceRouter = router({
 
        // Validate stock (excluding current order from reserved) — converti pezzi in confezioni
       const productIds = input.items.map((i) => i.productId);
-      const stockMap = await getAvailableStock(productIds);
+      const stockMap = await getAvailableStock(productIds, ctx.activeCompanyId);
       // Recupera piecesPerUnit
       const ppuRows = await database.execute<{ id: string; piecesPerUnit: number | null }>(sql`
         SELECT "id"::text, "piecesPerUnit" FROM "products"

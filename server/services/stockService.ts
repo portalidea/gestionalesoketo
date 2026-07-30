@@ -25,23 +25,30 @@ export interface ProductStockInfo {
  * Get available stock for a list of products.
  * Available = central warehouse stock - reserved by active orders.
  * Active orders = status IN (pending, transferring).
+ * M11.A: optional companyId to filter stock by active company.
  */
 export async function getAvailableStock(
   productIds: string[],
+  companyId?: string,
 ): Promise<Map<string, ProductStockInfo>> {
   if (productIds.length === 0) return new Map();
 
   const db = await getDb();
   if (!db) return new Map();
 
-  // 1. Total stock in central warehouse
+  // M11.A: company isolation filters
+  const companyFilter = companyId ? sql` AND pb."companyId" = ${companyId}::uuid` : sql``;
+  const locationCompanyFilter = companyId ? sql` AND l."companyId" = ${companyId}::uuid` : sql``;
+  const orderCompanyFilter = companyId ? sql` AND o."companyId" = ${companyId}::uuid` : sql``;
+
+  // 1. Total stock in central warehouse (filtered by company)
   const stockRows = await db.execute<{ productId: string; totalQty: number }>(sql`
     SELECT pb."productId" AS "productId", COALESCE(SUM(ibb."quantity"), 0)::int AS "totalQty"
     FROM "inventoryByBatch" ibb
     INNER JOIN "locations" l ON l."id" = ibb."locationId"
     INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
     WHERE l."type" = 'central_warehouse'
-      AND pb."productId" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})
+      AND pb."productId" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})${locationCompanyFilter}${companyFilter}
     GROUP BY pb."productId"
   `);
 
@@ -52,14 +59,14 @@ export async function getAvailableStock(
     ]),
   );
 
-  // 2. Reserved qty from active orders (pending, transferring)
+  // 2. Reserved qty from active orders (pending, transferring) — filtered by company
   const reservedRows = await db.execute<{ productId: string; reservedQty: number }>(sql`
     SELECT oi."productId" AS "productId",
            COALESCE(SUM(oi."quantity"), 0)::int AS "reservedQty"
     FROM "orderItems" oi
     INNER JOIN "orders" o ON o."id" = oi."orderId"
     WHERE o."status" IN ('pending', 'transferring')
-      AND oi."productId" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})
+      AND oi."productId" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})${orderCompanyFilter}
     GROUP BY oi."productId"
   `);
 

@@ -271,7 +271,7 @@ export async function deleteRetailer(id: string) {
 
 // ============= PRODUCTS =============
 
-export async function getAllProducts() {
+export async function getAllProducts(companyId?: string) {
   const db = await getDb();
   if (!db) return [];
   // Phase B M2.5: arricchito con campi calcolati per la vista tabellare
@@ -283,33 +283,39 @@ export async function getAllProducts() {
   // solo "id" non qualificato → ambiguous nelle subquery che hanno
   // altre colonne id (inventoryByBatch.id, productBatches.id,
   // locations.id). Bug M2.5.1.
+  // M11.A: filter stock subqueries by companyId for multi-tenant isolation
+  const companyFilter = companyId ? sql` AND pb."companyId" = ${companyId}::uuid` : sql``;
+  const locationCompanyFilter = companyId ? sql` AND l."companyId" = ${companyId}::uuid` : sql``;
   const centralStockExpr = sql<number>`COALESCE((
     SELECT SUM(ibb."quantity")::int
     FROM "inventoryByBatch" ibb
     INNER JOIN "locations" l ON l."id" = ibb."locationId"
     INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
     WHERE pb."productId" = "products"."id"
-      AND l."type" = 'central_warehouse'
+      AND l."type" = 'central_warehouse'${locationCompanyFilter}${companyFilter}
   ), 0)`;
   const totalStockExpr = sql<number>`COALESCE((
     SELECT SUM(ibb."quantity")::int
     FROM "inventoryByBatch" ibb
     INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
-    WHERE pb."productId" = "products"."id"
+    INNER JOIN "locations" l ON l."id" = ibb."locationId"
+    WHERE pb."productId" = "products"."id"${locationCompanyFilter}${companyFilter}
   ), 0)`;
   const batchCountExpr = sql<number>`COALESCE((
     SELECT COUNT(*)::int
     FROM "inventoryByBatch" ibb
     INNER JOIN "productBatches" pb ON pb."id" = ibb."batchId"
+    INNER JOIN "locations" l ON l."id" = ibb."locationId"
     WHERE pb."productId" = "products"."id"
-      AND ibb."quantity" > 0
+      AND ibb."quantity" > 0${locationCompanyFilter}${companyFilter}
   ), 0)`;
   const nearestExpirationExpr = sql<string | null>`(
     SELECT MIN(pb."expirationDate")::text
     FROM "productBatches" pb
     INNER JOIN "inventoryByBatch" ibb ON ibb."batchId" = pb."id"
+    INNER JOIN "locations" l ON l."id" = ibb."locationId"
     WHERE pb."productId" = "products"."id"
-      AND ibb."quantity" > 0
+      AND ibb."quantity" > 0${locationCompanyFilter}${companyFilter}
   )`;
 
   return db

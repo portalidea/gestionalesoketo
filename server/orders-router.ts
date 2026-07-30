@@ -1441,8 +1441,8 @@ export const ordersRouter = router({
     .input(z.object({
       productIds: z.array(uuidSchema).min(1).max(50),
     }))
-    .query(async ({ input }) => {
-      const stockMap = await getAvailableStock(input.productIds);
+    .query(async ({ input, ctx }) => {
+      const stockMap = await getAvailableStock(input.productIds, ctx.activeCompanyId);
       return Array.from(stockMap.values());
     }),
 });

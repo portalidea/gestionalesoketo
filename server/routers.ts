@@ -499,8 +499,8 @@ export const appRouter = router({
 
   // ============= PRODUCTS =============
   products: router({
-    list: staffProcedure.query(async () => {
-      return await db.getAllProducts();
+    list: staffProcedure.query(async ({ ctx }) => {
+      return await db.getAllProducts(ctx.activeCompanyId);
     }),
 
     getById: staffProcedure
