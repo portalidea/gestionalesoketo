@@ -59,6 +59,7 @@ import MarketplaceReport from "./pages/reports/MarketplaceReport";
 import PromozioniReport from "./pages/reports/PromozioniReport";
 import InventoryExport from "./pages/InventoryExport";
 import Companies from "./pages/Companies";
+import TierRules from "./pages/TierRules";
 import Labels from "./pages/Labels";
 
 const ADMIN_ROLES = ["admin", "operator", "viewer"];
@@ -239,6 +240,9 @@ function Router() {
       </Route>
       <Route path="/settings/packages">
         <RequireRole allowedRoles={["admin"]}><Packages /></RequireRole>
+      </Route>
+      <Route path="/settings/tier-rules">
+        <RequireRole allowedRoles={["admin"]}><TierRules /></RequireRole>
       </Route>
       <Route path="/settings/integrations">
         <RequireRole allowedRoles={["admin"]}><Integrations /></RequireRole>

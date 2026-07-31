@@ -44,6 +44,7 @@ import {
   ShoppingCart,
   Store,
   Tag,
+  TrendingDown,
   TrendingUp,
   Users,
   Warehouse,
@@ -95,6 +96,7 @@ const baseMenuItems: MenuItem[] = [
 
 const adminMenuItems: MenuItem[] = [
   { icon: Tag, label: "Pacchetti", path: "/settings/packages" },
+  { icon: TrendingDown, label: "Motore Tier", path: "/settings/tier-rules" },
   { icon: Users, label: "Team", path: "/settings/team" },
   { icon: Building2, label: "Aziende", path: "/settings/companies" },
   { icon: Plug, label: "Integrazioni", path: "/settings/integrations" },

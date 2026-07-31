@@ -185,6 +185,11 @@ export const retailers = pgTable("retailers", {
   // M11.A.markup: modello pricing
   pricingModel: pricingModelEnum("pricingModel").default("tier_discount").notNull(),
   markupPercentage: numeric("markupPercentage", { precision: 5, scale: 2 }),
+  // M13.A: Tier engine tracking
+  tierFrozen: boolean("tier_frozen").default(false).notNull(),
+  consecutiveMonthsBelow: integer("consecutive_months_below").default(0).notNull(),
+  atRisk: boolean("at_risk").default(false).notNull(),
+  lastTierEvaluation: date("last_tier_evaluation"),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -1053,3 +1058,85 @@ export const marketplaceOrderItems = pgTable(
 );
 export type MarketplaceOrderItem = typeof marketplaceOrderItems.$inferSelect;
 export type InsertMarketplaceOrderItem = typeof marketplaceOrderItems.$inferInsert;
+
+// ============= M13.A: Tier Engine =============
+
+/**
+ * tier_rules — configurazione soglie per tier (una riga per tier).
+ */
+export const tierRules = pgTable("tier_rules", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tierName: varchar("tier_name", { length: 50 }).notNull().unique(),
+  monthlyMaintenanceThreshold: numeric("monthly_maintenance_threshold", { precision: 10, scale: 2 }).default("0").notNull(),
+  promotionThreshold: numeric("promotion_threshold", { precision: 10, scale: 2 }),
+  consecutiveMonthsForDowngrade: integer("consecutive_months_for_downgrade").default(3).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow(),
+});
+export type TierRule = typeof tierRules.$inferSelect;
+export type InsertTierRule = typeof tierRules.$inferInsert;
+
+/**
+ * tier_changes — storico cambi tier (audit log).
+ */
+export const tierChanges = pgTable("tier_changes", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  retailerId: uuid("retailerId").notNull().references(() => retailers.id, { onDelete: "cascade" }),
+  fromTier: varchar("from_tier", { length: 50 }),
+  toTier: varchar("to_tier", { length: 50 }),
+  reason: varchar("reason", { length: 100 }),
+  monthlyRevenueSnapshot: numeric("monthly_revenue_snapshot", { precision: 10, scale: 2 }),
+  createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow(),
+  createdBy: uuid("createdBy"),
+});
+export type TierChange = typeof tierChanges.$inferSelect;
+export type InsertTierChange = typeof tierChanges.$inferInsert;
+
+/**
+ * retailer_monthly_revenue — storico fatturato mensile per rivenditore.
+ */
+export const retailerMonthlyRevenue = pgTable(
+  "retailer_monthly_revenue",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    retailerId: uuid("retailerId").notNull().references(() => retailers.id, { onDelete: "cascade" }),
+    year: integer("year").notNull(),
+    month: integer("month").notNull(),
+    revenueNet: numeric("revenue_net", { precision: 10, scale: 2 }).default("0").notNull(),
+    tierAtTime: varchar("tier_at_time", { length: 50 }),
+    thresholdAtTime: numeric("threshold_at_time", { precision: 10, scale: 2 }),
+    metThreshold: boolean("met_threshold"),
+  },
+  (t) => [
+    unique("retailer_monthly_revenue_unique").on(t.retailerId, t.year, t.month),
+  ],
+);
+export type RetailerMonthlyRevenue = typeof retailerMonthlyRevenue.$inferSelect;
+
+/**
+ * tier_simulation_log — risultati dry-run modalità observation.
+ */
+export const tierSimulationLog = pgTable("tier_simulation_log", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  runDate: date("run_date").notNull(),
+  retailerId: uuid("retailerId").notNull().references(() => retailers.id, { onDelete: "cascade" }),
+  currentTier: varchar("current_tier", { length: 50 }),
+  wouldChangeTo: varchar("would_change_to", { length: 50 }),
+  action: varchar("action", { length: 50 }),
+  monthlyRevenueSnapshot: numeric("monthly_revenue_snapshot", { precision: 10, scale: 2 }),
+  consecutiveMonthsBelow: integer("consecutive_months_below"),
+  reason: text("reason"),
+  createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow(),
+});
+export type TierSimulationLog = typeof tierSimulationLog.$inferSelect;
+
+/**
+ * tier_engine_config — configurazione globale motore tier (observation/active).
+ */
+export const tierEngineConfig = pgTable("tier_engine_config", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  key: varchar("key", { length: 100 }).notNull().unique(),
+  value: varchar("value", { length: 255 }).notNull(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow(),
+});
+export type TierEngineConfig = typeof tierEngineConfig.$inferSelect;
