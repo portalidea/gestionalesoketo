@@ -3,7 +3,10 @@
  *
  * Procedures for tier rules configuration, retailer tier status,
  * freeze/unfreeze, manual tier change, at-risk list, tier history,
- * and the daily evaluation job (observation/active modes).
+ * simulation log, backfill, and the daily evaluation job (observation/active modes).
+ *
+ * REVENUE RULE: fatturato mensile = SUM(subtotalNet) WHERE paymentStatus='paid'
+ *   raggruppato per MESE di paidAt (NON createdAt).
  */
 import { z } from "zod";
 import { eq, and, sql, desc, gte, lte } from "drizzle-orm";
@@ -131,7 +134,7 @@ export const tierRulesRouter = router({
       ORDER BY r.name
     `);
 
-    // Get current month revenue for each retailer
+    // Get current month revenue for each retailer (by paidAt)
     const now = new Date();
     const year = now.getFullYear();
     const month = now.getMonth() + 1;
@@ -149,8 +152,8 @@ export const tierRulesRouter = router({
       WHERE o."paymentStatus" = 'paid'
         AND o.status != 'cancelled'
         AND o."companyId" = ${ctx.activeCompanyId}
-        AND o."createdAt" >= ${startOfMonth}::timestamptz
-        AND o."createdAt" < ${endOfMonth}::timestamptz
+        AND o."paidAt" >= ${startOfMonth}::timestamptz
+        AND o."paidAt" < ${endOfMonth}::timestamptz
         AND o."retailerId" IS NOT NULL
       GROUP BY o."retailerId"
     `);
@@ -177,11 +180,6 @@ export const tierRulesRouter = router({
         .where(eq(retailers.id, input.retailerId));
 
       // Log the freeze/unfreeze
-      const [retailer] = await db
-        .select({ name: retailers.name })
-        .from(retailers)
-        .where(eq(retailers.id, input.retailerId));
-
       await db.insert(tierChanges).values({
         retailerId: input.retailerId,
         reason: input.frozen ? "freeze" : "unfreeze",
@@ -369,6 +367,129 @@ export const tierRulesRouter = router({
       return { runDate: targetDate, entries };
     }),
 
+  // ============= BACKFILL STORICO FATTURATI =============
+
+  backfillRevenue: adminProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+    // Get tier rules for threshold lookup
+    const rules = await db.select().from(tierRules).where(eq(tierRules.isActive, true));
+    const rulesMap = new Map(rules.map((r) => [r.tierName, r]));
+
+    // Compute monthly revenue for ALL retailers, ALL months, using paidAt
+    // Group by retailerId + YEAR(paidAt) + MONTH(paidAt)
+    const revenueRows = await db.execute<{
+      retailerId: string;
+      year: number;
+      month: number;
+      revenueNet: string;
+    }>(sql`
+      SELECT o."retailerId",
+             EXTRACT(YEAR FROM o."paidAt")::int AS year,
+             EXTRACT(MONTH FROM o."paidAt")::int AS month,
+             COALESCE(SUM(o."subtotalNet"), 0)::text AS "revenueNet"
+      FROM orders o
+      WHERE o."paymentStatus" = 'paid'
+        AND o.status != 'cancelled'
+        AND o."companyId" = ${ctx.activeCompanyId}
+        AND o."retailerId" IS NOT NULL
+        AND o."paidAt" IS NOT NULL
+      GROUP BY o."retailerId", EXTRACT(YEAR FROM o."paidAt"), EXTRACT(MONTH FROM o."paidAt")
+      ORDER BY o."retailerId", year, month
+    `);
+
+    // Get retailer tier info for threshold comparison
+    const retailerTiers = await db.execute<{
+      id: string;
+      tierName: string | null;
+      pricingModel: string;
+    }>(sql`
+      SELECT r.id, pp.name AS "tierName", r."pricingModel"
+      FROM retailers r
+      LEFT JOIN "pricingPackages" pp ON pp.id = r."pricingPackageId"
+      WHERE r."companyId" = ${ctx.activeCompanyId}
+    `);
+    const tierMap = new Map(retailerTiers.map((r) => [r.id, r]));
+
+    let insertedCount = 0;
+
+    for (const row of revenueRows) {
+      const retailerInfo = tierMap.get(row.retailerId);
+      const tierName = retailerInfo?.tierName ?? null;
+      const rule = tierName ? rulesMap.get(tierName) : null;
+      const threshold = rule ? parseFloat(rule.monthlyMaintenanceThreshold) : 0;
+      const revenue = parseFloat(row.revenueNet);
+      const metThreshold = threshold > 0 ? revenue >= threshold : true;
+
+      await db.execute(sql`
+        INSERT INTO retailer_monthly_revenue ("retailerId", year, month, revenue_net, tier_at_time, threshold_at_time, met_threshold)
+        VALUES (${row.retailerId}::uuid, ${row.year}, ${row.month}, ${revenue.toFixed(2)}::numeric,
+                ${tierName}, ${threshold.toFixed(2)}::numeric, ${metThreshold})
+        ON CONFLICT ("retailerId", year, month) DO UPDATE SET
+          revenue_net = EXCLUDED.revenue_net,
+          tier_at_time = EXCLUDED.tier_at_time,
+          threshold_at_time = EXCLUDED.threshold_at_time,
+          met_threshold = EXCLUDED.met_threshold
+      `);
+      insertedCount++;
+    }
+
+    // Now recalculate consecutive_months_below for each retailer
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1;
+
+    let updatedRetailers = 0;
+    for (const retailer of retailerTiers) {
+      // Skip Special and cost_markup
+      if (!retailer.tierName || retailer.tierName === "Special" || retailer.pricingModel === "cost_markup") {
+        continue;
+      }
+
+      const rule = rulesMap.get(retailer.tierName);
+      if (!rule) continue;
+
+      // Get all months for this retailer, ordered by most recent first
+      // Exclude current month (not yet closed)
+      const monthRows = await db.execute<{ year: number; month: number; met: boolean }>(sql`
+        SELECT year, month, met_threshold AS met
+        FROM retailer_monthly_revenue
+        WHERE "retailerId" = ${retailer.id}::uuid
+          AND (year < ${currentYear} OR (year = ${currentYear} AND month < ${currentMonth}))
+        ORDER BY year DESC, month DESC
+      `);
+
+      let consecutiveBelow = 0;
+      for (const row of monthRows) {
+        if (!row.met) {
+          consecutiveBelow++;
+        } else {
+          break;
+        }
+      }
+
+      const isAtRisk = consecutiveBelow >= (rule.consecutiveMonthsForDowngrade - 1) && consecutiveBelow < rule.consecutiveMonthsForDowngrade;
+
+      await db
+        .update(retailers)
+        .set({
+          consecutiveMonthsBelow: consecutiveBelow,
+          atRisk: isAtRisk,
+          updatedAt: new Date(),
+        })
+        .where(eq(retailers.id, retailer.id));
+
+      updatedRetailers++;
+    }
+
+    return {
+      success: true,
+      monthsProcessed: insertedCount,
+      retailersUpdated: updatedRetailers,
+    };
+  }),
+
   // ============= DAILY EVALUATION JOB =============
 
   runEvaluation: adminProcedure.mutation(async ({ ctx }) => {
@@ -408,52 +529,8 @@ export const tierRulesRouter = router({
 
     const now = new Date();
     const today = now.toISOString().split("T")[0];
-
-    // Previous month (the one we're evaluating for downgrade)
-    const evalYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
-    const evalMonth = now.getMonth() === 0 ? 12 : now.getMonth(); // previous month
-
-    // Current month (for promotion check and at_risk)
-    const currYear = now.getFullYear();
-    const currMonth = now.getMonth() + 1;
-
-    // Get revenue for previous closed month
-    const prevMonthStart = `${evalYear}-${String(evalMonth).padStart(2, "0")}-01`;
-    const prevMonthEnd = evalMonth === 12
-      ? `${evalYear + 1}-01-01`
-      : `${evalYear}-${String(evalMonth + 1).padStart(2, "0")}-01`;
-
-    const prevRevenueRows = await db.execute<{ retailerId: string; revenue: string }>(sql`
-      SELECT o."retailerId", COALESCE(SUM(o."subtotalNet"), 0)::text AS revenue
-      FROM orders o
-      WHERE o."paymentStatus" = 'paid'
-        AND o.status != 'cancelled'
-        AND o."companyId" = ${ctx.activeCompanyId}
-        AND o."createdAt" >= ${prevMonthStart}::timestamptz
-        AND o."createdAt" < ${prevMonthEnd}::timestamptz
-        AND o."retailerId" IS NOT NULL
-      GROUP BY o."retailerId"
-    `);
-    const prevRevenueMap = new Map(prevRevenueRows.map((r) => [r.retailerId, parseFloat(r.revenue)]));
-
-    // Get revenue for current month (for promotion + at_risk)
-    const currMonthStart = `${currYear}-${String(currMonth).padStart(2, "0")}-01`;
-    const currMonthEnd = currMonth === 12
-      ? `${currYear + 1}-01-01`
-      : `${currYear}-${String(currMonth + 1).padStart(2, "0")}-01`;
-
-    const currRevenueRows = await db.execute<{ retailerId: string; revenue: string }>(sql`
-      SELECT o."retailerId", COALESCE(SUM(o."subtotalNet"), 0)::text AS revenue
-      FROM orders o
-      WHERE o."paymentStatus" = 'paid'
-        AND o.status != 'cancelled'
-        AND o."companyId" = ${ctx.activeCompanyId}
-        AND o."createdAt" >= ${currMonthStart}::timestamptz
-        AND o."createdAt" < ${currMonthEnd}::timestamptz
-        AND o."retailerId" IS NOT NULL
-      GROUP BY o."retailerId"
-    `);
-    const currRevenueMap = new Map(currRevenueRows.map((r) => [r.retailerId, parseFloat(r.revenue)]));
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1;
 
     // Check idempotency: if already evaluated today, skip
     const [alreadyRun] = await db.execute<{ cnt: number }>(sql`
@@ -467,6 +544,61 @@ export const tierRulesRouter = router({
       return { message: "Valutazione già eseguita oggi", mode, skipped: true };
     }
 
+    // ---- STEP 1: Backfill all historical revenue using paidAt ----
+    // Compute monthly revenue for ALL retailers in this company using paidAt
+    const allRevenueRows = await db.execute<{
+      retailerId: string;
+      year: number;
+      month: number;
+      revenueNet: string;
+    }>(sql`
+      SELECT o."retailerId",
+             EXTRACT(YEAR FROM o."paidAt")::int AS year,
+             EXTRACT(MONTH FROM o."paidAt")::int AS month,
+             COALESCE(SUM(o."subtotalNet"), 0)::text AS "revenueNet"
+      FROM orders o
+      WHERE o."paymentStatus" = 'paid'
+        AND o.status != 'cancelled'
+        AND o."companyId" = ${ctx.activeCompanyId}
+        AND o."retailerId" IS NOT NULL
+        AND o."paidAt" IS NOT NULL
+      GROUP BY o."retailerId", EXTRACT(YEAR FROM o."paidAt"), EXTRACT(MONTH FROM o."paidAt")
+    `);
+
+    // Build a map: retailerId -> [{year, month, revenue}]
+    const revenueByRetailer = new Map<string, Array<{ year: number; month: number; revenue: number }>>();
+    for (const row of allRevenueRows) {
+      if (!revenueByRetailer.has(row.retailerId)) {
+        revenueByRetailer.set(row.retailerId, []);
+      }
+      revenueByRetailer.get(row.retailerId)!.push({
+        year: row.year,
+        month: row.month,
+        revenue: parseFloat(row.revenueNet),
+      });
+    }
+
+    // Upsert all revenue into retailer_monthly_revenue
+    for (const row of allRevenueRows) {
+      const retailer = retailerRows.find((r) => r.id === row.retailerId);
+      const tierName = retailer?.tierName ?? null;
+      const rule = tierName ? rulesMap.get(tierName) : null;
+      const threshold = rule ? parseFloat(rule.monthlyMaintenanceThreshold) : 0;
+      const revenue = parseFloat(row.revenueNet);
+      const metThreshold = threshold > 0 ? revenue >= threshold : true;
+
+      await db.execute(sql`
+        INSERT INTO retailer_monthly_revenue ("retailerId", year, month, revenue_net, tier_at_time, threshold_at_time, met_threshold)
+        VALUES (${row.retailerId}::uuid, ${row.year}, ${row.month}, ${revenue.toFixed(2)}::numeric,
+                ${tierName}, ${threshold.toFixed(2)}::numeric, ${metThreshold})
+        ON CONFLICT ("retailerId", year, month) DO UPDATE SET
+          revenue_net = EXCLUDED.revenue_net,
+          tier_at_time = EXCLUDED.tier_at_time,
+          threshold_at_time = EXCLUDED.threshold_at_time,
+          met_threshold = EXCLUDED.met_threshold
+      `);
+    }
+
     // Get pricing packages for tier lookup
     const pkgs = await db.select().from(pricingPackages);
     const pkgByName = new Map(pkgs.map((p) => [p.name, p]));
@@ -478,6 +610,7 @@ export const tierRulesRouter = router({
       to?: string;
     }> = [];
 
+    // ---- STEP 2: Evaluate each retailer ----
     for (const retailer of retailerRows) {
       const tierName = retailer.tierName;
 
@@ -485,13 +618,15 @@ export const tierRulesRouter = router({
       if (!tierName || tierName === "Special" || retailer.tierFrozen || retailer.pricingModel === "cost_markup") {
         // Log in simulation as no_change
         if (mode === "observation") {
+          const currRevenue = revenueByRetailer.get(retailer.id)
+            ?.find((r) => r.year === currentYear && r.month === currentMonth)?.revenue ?? 0;
           await db.insert(tierSimulationLog).values({
             runDate: today,
             retailerId: retailer.id,
             currentTier: tierName,
             wouldChangeTo: null,
             action: "no_change",
-            monthlyRevenueSnapshot: (currRevenueMap.get(retailer.id) ?? 0).toFixed(2),
+            monthlyRevenueSnapshot: currRevenue.toFixed(2),
             consecutiveMonthsBelow: retailer.consecutiveMonthsBelow,
             reason: retailer.tierFrozen
               ? "Frozen"
@@ -512,40 +647,37 @@ export const tierRulesRouter = router({
         continue;
       }
 
-      const prevRevenue = prevRevenueMap.get(retailer.id) ?? 0;
-      const currRevenue = currRevenueMap.get(retailer.id) ?? 0;
       const threshold = parseFloat(rule.monthlyMaintenanceThreshold);
 
-      // --- Consolidate previous month revenue ---
-      await db.execute(sql`
-        INSERT INTO retailer_monthly_revenue ("retailerId", year, month, revenue_net, tier_at_time, threshold_at_time, met_threshold)
-        VALUES (${retailer.id}::uuid, ${evalYear}, ${evalMonth}, ${prevRevenue.toFixed(2)}::numeric,
-                ${tierName}, ${threshold.toFixed(2)}::numeric, ${prevRevenue >= threshold})
-        ON CONFLICT ("retailerId", year, month) DO UPDATE SET
-          revenue_net = EXCLUDED.revenue_net,
-          tier_at_time = EXCLUDED.tier_at_time,
-          threshold_at_time = EXCLUDED.threshold_at_time,
-          met_threshold = EXCLUDED.met_threshold
-      `);
-
-      // --- Calculate consecutive months below threshold ---
-      // Count consecutive closed months below threshold (looking backwards from evalMonth)
-      const historyRows = await db.execute<{ met: boolean }>(sql`
-        SELECT met_threshold AS met
+      // ---- Calculate consecutive CLOSED months below threshold ----
+      // Get all months for this retailer from retailer_monthly_revenue, excluding current month
+      const monthRows = await db.execute<{ year: number; month: number; met: boolean }>(sql`
+        SELECT year, month, met_threshold AS met
         FROM retailer_monthly_revenue
         WHERE "retailerId" = ${retailer.id}::uuid
+          AND (year < ${currentYear} OR (year = ${currentYear} AND month < ${currentMonth}))
         ORDER BY year DESC, month DESC
-        LIMIT ${rule.consecutiveMonthsForDowngrade}
       `);
 
       let consecutiveBelow = 0;
-      for (const row of historyRows) {
+      for (const row of monthRows) {
         if (!row.met) {
           consecutiveBelow++;
         } else {
           break;
         }
       }
+
+      // Current month revenue (for promotion check and display)
+      const currMonthRevenue = revenueByRetailer.get(retailer.id)
+        ?.find((r) => r.year === currentYear && r.month === currentMonth)?.revenue ?? 0;
+
+      // Last closed month revenue (for downgrade display)
+      const lastClosedMonth = monthRows.length > 0 ? monthRows[0] : null;
+      const lastClosedRevenue = lastClosedMonth
+        ? (revenueByRetailer.get(retailer.id)
+            ?.find((r) => r.year === lastClosedMonth.year && r.month === lastClosedMonth.month)?.revenue ?? 0)
+        : 0;
 
       // --- Determine action ---
       let action = "no_change";
@@ -558,10 +690,10 @@ export const tierRulesRouter = router({
         const aboveRule = rulesMap.get(tierAbove);
         if (aboveRule) {
           const promotionThreshold = parseFloat(aboveRule.promotionThreshold ?? aboveRule.monthlyMaintenanceThreshold);
-          if (currRevenue >= promotionThreshold) {
+          if (currMonthRevenue >= promotionThreshold) {
             action = mode === "observation" ? "would_promote" : "auto_promotion";
             wouldChangeTo = tierAbove;
-            reason = `Fatturato mese corrente €${currRevenue.toFixed(2)} >= soglia promozione €${promotionThreshold.toFixed(2)} per ${tierAbove}`;
+            reason = `Fatturato mese corrente €${currMonthRevenue.toFixed(2)} >= soglia promozione €${promotionThreshold.toFixed(2)} per ${tierAbove}`;
           }
         }
       }
@@ -572,15 +704,15 @@ export const tierRulesRouter = router({
         if (tierBelow) {
           action = mode === "observation" ? "would_downgrade" : "auto_downgrade";
           wouldChangeTo = tierBelow;
-          reason = `${consecutiveBelow} mesi consecutivi sotto soglia €${threshold.toFixed(2)} (fatturato ultimo mese: €${prevRevenue.toFixed(2)})`;
+          reason = `${consecutiveBelow} mesi consecutivi sotto soglia €${threshold.toFixed(2)} (fatturato ultimo mese chiuso: €${lastClosedRevenue.toFixed(2)})`;
         }
       }
 
-      // Check AT_RISK (3rd consecutive month below, not yet at downgrade threshold)
-      const isAtRisk = consecutiveBelow >= rule.consecutiveMonthsForDowngrade - 1 && action === "no_change";
+      // Check AT_RISK (approaching downgrade threshold, not yet there)
+      const isAtRisk = consecutiveBelow >= (rule.consecutiveMonthsForDowngrade - 1) && action === "no_change";
       if (isAtRisk) {
         action = mode === "observation" ? "would_flag_risk" : "would_flag_risk";
-        reason = `${consecutiveBelow} mesi consecutivi sotto soglia, a rischio declassamento`;
+        reason = `${consecutiveBelow} mesi consecutivi sotto soglia €${threshold.toFixed(2)}, a rischio declassamento`;
       }
 
       // --- Apply or simulate ---
@@ -605,7 +737,7 @@ export const tierRulesRouter = router({
               fromTier: tierName,
               toTier: wouldChangeTo,
               reason: action,
-              monthlyRevenueSnapshot: (action === "auto_promotion" ? currRevenue : prevRevenue).toFixed(2),
+              monthlyRevenueSnapshot: (action === "auto_promotion" ? currMonthRevenue : lastClosedRevenue).toFixed(2),
             });
           }
         } else {
@@ -621,19 +753,19 @@ export const tierRulesRouter = router({
             .where(eq(retailers.id, retailer.id));
         }
       } else {
-        // Observation mode: write to simulation log, do NOT touch retailers
+        // Observation mode: write to simulation log, do NOT touch retailers.tier or at_risk
         await db.insert(tierSimulationLog).values({
           runDate: today,
           retailerId: retailer.id,
           currentTier: tierName,
           wouldChangeTo,
           action,
-          monthlyRevenueSnapshot: currRevenue.toFixed(2),
+          monthlyRevenueSnapshot: currMonthRevenue.toFixed(2),
           consecutiveMonthsBelow: consecutiveBelow,
           reason: reason || "Nessun cambio previsto",
         });
 
-        // Still update consecutive_months_below and lastTierEvaluation for tracking
+        // Update consecutive_months_below and lastTierEvaluation for tracking
         // but NOT at_risk and NOT pricingPackageId
         await db
           .update(retailers)

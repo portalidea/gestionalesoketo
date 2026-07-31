@@ -107,6 +107,15 @@ export default function TierRules() {
     },
   });
 
+  const backfillRevenue = trpc.tierRules.backfillRevenue.useMutation({
+    onSuccess: (data) => {
+      utils.tierRules.getRetailerStatus.invalidate();
+      utils.tierRules.getAtRiskRetailers.invalidate();
+      toast.success(`Backfill completato: ${data.monthsProcessed} mesi processati, ${data.retailersUpdated} rivenditori aggiornati`);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
   const runEvaluation = trpc.tierRules.runEvaluation.useMutation({
     onSuccess: (data) => {
       utils.tierRules.getRetailerStatus.invalidate();
@@ -176,6 +185,19 @@ export default function TierRules() {
               size="sm"
             >
               {isObservation ? "Attiva Motore" : "Passa a Osservazione"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => backfillRevenue.mutate()}
+              disabled={backfillRevenue.isPending}
+            >
+              {backfillRevenue.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-1" />
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-1" />
+              )}
+              Ricostruisci Storico
             </Button>
             <Button
               variant="outline"
