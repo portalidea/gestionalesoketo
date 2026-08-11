@@ -49,6 +49,7 @@ import {
   Users,
   Warehouse,
   Download,
+  Sparkles,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import {
@@ -100,6 +101,7 @@ const adminMenuItems: MenuItem[] = [
   { icon: Users, label: "Team", path: "/settings/team" },
   { icon: Building2, label: "Aziende", path: "/settings/companies" },
   { icon: Plug, label: "Integrazioni", path: "/settings/integrations" },
+  { icon: Sparkles, label: "Promozioni", path: "/settings/promotions" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
