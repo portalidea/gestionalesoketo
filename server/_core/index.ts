@@ -8,6 +8,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import fattureInCloudRoutes from "../fattureincloud-routes";
 import { cronRoutes } from "../cron-monthly-report";
+import { cronAlertRoutes } from "../cron-alerts";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -37,6 +38,7 @@ async function startServer() {
   app.use("/api", fattureInCloudRoutes);
   // Cron endpoints
   app.use("/api", cronRoutes);
+  app.use("/api", cronAlertRoutes);
   // tRPC API
   app.use(
     "/api/trpc",

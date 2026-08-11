@@ -14,6 +14,17 @@ import {
 import { supabaseAdmin } from "./_core/supabase";
 import { ENV } from "./_core/env";
 import * as db from "./db";
+import { sql, eq, and, gte, lt, desc } from "drizzle-orm";
+import {
+  orders,
+  orderItems,
+  products,
+  productBatches,
+  inventoryByBatch,
+  locations,
+  pricingPackages,
+  retailers,
+} from "../drizzle/schema";
 import { sendEmail } from "./email";
 import { uuidSchema } from "../shared/schemas";
 
@@ -441,6 +452,182 @@ export const retailerPortalRouter = router({
    * Dashboard stats per il portale partner.
    */
   dashboardStats: retailerProcedure.query(async ({ ctx }) => {
-    return await db.getRetailerDashboardStats(ctx.retailerId);
+    const basicStats = await db.getRetailerDashboardStats(ctx.retailerId);
+    const database = await db.getDb();
+    if (!database) return { ...basicStats, currentMonthRevenue: "0.00", tierName: null, tierThreshold: null };
+
+    // Enhanced: current month revenue
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+    const startOfMonth = `${year}-${String(month).padStart(2, "0")}-01`;
+    const endOfMonth = month === 12 ? `${year + 1}-01-01` : `${year}-${String(month + 1).padStart(2, "0")}-01`;
+
+    const [revRow] = await database.execute<{ revenue: string }>(sql`
+      SELECT COALESCE(SUM("subtotalNet"), 0)::text AS revenue
+      FROM orders
+      WHERE "retailerId" = ${ctx.retailerId}::uuid
+        AND "paymentStatus" = 'paid'
+        AND status != 'cancelled'
+        AND "paidAt" >= ${startOfMonth}::timestamptz
+        AND "paidAt" < ${endOfMonth}::timestamptz
+    `);
+
+    // Get tier info
+    const [tierRow] = await database.execute<{ tierName: string | null; threshold: string | null }>(sql`
+      SELECT pp.name AS "tierName", tr.monthly_maintenance_threshold AS threshold
+      FROM retailers r
+      LEFT JOIN "pricingPackages" pp ON pp.id = r."pricingPackageId"
+      LEFT JOIN tier_rules tr ON tr.tier_name = pp.name
+      WHERE r.id = ${ctx.retailerId}::uuid
+    `);
+
+    return {
+      ...basicStats,
+      currentMonthRevenue: revRow?.revenue ?? "0.00",
+      tierName: tierRow?.tierName ?? null,
+      tierThreshold: tierRow?.threshold ?? null,
+    };
+  }),
+
+  /**
+   * F17: Alert scadenze — batches at retailer location expiring soon or expired.
+   */
+  expiringBatches: retailerProcedure.query(async ({ ctx }) => {
+    const database = await db.getDb();
+    if (!database) return [];
+
+    const now = new Date();
+    const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+    const rows = await database.execute<{
+      batchId: string;
+      batchNumber: string;
+      productName: string;
+      expirationDate: string;
+      quantity: number;
+      daysLeft: number;
+      isExpired: boolean;
+    }>(sql`
+      SELECT pb.id AS "batchId", pb."batchNumber", p.name AS "productName",
+             pb."expirationDate"::text,
+             ibb.quantity::int,
+             EXTRACT(DAY FROM pb."expirationDate" - NOW())::int AS "daysLeft",
+             pb."expirationDate" <= NOW() AS "isExpired"
+      FROM "productBatches" pb
+      JOIN "inventoryByBatch" ibb ON ibb."batchId" = pb.id AND ibb.quantity > 0
+      JOIN locations l ON l.id = ibb."locationId"
+      JOIN products p ON p.id = pb."productId"
+      WHERE l."retailerId" = ${ctx.retailerId}::uuid
+        AND pb."expirationDate" IS NOT NULL
+        AND pb."expirationDate" <= ${in30Days.toISOString()}::timestamptz
+      ORDER BY pb."expirationDate" ASC
+    `);
+
+    return rows;
+  }),
+
+  /**
+   * F17: Suggerimenti riordino — based on average monthly consumption and current stock.
+   * Calculates average monthly order quantity per product and suggests reorder
+   * when current stock is below 1 month of consumption.
+   */
+  reorderSuggestions: retailerProcedure.query(async ({ ctx }) => {
+    const database = await db.getDb();
+    if (!database) return [];
+
+    // Calculate average monthly consumption per product (last 3 months of orders)
+    const threeMonthsAgo = new Date();
+    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+
+    const rows = await database.execute<{
+      productId: string;
+      productName: string;
+      sku: string;
+      avgMonthlyQty: number;
+      currentStock: number;
+      daysOfStock: number;
+      lastOrderDate: string | null;
+    }>(sql`
+      WITH consumption AS (
+        SELECT oi."productId",
+               SUM(oi.quantity)::numeric AS total_ordered,
+               COUNT(DISTINCT DATE_TRUNC('month', o."createdAt")) AS months_active,
+               MAX(o."createdAt")::text AS last_order
+        FROM orders o
+        JOIN "orderItems" oi ON oi."orderId" = o.id
+        WHERE o."retailerId" = ${ctx.retailerId}::uuid
+          AND o.status != 'cancelled'
+          AND o."createdAt" >= ${threeMonthsAgo.toISOString()}::timestamptz
+        GROUP BY oi."productId"
+      ),
+      current_stock AS (
+        SELECT pb."productId",
+               COALESCE(SUM(ibb.quantity), 0)::int AS stock
+        FROM "productBatches" pb
+        JOIN "inventoryByBatch" ibb ON ibb."batchId" = pb.id
+        JOIN locations l ON l.id = ibb."locationId"
+        WHERE l."retailerId" = ${ctx.retailerId}::uuid
+          AND ibb.quantity > 0
+        GROUP BY pb."productId"
+      )
+      SELECT c."productId", p.name AS "productName", p.sku,
+             CEIL(c.total_ordered / GREATEST(c.months_active, 1))::int AS "avgMonthlyQty",
+             COALESCE(cs.stock, 0)::int AS "currentStock",
+             CASE WHEN CEIL(c.total_ordered / GREATEST(c.months_active, 1)) > 0
+                  THEN (COALESCE(cs.stock, 0) * 30 / CEIL(c.total_ordered / GREATEST(c.months_active, 1)))::int
+                  ELSE 999
+             END AS "daysOfStock",
+             c.last_order AS "lastOrderDate"
+      FROM consumption c
+      JOIN products p ON p.id = c."productId"
+      LEFT JOIN current_stock cs ON cs."productId" = c."productId"
+      WHERE COALESCE(cs.stock, 0) < CEIL(c.total_ordered / GREATEST(c.months_active, 1))
+      ORDER BY "daysOfStock" ASC
+    `);
+
+    return rows;
+  }),
+
+  /**
+   * F16: Active promotions — fetched from a simple config table or hardcoded initially.
+   * Returns active promotions for the retailer's company.
+   */
+  activePromotions: retailerProcedure.query(async ({ ctx }) => {
+    const database = await db.getDb();
+    if (!database) return [];
+
+    // Check if promotions table exists, if not return empty
+    try {
+      const rows = await database.execute<{
+        id: string;
+        title: string;
+        description: string;
+        discountPercent: number | null;
+        productId: string | null;
+        productName: string | null;
+        validFrom: string;
+        validTo: string;
+        bannerColor: string | null;
+      }>(sql`
+        SELECT pr.id, pr.title, pr.description,
+               pr.discount_percent AS "discountPercent",
+               pr."productId", p.name AS "productName",
+               pr.valid_from::text AS "validFrom",
+               pr.valid_to::text AS "validTo",
+               pr.banner_color AS "bannerColor"
+        FROM promotions pr
+        LEFT JOIN products p ON p.id = pr."productId"
+        WHERE pr.company_id = ${ctx.activeCompanyId}
+          AND pr.is_active = true
+          AND pr.valid_from <= NOW()
+          AND pr.valid_to >= NOW()
+        ORDER BY pr.valid_to ASC
+      `);
+      return rows;
+    } catch {
+      // Table doesn't exist yet — return empty
+      return [];
+    }
   }),
 });

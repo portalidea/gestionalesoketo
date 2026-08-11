@@ -1140,3 +1140,23 @@ export const tierEngineConfig = pgTable("tier_engine_config", {
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow(),
 });
 export type TierEngineConfig = typeof tierEngineConfig.$inferSelect;
+
+/**
+ * F16: Promotions — promozioni periodiche visibili nel portale partner.
+ */
+export const promotions = pgTable("promotions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  title: varchar("title", { length: 255 }).notNull(),
+  description: text("description").notNull().default(""),
+  discountPercent: numeric("discount_percent"),
+  productId: uuid("productId").references(() => products.id, { onDelete: "set null" }),
+  validFrom: timestamp("valid_from", { withTimezone: true }).notNull().defaultNow(),
+  validTo: timestamp("valid_to", { withTimezone: true }).notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  bannerColor: varchar("banner_color", { length: 20 }).default("#7AB648"),
+  createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow(),
+});
+export type Promotion = typeof promotions.$inferSelect;
+export type InsertPromotion = typeof promotions.$inferInsert;

@@ -41,6 +41,7 @@ import { reportsRouter } from "./reports-router";
 import { inventoryExportRouter } from "./inventory-export-router";
 import { companiesRouter } from "./companies-router";
 import { tierRulesRouter } from "./tier-rules-router";
+import { paymentReconciliationRouter } from "./payment-reconciliation-router";
 import { uuidSchema } from "../shared/schemas";
 
 const uuid = uuidSchema;
@@ -2158,6 +2159,8 @@ export const appRouter = router({
   companies: companiesRouter,
   // ============= M13.A — TIER ENGINE =============
   tierRules: tierRulesRouter,
+  // ============= F5 — PAYMENT RECONCILIATION =============
+  paymentReconciliation: paymentReconciliationRouter,
 });
 
 export type AppRouter = typeof appRouter;
