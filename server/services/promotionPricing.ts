@@ -35,6 +35,14 @@ export function selectPromotionForProduct(
   return bestSpecific ?? bestGeneral;
 }
 
+/** A promotion has no commercial effect when the retailer price is already zero. */
+export function canApplyPromotion(
+  priceBeforePromotion: number,
+  promotion: PromotionCandidate | null,
+): promotion is PromotionCandidate {
+  return Boolean(promotion && promotion.discountPercent > 0 && priceBeforePromotion > 0);
+}
+
 /** Applies a promotion to the price already reserved for the retailer. */
 export function applyPromotionDiscount(
   priceBeforePromotion: number,

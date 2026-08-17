@@ -7,7 +7,7 @@
  */
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { applyPromotionDiscount, selectPromotionForProduct, type PromotionCandidate } from "./services/promotionPricing";
+import { applyPromotionDiscount, canApplyPromotion, selectPromotionForProduct, type PromotionCandidate } from "./services/promotionPricing";
 import {
   products,
   retailers,
@@ -254,7 +254,10 @@ export async function calculateOrderPricing(
     }
 
     const unitPriceTier = unitPriceFinal;
-    const appliedPromotion = selectPromotionForProduct(product.id, activePromotionCandidates);
+    const selectedPromotion = selectPromotionForProduct(product.id, activePromotionCandidates);
+    const appliedPromotion = canApplyPromotion(unitPriceTier, selectedPromotion)
+      ? selectedPromotion
+      : null;
     if (appliedPromotion) {
       unitPriceBeforePromotion = unitPriceFinal;
       unitPriceFinal = applyPromotionDiscount(unitPriceFinal, appliedPromotion.discountPercent);

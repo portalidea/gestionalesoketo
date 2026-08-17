@@ -29,6 +29,7 @@
 ## Promozioni Rivenditori
 - [x] Ripristinare il pricing promo sul branch main: catalogo, dettaglio, carrello e checkout
 - [ ] Verificare in live i prezzi e i risparmi promo per tutti i rivenditori di test
+- [x] Non mostrare una promo né un risparmio nullo quando il prezzo tier è già pari a zero
 
 ## Test e Documentazione
 - [x] Scrivere test per procedure critiche

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyPromotionDiscount, selectPromotionForProduct } from "./promotionPricing";
+import { applyPromotionDiscount, canApplyPromotion, selectPromotionForProduct } from "./promotionPricing";
 
 describe("promotion pricing", () => {
   it("applica il 15% al prezzo già scontato del tier", () => {
@@ -23,5 +23,11 @@ describe("promotion pricing", () => {
       { id: "specific-25", title: "Cacao 25", discountPercent: 25, productId: "brioche-cacao" },
     ]);
     expect(selected?.id).toBe("specific-25");
+  });
+
+  it("non applica una promo quando il prezzo riservato è già gratuito", () => {
+    const promotion = { id: "promo", title: "Promo", discountPercent: 15, productId: "product" };
+    expect(canApplyPromotion(0, promotion)).toBe(false);
+    expect(canApplyPromotion(4.12, promotion)).toBe(true);
   });
 });
