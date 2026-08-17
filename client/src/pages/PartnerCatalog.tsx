@@ -70,7 +70,7 @@ export default function PartnerCatalog() {
       name: item.name,
       sku: item.sku,
       unitPriceFinal: item.discountedPrice.toFixed(2),
-      unitPriceBase: item.listPrice.toFixed(2),
+      unitPriceBase: (item.priceBeforePromotion ?? item.listPrice).toFixed(2),
       vatRate: item.vatRate.toFixed(2),
       imageUrl: item.imageUrl,
       sellableUnitLabel: item.sellableUnitLabel,
@@ -141,6 +141,7 @@ export default function PartnerCatalog() {
             const outOfStock = item.availableStock <= 0 && !isBackorder;
             const stockLow = item.stockStatus === 'low_stock';
             const hasDiscount = item.discountPercentage > 0;
+            const hasPromotion = Boolean(item.promotionId);
             const inCart = getItemQuantity(item.productId);
 
             return (
@@ -166,7 +167,11 @@ export default function PartnerCatalog() {
                       {inCart}
                     </div>
                   )}
-                  {hasDiscount && (
+                  {hasPromotion ? (
+                    <div className="absolute top-2 left-2 bg-[#F5A623] text-white text-xs font-bold rounded-md px-2 py-0.5">
+                      PROMO -{item.promotionDiscountPercent?.toFixed(0)}%
+                    </div>
+                  ) : hasDiscount && (
                     <div className="absolute top-2 left-2 bg-[#F5A623] text-white text-xs font-bold rounded-md px-2 py-0.5">
                       -{item.discountPercentage.toFixed(0)}%
                     </div>
@@ -203,7 +208,7 @@ export default function PartnerCatalog() {
                   <div className="flex items-baseline gap-2">
                     {hasDiscount && (
                       <span className="text-sm text-muted-foreground line-through">
-                        &euro;{item.listPrice.toFixed(2)}
+                        &euro;{(item.priceBeforePromotion ?? item.listPrice).toFixed(2)}
                       </span>
                     )}
                     <span className="text-lg font-bold text-[#2D5A27] dark:text-[#7AB648]">
@@ -213,6 +218,11 @@ export default function PartnerCatalog() {
                       /{item.sellableUnitLabel.toLowerCase()}
                     </span>
                   </div>
+                  {hasPromotion && (
+                    <p className="text-xs font-medium text-[#7AB648]">
+                      {item.promotionTitle} — sconto promo applicato
+                    </p>
+                  )}
 
                   {/* Stock */}
                   <p

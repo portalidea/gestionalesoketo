@@ -124,6 +124,9 @@ export default function PartnerCart() {
                   const unitPrice = serverItem
                     ? parseFloat(serverItem.unitPriceFinal).toFixed(2)
                     : item.unitPriceFinal;
+                  const priceBeforePromotion = serverItem?.unitPriceBeforePromotion
+                    ? parseFloat(serverItem.unitPriceBeforePromotion).toFixed(2)
+                    : null;
                   const lineTotal = serverItem
                     ? parseFloat(serverItem.lineTotalNet).toFixed(2)
                     : (parseFloat(item.unitPriceFinal) * item.quantity).toFixed(2);
@@ -176,7 +179,19 @@ export default function PartnerCart() {
                         </div>
                       </TableCell>
                       <TableCell className="text-right text-sm">
-                        &euro;{unitPrice}
+                        {priceBeforePromotion && (
+                          <div className="text-xs text-muted-foreground line-through">
+                            &euro;{priceBeforePromotion}
+                          </div>
+                        )}
+                        <div className="font-medium text-[#2D5A27] dark:text-[#7AB648]">
+                          &euro;{unitPrice}
+                        </div>
+                        {serverItem?.promotionTitle && (
+                          <div className="text-[11px] text-[#7AB648] truncate">
+                            {serverItem.promotionTitle}
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell className="text-right font-medium text-sm">
                         &euro;{lineTotal}

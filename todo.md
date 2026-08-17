@@ -26,6 +26,9 @@
 - [ ] Sviluppare sistema automatico generazione alert
 - [ ] Aggiungere notifiche email per alert critici
 
+## Promozioni Rivenditori
+- [x] Applicare automaticamente lo sconto della promozione attiva al prezzo tier nel catalogo, carrello, checkout e ordine
+
 ## Test e Documentazione
 - [x] Scrivere test per procedure critiche
 - [ ] Creare documentazione tecnica

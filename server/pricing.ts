@@ -7,10 +7,12 @@
  */
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "./db";
+import { applyPromotionDiscount } from "./services/promotionPricing";
 import {
   products,
   retailers,
   pricingPackages,
+  promotions,
 } from "../drizzle/schema";
 
 export interface PricingItemInput {
@@ -37,6 +39,10 @@ export interface PricingItemOutput {
   costPrice?: string; // costo anagrafico (2 decimali)
   markupPercent?: string; // markup applicato (2 decimali)
   pricingModel?: "tier_discount" | "cost_markup";
+  unitPriceBeforePromotion?: string;
+  promotionId?: string;
+  promotionTitle?: string;
+  promotionDiscountPercent?: string;
 }
 
 export interface PricingResult {
@@ -150,6 +156,55 @@ export async function calculateOrderPricing(
 
   const productMap = new Map(productRows.map((p) => [p.id, p]));
 
+  // F16: promozioni attive della company. Una promo specifica prevale su
+  // una promo generale; se si sovrappongono, viene applicata solo la più alta.
+  type ActivePromotion = {
+    id: string;
+    title: string;
+    discountPercent: number;
+    productId: string | null;
+  };
+  const productPromotions = new Map<string, ActivePromotion>();
+  let generalPromotion: ActivePromotion | null = null;
+
+  if (companyId && productIds.length > 0) {
+    const activePromotions = await db
+      .select({
+        id: promotions.id,
+        title: promotions.title,
+        discountPercent: promotions.discountPercent,
+        productId: promotions.productId,
+      })
+      .from(promotions)
+      .where(
+        sql`${promotions.companyId} = ${companyId}::uuid
+          AND ${promotions.isActive} = true
+          AND ${promotions.validFrom} <= NOW()
+          AND ${promotions.validTo} >= NOW()
+          AND ${promotions.discountPercent} IS NOT NULL
+          AND (${promotions.productId} IS NULL OR ${promotions.productId} IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)}))`,
+      );
+
+    for (const promotion of activePromotions) {
+      const discount = parseFloat(promotion.discountPercent ?? "0");
+      if (discount <= 0) continue;
+      const candidate: ActivePromotion = {
+        id: promotion.id,
+        title: promotion.title,
+        discountPercent: discount,
+        productId: promotion.productId,
+      };
+      if (candidate.productId) {
+        const current = productPromotions.get(candidate.productId);
+        if (!current || candidate.discountPercent > current.discountPercent) {
+          productPromotions.set(candidate.productId, candidate);
+        }
+      } else if (!generalPromotion || candidate.discountPercent > generalPromotion.discountPercent) {
+        generalPromotion = candidate;
+      }
+    }
+  }
+
   // 3. Ottieni stock centrale per ogni prodotto
   const stockRows = await db.execute<{ productId: string; totalQty: number }>(sql`
     SELECT pb."productId" AS "productId", COALESCE(SUM(ibb."quantity"), 0)::int AS "totalQty"
@@ -188,6 +243,7 @@ export async function calculateOrderPricing(
     let unitPriceFinal: number;
     let costPriceStr: string | undefined;
     let markupPercentStr: string | undefined;
+    let unitPriceBeforePromotion: number | undefined;
 
     if (pricingModel === "cost_markup") {
       // M11.A.markup: prezzo = costPrice × piecesPerUnit × (1 + markup/100)
@@ -208,6 +264,17 @@ export async function calculateOrderPricing(
       // Tier discount: logica invariata
       unitPriceBase = parseFloat(product.unitPrice || "0");
       unitPriceFinal = roundTo2(unitPriceBase * (1 - discountPercent / 100));
+    }
+
+    // La promozione si applica sempre dopo il prezzo riservato al retailer
+    // (tier discount o markup), mai sul listino pubblico.
+    const appliedPromotion = productPromotions.get(product.id) ?? generalPromotion;
+    if (appliedPromotion) {
+      unitPriceBeforePromotion = unitPriceFinal;
+      unitPriceFinal = applyPromotionDiscount(
+        unitPriceFinal,
+        appliedPromotion.discountPercent,
+      );
     }
 
     const lineTotalNet = roundTo2(unitPriceFinal * item.quantity);
@@ -235,7 +302,11 @@ export async function calculateOrderPricing(
       piecesPerUnit,
       quantity: item.quantity,
       unitPriceBase: unitPriceBase.toFixed(2),
-      discountPercent: pricingModel === "cost_markup" ? "0.00" : discountPercent.toFixed(2),
+      discountPercent: pricingModel === "tier_discount"
+        ? (unitPriceBase > 0
+          ? ((1 - unitPriceFinal / unitPriceBase) * 100).toFixed(2)
+          : "0.00")
+        : (appliedPromotion?.discountPercent ?? 0).toFixed(2),
       unitPriceFinal: unitPriceFinal.toFixed(2),
       vatRate: vatRate.toFixed(2),
       lineTotalNet: lineTotalNet.toFixed(2),
@@ -250,6 +321,12 @@ export async function calculateOrderPricing(
       }),
       ...(pricingModel === "tier_discount" && {
         pricingModel: "tier_discount" as const,
+      }),
+      ...(appliedPromotion && {
+        unitPriceBeforePromotion: unitPriceBeforePromotion!.toFixed(2),
+        promotionId: appliedPromotion.id,
+        promotionTitle: appliedPromotion.title,
+        promotionDiscountPercent: appliedPromotion.discountPercent.toFixed(2),
       }),
     });
   }

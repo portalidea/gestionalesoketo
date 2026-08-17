@@ -116,12 +116,24 @@ export const retailerSelfServiceRouter = router({
       // Get available stock
       const productIds = productRows.map((p) => p.id);
       const stockMap = await getAvailableStock(productIds, ctx.activeCompanyId);
+      const pricingPreview = await calculateOrderPricing(
+        ctx.retailerId,
+        productIds.map((productId) => ({ productId, quantity: 1 })),
+        ctx.activeCompanyId,
+      );
+      const priceByProduct = new Map(
+        pricingPreview.items.map((item) => [item.productId, item]),
+      );
 
       // Map results with M8.4 stockStatus
       // NOTA: availableQty è in pezzi, convertiamo in confezioni per il retailer
       const catalogProducts = productRows.map((p) => {
         const listPrice = parseFloat(p.unitPrice ?? "0");
-        const discountedPrice = +(listPrice * (1 - discountPercent / 100)).toFixed(2);
+        const price = priceByProduct.get(p.id);
+        const discountedPrice = parseFloat(price?.unitPriceFinal ?? listPrice.toFixed(2));
+        const priceBeforePromotion = price?.unitPriceBeforePromotion
+          ? parseFloat(price.unitPriceBeforePromotion)
+          : null;
         const stock = stockMap.get(p.id);
         const ppu = p.piecesPerUnit ?? 1;
         const availableStock = Math.floor((stock?.availableQty ?? 0) / ppu);
@@ -146,7 +158,13 @@ export const retailerSelfServiceRouter = router({
           imageUrl: p.imageUrl,
           listPrice,
           discountedPrice,
-          discountPercentage: discountPercent,
+          discountPercentage: parseFloat(price?.discountPercent ?? discountPercent.toFixed(2)),
+          priceBeforePromotion,
+          promotionId: price?.promotionId ?? null,
+          promotionTitle: price?.promotionTitle ?? null,
+          promotionDiscountPercent: price?.promotionDiscountPercent
+            ? parseFloat(price.promotionDiscountPercent)
+            : null,
           vatRate: parseFloat(p.vatRate),
           availableStock,
           stockStatus,
@@ -175,8 +193,8 @@ export const retailerSelfServiceRouter = router({
     .mutation(async ({ input, ctx }) => {
       console.log(`[retailerPortal.cartPreview] retailerId=${ctx.retailerId} items=${input.items.length}`);
 
-      // Use calculateOrderPricing for consistent pricing
-      const pricing = await calculateOrderPricing(ctx.retailerId, input.items);
+      // Use calculateOrderPricing for consistent, company-aware pricing.
+      const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
 
       // Get retailer payment terms
       const database = await getDb();
@@ -222,6 +240,10 @@ export const retailerSelfServiceRouter = router({
           unitPriceBase: pi.unitPriceBase,
           discountPercent: pi.discountPercent,
           unitPriceFinal: pi.unitPriceFinal,
+          unitPriceBeforePromotion: pi.unitPriceBeforePromotion,
+          promotionId: pi.promotionId,
+          promotionTitle: pi.promotionTitle,
+          promotionDiscountPercent: pi.promotionDiscountPercent,
           vatRate: pi.vatRate,
           lineTotalNet: pi.lineTotalNet,
           lineTotalGross: pi.lineTotalGross,
@@ -633,8 +655,8 @@ export const retailerSelfServiceRouter = router({
           });
         }
       }
-      // Recalculate pricing
-      const pricing = await calculateOrderPricing(ctx.retailerId, input.items);
+      // Recalculate pricing, including current active promotions.
+      const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
 
       // Update in transaction
       await database.transaction(async (tx) => {

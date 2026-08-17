@@ -11,6 +11,7 @@ import { and, asc, eq, gt, ilike, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { retailerProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
+import { calculateOrderPricing } from "./pricing";
 import {
   inventoryByBatch,
   locations,
@@ -261,8 +262,13 @@ export const catalogPortalRouter = router({
         }
       }
 
-      const unitPriceBase = parseFloat(product.unitPrice || "0");
-      const unitPriceFinal = Math.round(unitPriceBase * (1 - discountPercent / 100) * 100) / 100;
+      // F16: prezzo autorevole, comprensivo della promo attiva applicata dopo il tier.
+      const productPricing = await calculateOrderPricing(
+        ctx.retailerId,
+        [{ productId: input.productId, quantity: 1 }],
+        ctx.activeCompanyId,
+      );
+      const priceItem = productPricing.items[0];
 
       // Lotti disponibili FEFO nel magazzino centrale (stock > 0)
       const batchRows = await db
@@ -307,9 +313,13 @@ export const catalogPortalRouter = router({
       return {
         product: {
           ...product,
-          unitPriceBase: unitPriceBase.toFixed(2),
-          unitPriceFinal: unitPriceFinal.toFixed(2),
-          discountPercent: discountPercent.toFixed(2),
+          unitPriceBase: priceItem.unitPriceBase,
+          unitPriceFinal: priceItem.unitPriceFinal,
+          discountPercent: priceItem.discountPercent,
+          unitPriceBeforePromotion: priceItem.unitPriceBeforePromotion ?? null,
+          promotionId: priceItem.promotionId ?? null,
+          promotionTitle: priceItem.promotionTitle ?? null,
+          promotionDiscountPercent: priceItem.promotionDiscountPercent ?? null,
           packageName,
         },
         batches: batchRows.map((b) => ({

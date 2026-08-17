@@ -50,6 +50,7 @@ export default function PartnerProductDetail() {
   const data = detailQuery.data;
   const product = data?.product;
   const hasDiscount = product ? parseFloat(product.discountPercent) > 0 : false;
+  const hasPromotion = Boolean(product?.promotionId);
   const inCart = getItemQuantity(id ?? "");
 
   const handleAdd = () => {
@@ -131,7 +132,7 @@ export default function PartnerProductDetail() {
                   <div className="flex items-baseline gap-3">
                     {hasDiscount && (
                       <span className="text-lg text-muted-foreground line-through">
-                        &euro;{product.unitPriceBase}
+                        &euro;{product.unitPriceBeforePromotion ?? product.unitPriceBase}
                       </span>
                     )}
                     <span className="text-3xl font-bold text-[#2D5A27] dark:text-[#7AB648]">
@@ -141,7 +142,12 @@ export default function PartnerProductDetail() {
                       /{product.sellableUnitLabel.toLowerCase()}
                     </span>
                   </div>
-                  {hasDiscount && product.packageName && (
+                  {hasPromotion && (
+                    <p className="text-sm text-[#7AB648] font-medium">
+                      Promo {product.promotionTitle}: -{product.promotionDiscountPercent}% sul tuo prezzo riservato
+                    </p>
+                  )}
+                  {!hasPromotion && hasDiscount && product.packageName && (
                     <p className="text-sm text-[#7AB648] font-medium">
                       Sconto pacchetto {product.packageName}: {product.discountPercent}%
                     </p>
