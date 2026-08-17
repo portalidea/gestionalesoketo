@@ -7,7 +7,7 @@
  */
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { applyPromotionDiscount } from "./services/promotionPricing";
+import { applyPromotionDiscount, selectPromotionForProduct, type PromotionCandidate } from "./services/promotionPricing";
 import {
   products,
   retailers,
@@ -161,14 +161,7 @@ export async function calculateOrderPricing(
 
   // F16: promozioni attive della company. Una promo specifica prevale su
   // una promo generale; se si sovrappongono, viene applicata solo la più alta.
-  type ActivePromotion = {
-    id: string;
-    title: string;
-    discountPercent: number;
-    productId: string | null;
-  };
-  const productPromotions = new Map<string, ActivePromotion>();
-  let generalPromotion: ActivePromotion | null = null;
+  const activePromotionCandidates: PromotionCandidate[] = [];
 
   if (companyId && productIds.length > 0) {
     const activePromotions = await db
@@ -191,20 +184,13 @@ export async function calculateOrderPricing(
     for (const promotion of activePromotions) {
       const discount = parseFloat(promotion.discountPercent ?? "0");
       if (discount <= 0) continue;
-      const candidate: ActivePromotion = {
+      const candidate: PromotionCandidate = {
         id: promotion.id,
         title: promotion.title,
         discountPercent: discount,
         productId: promotion.productId,
       };
-      if (candidate.productId) {
-        const current = productPromotions.get(candidate.productId);
-        if (!current || candidate.discountPercent > current.discountPercent) {
-          productPromotions.set(candidate.productId, candidate);
-        }
-      } else if (!generalPromotion || candidate.discountPercent > generalPromotion.discountPercent) {
-        generalPromotion = candidate;
-      }
+      activePromotionCandidates.push(candidate);
     }
   }
 
@@ -273,7 +259,7 @@ export async function calculateOrderPricing(
 
     // La promozione si applica sempre dopo il prezzo riservato al retailer
     // (tier discount o markup), mai sul listino pubblico.
-    const appliedPromotion = productPromotions.get(product.id) ?? generalPromotion;
+    const appliedPromotion = selectPromotionForProduct(product.id, activePromotionCandidates);
     if (appliedPromotion) {
       unitPriceBeforePromotion = unitPriceFinal;
       unitPriceFinal = applyPromotionDiscount(
