@@ -30,6 +30,8 @@
 - [x] Ripristinare il pricing promo sul branch main: catalogo, dettaglio, carrello e checkout
 - [x] Verificare in live i prezzi e i risparmi promo per tutti i rivenditori di test
 - [x] Non mostrare una promo né un risparmio nullo quando il prezzo tier è già pari a zero
+- [ ] Verificare che riepiloghi ordini, proforma e fatture admin usino il prezzo finale promozionale salvato
+- [x] Rendere esplicito nel riepilogo admin che lo sconto di testata è il solo tier e che le promo sono applicate sulle righe
 
 ## Test e Documentazione
 - [x] Scrivere test per procedure critiche

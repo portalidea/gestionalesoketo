@@ -534,6 +534,9 @@ export default function OrderDetail() {
   const paymentStatus = (order as any).paymentStatus ?? "unpaid";
   const paymentMethod = (order as any).paymentMethod ?? null;
   const paymentStatusCfg = PAYMENT_STATUS_CONFIG[paymentStatus] ?? PAYMENT_STATUS_CONFIG.unpaid;
+  const hasPromotionalLinePricing = order.items.some(
+    (item) => parseFloat(item.discountPercent) > parseFloat(order.discountPercent ?? "0"),
+  );
 
   function openEditItemsDialog() {
     // Pre-populate with current items including prices
@@ -845,9 +848,14 @@ export default function OrderDetail() {
               <div className="space-y-2 text-sm">
                 {parseFloat(order.discountPercent) > 0 && (
                   <div className="flex justify-between text-muted-foreground">
-                    <span>Sconto pacchetto</span>
+                    <span>Sconto pacchetto (tier)</span>
                     <span className="text-green-500">-{parseFloat(order.discountPercent).toFixed(0)}%</span>
                   </div>
+                )}
+                {hasPromotionalLinePricing && (
+                  <p className="rounded-md border border-[#7AB648]/30 bg-[#7AB648]/10 px-2 py-1.5 text-xs text-[#2D5A27] dark:text-[#9bd170]">
+                    Le promozioni attive sono già incluse nei prezzi unitari finali delle singole righe.
+                  </p>
                 )}
                 <div className="flex justify-between text-muted-foreground">
                   <span>Subtotale netto</span>
