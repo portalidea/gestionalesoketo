@@ -40,6 +40,9 @@ export interface PricingItemOutput {
   markupPercent?: string; // markup applicato (2 decimali)
   pricingModel?: "tier_discount" | "cost_markup";
   unitPriceBeforePromotion?: string;
+  publicListPrice?: string;
+  unitPriceTier?: string;
+  promotionSavingsPerUnit?: string;
   promotionId?: string;
   promotionTitle?: string;
   promotionDiscountPercent?: string;
@@ -266,6 +269,8 @@ export async function calculateOrderPricing(
       unitPriceFinal = roundTo2(unitPriceBase * (1 - discountPercent / 100));
     }
 
+    const unitPriceTier = unitPriceFinal;
+
     // La promozione si applica sempre dopo il prezzo riservato al retailer
     // (tier discount o markup), mai sul listino pubblico.
     const appliedPromotion = productPromotions.get(product.id) ?? generalPromotion;
@@ -324,6 +329,9 @@ export async function calculateOrderPricing(
       }),
       ...(appliedPromotion && {
         unitPriceBeforePromotion: unitPriceBeforePromotion!.toFixed(2),
+        publicListPrice: parseFloat(product.unitPrice || "0").toFixed(2),
+        unitPriceTier: unitPriceTier.toFixed(2),
+        promotionSavingsPerUnit: roundTo2(unitPriceTier - unitPriceFinal).toFixed(2),
         promotionId: appliedPromotion.id,
         promotionTitle: appliedPromotion.title,
         promotionDiscountPercent: appliedPromotion.discountPercent.toFixed(2),

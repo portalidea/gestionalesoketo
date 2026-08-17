@@ -127,6 +127,16 @@ export default function PartnerCart() {
                   const priceBeforePromotion = serverItem?.unitPriceBeforePromotion
                     ? parseFloat(serverItem.unitPriceBeforePromotion).toFixed(2)
                     : null;
+                  const hasPromotion = Boolean(serverItem?.promotionId);
+                  const publicListPrice = serverItem?.publicListPrice
+                    ? parseFloat(serverItem.publicListPrice).toFixed(2)
+                    : null;
+                  const tierPrice = serverItem?.unitPriceTier
+                    ? parseFloat(serverItem.unitPriceTier).toFixed(2)
+                    : priceBeforePromotion;
+                  const promotionSavings = serverItem?.promotionSavingsPerUnit
+                    ? parseFloat(serverItem.promotionSavingsPerUnit).toFixed(2)
+                    : null;
                   const lineTotal = serverItem
                     ? parseFloat(serverItem.lineTotalNet).toFixed(2)
                     : (parseFloat(item.unitPriceFinal) * item.quantity).toFixed(2);
@@ -179,17 +189,24 @@ export default function PartnerCart() {
                         </div>
                       </TableCell>
                       <TableCell className="text-right text-sm">
-                        {priceBeforePromotion && (
-                          <div className="text-xs text-muted-foreground line-through">
-                            &euro;{priceBeforePromotion}
+                        {hasPromotion ? (
+                          <div className="space-y-0.5">
+                            <div className="text-xs text-muted-foreground">
+                              Listino: <span className="line-through">&euro;{publicListPrice}</span>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Tuo prezzo: <span>&euro;{tierPrice}</span>
+                            </div>
+                            <div className="text-[11px] text-[#7AB648] font-medium">
+                              {serverItem?.promotionTitle} · risparmi &euro;{promotionSavings}
+                            </div>
+                            <div className="font-semibold text-[#2D5A27] dark:text-[#7AB648]">
+                              Paghi &euro;{unitPrice}
+                            </div>
                           </div>
-                        )}
-                        <div className="font-medium text-[#2D5A27] dark:text-[#7AB648]">
-                          &euro;{unitPrice}
-                        </div>
-                        {serverItem?.promotionTitle && (
-                          <div className="text-[11px] text-[#7AB648] truncate">
-                            {serverItem.promotionTitle}
+                        ) : (
+                          <div className="font-medium text-[#2D5A27] dark:text-[#7AB648]">
+                            &euro;{unitPrice}
                           </div>
                         )}
                       </TableCell>

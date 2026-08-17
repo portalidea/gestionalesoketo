@@ -28,6 +28,7 @@
 
 ## Promozioni Rivenditori
 - [x] Applicare automaticamente lo sconto della promozione attiva al prezzo tier nel catalogo, carrello, checkout e ordine
+- [x] Mostrare nel carrello listino, prezzo tier, risparmio promo e prezzo finale per ogni prodotto promosso
 
 ## Test e Documentazione
 - [x] Scrivere test per procedure critiche
