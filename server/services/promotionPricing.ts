@@ -8,9 +8,9 @@ export type PromotionCandidate = {
 };
 
 /**
- * Selects exactly one promotion for a product. A product-specific promotion
- * always takes precedence over a general one; within the same scope the
- * highest discount wins. Promotions never stack.
+ * Selects exactly one applicable promotion. A product-specific promotion
+ * always overrides a general promotion; within the same scope the highest
+ * percentage wins. Discounts are never stacked.
  */
 export function selectPromotionForProduct(
   productId: string,
@@ -21,7 +21,6 @@ export function selectPromotionForProduct(
 
   for (const promotion of promotions) {
     if (promotion.discountPercent <= 0) continue;
-
     if (promotion.productId === productId) {
       if (!bestSpecific || promotion.discountPercent > bestSpecific.discountPercent) {
         bestSpecific = promotion;
@@ -36,10 +35,7 @@ export function selectPromotionForProduct(
   return bestSpecific ?? bestGeneral;
 }
 
-/**
- * Applies a promotion to the price already reserved for the retailer
- * (tier/markup), returning a 2-decimal monetary price.
- */
+/** Applies a promotion to the price already reserved for the retailer. */
 export function applyPromotionDiscount(
   priceBeforePromotion: number,
   promotionDiscountPercent: number,

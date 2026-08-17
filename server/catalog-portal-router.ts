@@ -118,6 +118,14 @@ export const catalogPortalRouter = router({
       }
 
       const productIds = productRows.map((p) => p.id);
+      const pricingPreview = await calculateOrderPricing(
+        ctx.retailerId,
+        productIds.map((productId) => ({ productId, quantity: 1 })),
+        ctx.activeCompanyId,
+      );
+      const priceByProduct = new Map(
+        pricingPreview.items.map((item) => [item.productId, item]),
+      );
 
       // 5. Stock totale magazzino centrale per prodotto (M11.A: filtro companyId)
       const stockRows = await db.execute<{ productId: string; totalQty: number }>(sql`
@@ -178,8 +186,7 @@ export const catalogPortalRouter = router({
       // NOTA: totalStock è in pezzi, reservedQty è in confezioni (orderItems.quantity)
       // Convertiamo tutto in confezioni per il retailer
       const items = productRows.map((p) => {
-        const unitPriceBase = parseFloat(p.unitPrice || "0");
-        const unitPriceFinal = Math.round(unitPriceBase * (1 - discountPercent / 100) * 100) / 100;
+        const price = priceByProduct.get(p.id)!;
         const ppu = p.piecesPerUnit ?? 1;
         const totalStockPieces = stockMap.get(p.id) ?? 0;
         const totalStockConf = Math.floor(totalStockPieces / ppu);
@@ -206,9 +213,16 @@ export const catalogPortalRouter = router({
           name: p.name,
           category: p.category,
           description: p.description,
-          unitPriceBase: unitPriceBase.toFixed(2),
-          unitPriceFinal: unitPriceFinal.toFixed(2),
-          discountPercent: discountPercent.toFixed(2),
+          unitPriceBase: price.unitPriceBase,
+          unitPriceFinal: price.unitPriceFinal,
+          discountPercent: price.discountPercent,
+          unitPriceBeforePromotion: price.unitPriceBeforePromotion ?? null,
+          publicListPrice: price.publicListPrice ?? null,
+          unitPriceTier: price.unitPriceTier ?? null,
+          promotionSavingsPerUnit: price.promotionSavingsPerUnit ?? null,
+          promotionId: price.promotionId ?? null,
+          promotionTitle: price.promotionTitle ?? null,
+          promotionDiscountPercent: price.promotionDiscountPercent ?? null,
           vatRate: p.vatRate,
           piecesPerUnit: p.piecesPerUnit,
           sellableUnitLabel: p.sellableUnitLabel,
@@ -262,7 +276,6 @@ export const catalogPortalRouter = router({
         }
       }
 
-      // F16: prezzo autorevole, comprensivo della promo attiva applicata dopo il tier.
       const productPricing = await calculateOrderPricing(
         ctx.retailerId,
         [{ productId: input.productId, quantity: 1 }],
@@ -317,6 +330,9 @@ export const catalogPortalRouter = router({
           unitPriceFinal: priceItem.unitPriceFinal,
           discountPercent: priceItem.discountPercent,
           unitPriceBeforePromotion: priceItem.unitPriceBeforePromotion ?? null,
+          publicListPrice: priceItem.publicListPrice ?? null,
+          unitPriceTier: priceItem.unitPriceTier ?? null,
+          promotionSavingsPerUnit: priceItem.promotionSavingsPerUnit ?? null,
           promotionId: priceItem.promotionId ?? null,
           promotionTitle: priceItem.promotionTitle ?? null,
           promotionDiscountPercent: priceItem.promotionDiscountPercent ?? null,

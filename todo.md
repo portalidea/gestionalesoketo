@@ -27,9 +27,8 @@
 - [ ] Aggiungere notifiche email per alert critici
 
 ## Promozioni Rivenditori
-- [x] Applicare automaticamente lo sconto della promozione attiva al prezzo tier nel catalogo, carrello, checkout e ordine
-- [x] Mostrare nel carrello listino, prezzo tier, risparmio promo e prezzo finale per ogni prodotto promosso
-- [ ] Verificare la visualizzazione prezzi e risparmi promo per tutti i rivenditori di test
+- [x] Ripristinare il pricing promo sul branch main: catalogo, dettaglio, carrello e checkout
+- [ ] Verificare in live i prezzi e i risparmi promo per tutti i rivenditori di test
 
 ## Test e Documentazione
 - [x] Scrivere test per procedure critiche

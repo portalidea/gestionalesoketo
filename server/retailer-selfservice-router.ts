@@ -193,7 +193,7 @@ export const retailerSelfServiceRouter = router({
     .mutation(async ({ input, ctx }) => {
       console.log(`[retailerPortal.cartPreview] retailerId=${ctx.retailerId} items=${input.items.length}`);
 
-      // Use calculateOrderPricing for consistent, company-aware pricing.
+      // Prezzi autorevoli, inclusi tier e promozioni della company attiva.
       const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
 
       // Get retailer payment terms
@@ -658,7 +658,7 @@ export const retailerSelfServiceRouter = router({
           });
         }
       }
-      // Recalculate pricing, including current active promotions.
+      // Recalculate pricing, including promotions still active at modification time.
       const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
 
       // Update in transaction

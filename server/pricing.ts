@@ -159,10 +159,8 @@ export async function calculateOrderPricing(
 
   const productMap = new Map(productRows.map((p) => [p.id, p]));
 
-  // F16: promozioni attive della company. Una promo specifica prevale su
-  // una promo generale; se si sovrappongono, viene applicata solo la più alta.
+  // F16: solo promo della company attiva e nel periodo di validità.
   const activePromotionCandidates: PromotionCandidate[] = [];
-
   if (companyId && productIds.length > 0) {
     const activePromotions = await db
       .select({
@@ -183,14 +181,14 @@ export async function calculateOrderPricing(
 
     for (const promotion of activePromotions) {
       const discount = parseFloat(promotion.discountPercent ?? "0");
-      if (discount <= 0) continue;
-      const candidate: PromotionCandidate = {
-        id: promotion.id,
-        title: promotion.title,
-        discountPercent: discount,
-        productId: promotion.productId,
-      };
-      activePromotionCandidates.push(candidate);
+      if (discount > 0) {
+        activePromotionCandidates.push({
+          id: promotion.id,
+          title: promotion.title,
+          discountPercent: discount,
+          productId: promotion.productId,
+        });
+      }
     }
   }
 
@@ -256,16 +254,10 @@ export async function calculateOrderPricing(
     }
 
     const unitPriceTier = unitPriceFinal;
-
-    // La promozione si applica sempre dopo il prezzo riservato al retailer
-    // (tier discount o markup), mai sul listino pubblico.
     const appliedPromotion = selectPromotionForProduct(product.id, activePromotionCandidates);
     if (appliedPromotion) {
       unitPriceBeforePromotion = unitPriceFinal;
-      unitPriceFinal = applyPromotionDiscount(
-        unitPriceFinal,
-        appliedPromotion.discountPercent,
-      );
+      unitPriceFinal = applyPromotionDiscount(unitPriceFinal, appliedPromotion.discountPercent);
     }
 
     const lineTotalNet = roundTo2(unitPriceFinal * item.quantity);
@@ -294,9 +286,7 @@ export async function calculateOrderPricing(
       quantity: item.quantity,
       unitPriceBase: unitPriceBase.toFixed(2),
       discountPercent: pricingModel === "tier_discount"
-        ? (unitPriceBase > 0
-          ? ((1 - unitPriceFinal / unitPriceBase) * 100).toFixed(2)
-          : "0.00")
+        ? (unitPriceBase > 0 ? ((1 - unitPriceFinal / unitPriceBase) * 100).toFixed(2) : "0.00")
         : (appliedPromotion?.discountPercent ?? 0).toFixed(2),
       unitPriceFinal: unitPriceFinal.toFixed(2),
       vatRate: vatRate.toFixed(2),

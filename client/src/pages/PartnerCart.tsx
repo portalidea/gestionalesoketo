@@ -124,16 +124,13 @@ export default function PartnerCart() {
                   const unitPrice = serverItem
                     ? parseFloat(serverItem.unitPriceFinal).toFixed(2)
                     : item.unitPriceFinal;
-                  const priceBeforePromotion = serverItem?.unitPriceBeforePromotion
-                    ? parseFloat(serverItem.unitPriceBeforePromotion).toFixed(2)
-                    : null;
                   const hasPromotion = Boolean(serverItem?.promotionId);
                   const publicListPrice = serverItem?.publicListPrice
                     ? parseFloat(serverItem.publicListPrice).toFixed(2)
                     : null;
                   const tierPrice = serverItem?.unitPriceTier
                     ? parseFloat(serverItem.unitPriceTier).toFixed(2)
-                    : priceBeforePromotion;
+                    : null;
                   const promotionSavings = serverItem?.promotionSavingsPerUnit
                     ? parseFloat(serverItem.promotionSavingsPerUnit).toFixed(2)
                     : null;
@@ -195,7 +192,7 @@ export default function PartnerCart() {
                               Listino: <span className="line-through">&euro;{publicListPrice}</span>
                             </div>
                             <div className="text-xs text-muted-foreground">
-                              Tuo prezzo: <span>&euro;{tierPrice}</span>
+                              Tuo prezzo: &euro;{tierPrice}
                             </div>
                             <div className="text-[11px] text-[#7AB648] font-medium">
                               {serverItem?.promotionTitle} · risparmi &euro;{promotionSavings}
