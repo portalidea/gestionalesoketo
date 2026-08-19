@@ -11,6 +11,12 @@
       "maxDuration": 30
     }
   },
+  "crons": [
+    {
+      "path": "/api/cron/tier-evaluation",
+      "schedule": "0 5 1 * *"
+    }
+  ],
   "rewrites": [
     { "source": "/api/ddt-extract", "destination": "/api/ddt-extract/index" },
     { "source": "/api/:path*", "destination": "/api" },

@@ -22,6 +22,7 @@ import {
 } from "../drizzle/schema";
 import { sendEmail } from "./email";
 import { ENV } from "./_core/env";
+import { evaluateTierEngineForCompany, isMonthlyTierEvaluationDate } from "./services/tierEngineService";
 
 export const cronAlertRoutes = Router();
 
@@ -221,8 +222,8 @@ cronAlertRoutes.get("/cron/stock-alerts", async (req: Request, res: Response) =>
 });
 
 /**
- * F2: Tier Engine daily evaluation cron
- * Runs the tier evaluation for all companies.
+ * F2: Tier Engine monthly evaluation cron.
+ * Runs only on the first day of each month and evaluates enabled retailers.
  */
 cronAlertRoutes.get("/cron/tier-evaluation", async (req: Request, res: Response) => {
   if (!authCron(req, res)) return;
@@ -231,23 +232,35 @@ cronAlertRoutes.get("/cron/tier-evaluation", async (req: Request, res: Response)
   if (!db) { res.status(500).json({ error: "DB unavailable" }); return; }
 
   try {
+    const now = new Date();
+    if (!isMonthlyTierEvaluationDate(now)) {
+      res.json({ success: true, skipped: true, reason: "Il motore tier viene eseguito solo il primo giorno del mese" });
+      return;
+    }
+
     // Get all companies
     const allCompanies = await db.execute<{ id: string; name: string }>(sql`
       SELECT id, name FROM companies WHERE "isActive" = true
     `);
 
-    const results: Array<{ company: string; message: string }> = [];
+    const results: Array<{ company: string; mode: string; enabledRetailers: number; skipped: boolean; evaluated: number }> = [];
 
     for (const company of allCompanies) {
-      // Import and call the tier evaluation logic inline
-      // We replicate the core logic here since the tRPC procedure needs ctx
-      results.push({ company: company.name, message: "Evaluation triggered via admin panel" });
+      const evaluation = await evaluateTierEngineForCompany(company.id, { now });
+      results.push({
+        company: company.name,
+        mode: evaluation.mode,
+        enabledRetailers: evaluation.enabledRetailers,
+        skipped: evaluation.skipped,
+        evaluated: evaluation.results.length,
+      });
     }
 
     res.json({
       success: true,
-      message: "Tier evaluation should be triggered via admin panel or scheduled task",
+      date: now.toISOString().slice(0, 10),
       companies: allCompanies.length,
+      results,
     });
   } catch (err: any) {
     console.error("[cron/tier-evaluation] Error:", err);

@@ -99,6 +99,16 @@ export default function TierRules() {
     },
   });
 
+  const setRetailerEnabled = trpc.tierRules.setRetailerEnabled.useMutation({
+    onSuccess: (data) => {
+      utils.tierRules.getRetailerStatus.invalidate();
+      utils.tierRules.getAtRiskRetailers.invalidate();
+      utils.tierRules.getSimulationLog.invalidate();
+      toast.success(data.enabled ? "Motore tier abilitato per il rivenditore" : "Rivenditore escluso dal motore tier");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
   const manualChange = trpc.tierRules.manualTierChange.useMutation({
     onSuccess: () => {
       utils.tierRules.getRetailerStatus.invalidate();
@@ -162,7 +172,7 @@ export default function TierRules() {
           <div>
             <h1 className="text-2xl font-bold">Motore Tier Automatico</h1>
             <p className="text-muted-foreground text-sm mt-1">
-              Gestione automatica declassamento/promozione tier rivenditori
+              Valutazione il primo giorno del mese, limitata ai rivenditori abilitati manualmente
             </p>
           </div>
           <div className="flex items-center gap-4">
@@ -346,7 +356,9 @@ export default function TierRules() {
                         <TableHead>Tier</TableHead>
                         <TableHead>Fatturato Mese</TableHead>
                         <TableHead>Mesi Sotto Soglia</TableHead>
+                        <TableHead>Motore Tier</TableHead>
                         <TableHead>Stato</TableHead>
+                        <TableHead>Ultima Valutazione</TableHead>
                         <TableHead>Freeze</TableHead>
                         <TableHead className="w-32"></TableHead>
                       </TableRow>
@@ -373,20 +385,40 @@ export default function TierRules() {
                               </span>
                             </TableCell>
                             <TableCell>
-                              {r.atRisk && (
+                              <div className="flex items-center gap-2">
+                                <Switch
+                                  checked={r.tierEngineEnabled}
+                                  disabled={setRetailerEnabled.isPending}
+                                  onCheckedChange={(checked) =>
+                                    setRetailerEnabled.mutate({ retailerId: r.id, enabled: checked })
+                                  }
+                                />
+                                <span className={`text-xs ${r.tierEngineEnabled ? "text-emerald-600" : "text-muted-foreground"}`}>
+                                  {r.tierEngineEnabled ? "Abilitato" : "Escluso"}
+                                </span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              {!r.tierEngineEnabled && <Badge variant="secondary">Escluso</Badge>}
+                              {r.tierEngineEnabled && r.atRisk && (
                                 <Badge variant="destructive" className="gap-1">
                                   <AlertTriangle className="h-3 w-3" />A Rischio
                                 </Badge>
                               )}
-                              {r.tierFrozen && (
+                              {r.tierEngineEnabled && r.tierFrozen && (
                                 <Badge variant="secondary" className="gap-1">
                                   <Lock className="h-3 w-3" />
                                   Frozen
                                 </Badge>
                               )}
-                              {!r.atRisk && !r.tierFrozen && (
+                              {r.tierEngineEnabled && !r.atRisk && !r.tierFrozen && (
                                 <span className="text-muted-foreground text-sm">OK</span>
                               )}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {r.lastTierEvaluation
+                                ? new Date(r.lastTierEvaluation).toLocaleDateString("it-IT")
+                                : "Mai"}
                             </TableCell>
                             <TableCell>
                               <Switch

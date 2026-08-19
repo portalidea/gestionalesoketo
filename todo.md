@@ -33,6 +33,11 @@
 - [ ] Verificare che riepiloghi ordini, proforma e fatture admin usino il prezzo finale promozionale salvato
 - [x] Rendere esplicito nel riepilogo admin che lo sconto di testata è il solo tier e che le promo sono applicate sulle righe
 
+## Motore Tier
+- [x] Aggiungere l’abilitazione manuale per includere o escludere singoli rivenditori dalla valutazione automatica
+- [x] Eseguire il primo giorno di ogni mese il motore tier solo sui rivenditori abilitati, rispettando le modalità osservazione e attiva
+- [x] Aggiungere nel pannello admin il toggle di abilitazione e lo stato dell’ultima valutazione per ogni rivenditore
+
 ## Test e Documentazione
 - [x] Scrivere test per procedure critiche
 - [ ] Creare documentazione tecnica

@@ -187,6 +187,7 @@ export const retailers = pgTable("retailers", {
   markupPercentage: numeric("markupPercentage", { precision: 5, scale: 2 }),
   // M13.A: Tier engine tracking
   tierFrozen: boolean("tier_frozen").default(false).notNull(),
+  tierEngineEnabled: boolean("tier_engine_enabled").default(false).notNull(),
   consecutiveMonthsBelow: integer("consecutive_months_below").default(0).notNull(),
   atRisk: boolean("at_risk").default(false).notNull(),
   lastTierEvaluation: date("last_tier_evaluation"),

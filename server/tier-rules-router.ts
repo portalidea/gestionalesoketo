@@ -23,6 +23,7 @@ import {
   orders,
   pricingPackages,
 } from "../drizzle/schema";
+import { evaluateTierEngineForCompany } from "./services/tierEngineService";
 
 // Tier hierarchy (lowest to highest)
 const TIER_HIERARCHY = ["Starter", "Partner", "Premium", "Elite"] as const;
@@ -114,6 +115,7 @@ export const tierRulesRouter = router({
       id: string;
       name: string;
       tierFrozen: boolean;
+      tierEngineEnabled: boolean;
       consecutiveMonthsBelow: number;
       atRisk: boolean;
       lastTierEvaluation: string | null;
@@ -122,6 +124,7 @@ export const tierRulesRouter = router({
       pricingModel: string;
     }>(sql`
       SELECT r.id, r.name, r.tier_frozen AS "tierFrozen",
+             r.tier_engine_enabled AS "tierEngineEnabled",
              r.consecutive_months_below AS "consecutiveMonthsBelow",
              r.at_risk AS "atRisk",
              r.last_tier_evaluation AS "lastTierEvaluation",
@@ -165,6 +168,47 @@ export const tierRulesRouter = router({
       currentMonthRevenue: revenueMap.get(r.id) ?? 0,
     }));
   }),
+
+  // ============= RETAILER ENGINE OPT-IN =============
+
+  setRetailerEnabled: adminProcedure
+    .input(z.object({ retailerId: z.string().uuid(), enabled: z.boolean() }))
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+      const [retailer] = await db
+        .select({ id: retailers.id })
+        .from(retailers)
+        .where(and(eq(retailers.id, input.retailerId), eq(retailers.companyId, ctx.activeCompanyId)))
+        .limit(1);
+      if (!retailer) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Rivenditore non trovato nella company attiva" });
+      }
+
+      await db
+        .update(retailers)
+        .set({
+          tierEngineEnabled: input.enabled,
+          ...(input.enabled
+            ? {}
+            : {
+                consecutiveMonthsBelow: 0,
+                atRisk: false,
+                lastTierEvaluation: null,
+              }),
+          updatedAt: new Date(),
+        })
+        .where(eq(retailers.id, input.retailerId));
+
+      await db.insert(tierChanges).values({
+        retailerId: input.retailerId,
+        reason: input.enabled ? "engine_enabled" : "engine_disabled",
+        createdBy: ctx.user!.id,
+      });
+
+      return { success: true, enabled: input.enabled };
+    }),
 
   // ============= FREEZE =============
 
@@ -493,6 +537,9 @@ export const tierRulesRouter = router({
   // ============= DAILY EVALUATION JOB =============
 
   runEvaluation: adminProcedure.mutation(async ({ ctx }) => {
+    return evaluateTierEngineForCompany(ctx.activeCompanyId, { force: true });
+
+    /* Legacy implementation removed in M13.B.
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -784,6 +831,6 @@ export const tierRulesRouter = router({
       });
     }
 
-    return { mode, date: today, results, skipped: false };
+    return { mode, date: today, results, skipped: false }; */
   }),
 });
