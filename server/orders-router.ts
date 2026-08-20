@@ -29,6 +29,10 @@ import { createFicProformaForCompany, getRetailerFicClientId } from "./fic-integ
 import { transitionOrder, registerPayment, cancelPayment, modifyOrderItems, type OrderStatus, type PaymentStatus } from "./services/orderStateMachine";
 import { getAvailableStock } from "./services/stockService";
 import { uuidSchema } from "../shared/schemas";
+import { cancelOrderWithTransferReversal } from "./services/orderTransferReversal";
+import { sendOrderStatusEmail } from "./services/orderEmailService";
+import { voidCommissionForOrder } from "./services/commissionService";
+import * as ficDocService from "./services/ficDocumentService";
 
 // --- Zod Schemas ---
 
@@ -1129,6 +1133,7 @@ export const ordersRouter = router({
             notes: `Ordine ${input.orderId} — ${item.quantity} conf. × ${ppu} = ${piecesToTransfer} pezzi`,
             createdBy: ctx.user!.id,
             companyId: ctx.activeCompanyId, // M11.A
+            orderId: input.orderId,
           });
           transferResults.push(`${item.productName}: ${item.quantity} conf. (${piecesToTransfer} pezzi) trasferite`);
         } catch (e: any) {
@@ -1226,29 +1231,34 @@ export const ordersRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
-      // Check if order was already transferred (transferring state) and is inter-company
-      const [orderInfo] = await db
-        .select({
-          status: orders.status,
-          retailerId: orders.retailerId,
-          orderNumber: orders.orderNumber,
-        })
-        .from(orders)
-        .where(eq(orders.id, input.orderId))
-        .limit(1);
-
-      const result = await transitionOrder({
+      const result = await cancelOrderWithTransferReversal({
         orderId: input.orderId,
-        toStatus: "cancelled",
         actorUserId: ctx.user!.id,
         reason: input.reason,
       });
 
-      // M11.D: If the order was in 'transferring' state (stock already discharged)
-      // and it's an inter-company order, reverse the SoKeto stock loading
-      if (orderInfo && orderInfo.status === "transferring") {
+      // Preserve the existing non-blocking cancellation side effects after the
+      // transactional state/stock operation has committed.
+      if (result.previousStatus !== "cancelled" && result.ficProformaId) {
+        try {
+          await ficDocService.deleteProforma(result.ficProformaId);
+        } catch (e: any) {
+          console.error(`[cancelOrder] deleteProforma failed: ${e.message}`);
+        }
+      }
+      if (result.previousStatus !== "cancelled") {
+        try {
+          await voidCommissionForOrder(input.orderId, input.reason ?? "Ordine annullato");
+        } catch (e: any) {
+          console.error(`[cancelOrder] void commission failed: ${e.message}`);
+        }
+      }
+
+      // M11.D only reverses the additional SoKeto load. The standard transfer
+      // reversal above operates on the retailer/origin-company rows first.
+      if (result.previousStatus === "transferring" && !result.reversalAlreadyRecorded) {
         const { isInterCompanyOrder, reverseInterCompanyStock } = await import("./services/interCompanyTransfer");
-        if (isInterCompanyOrder(orderInfo.retailerId)) {
+        if (isInterCompanyOrder(result.retailerId)) {
           const items = await db
             .select({
               productId: orderItems.productId,
@@ -1273,7 +1283,7 @@ export const ordersRouter = router({
           try {
             const reversal = await reverseInterCompanyStock({
               orderId: input.orderId,
-              orderNumber: orderInfo.orderNumber,
+              orderNumber: result.orderNumber,
               items: reverseItems,
               createdBy: ctx.user!.id,
             });
@@ -1287,7 +1297,18 @@ export const ordersRouter = router({
         }
       }
 
-      return result;
+      if (result.previousStatus !== "cancelled" && result.retailerId) {
+        sendOrderStatusEmail({
+          orderId: result.orderId,
+          orderNumber: result.orderNumber,
+          retailerId: result.retailerId,
+          newStatus: "cancelled",
+          previousStatus: result.previousStatus,
+          reason: input.reason,
+        }).catch((e) => console.error(`[cancelOrder] email failed: ${e.message}`));
+      }
+
+      return { previousStatus: result.previousStatus, newStatus: "cancelled", reversal: result.reversalLines, idempotent: result.reversalAlreadyRecorded };
     }),
 
   /**

@@ -26,6 +26,20 @@
 - [ ] Sviluppare sistema automatico generazione alert
 - [ ] Aggiungere notifiche email per alert critici
 
+## Alert Scadenze Rivenditori (M13)
+- [x] Completare l’audit di tracciabilità lotto-ordine, scadenze, stati, email, cron e log invii
+- [x] Generare CSV read-only degli ordini annullati dopo trasferimento senza movimento di storno
+- [x] Verificare e correggere, se necessario, lo storno centrale/location retailer per ordini annullati in stato transferring
+- [x] Verificare che sourceDocumentType/sourceDocument siano testo libero senza vincoli bloccanti prima dell’hotfix
+- [x] Preparare un ambiente Postgres isolato con migration e seed versionato per i test futuri di magazzino e M13
+- [x] Creare seed idempotente per i cinque casi hotfix e i lotti di scadenza M13
+- [x] Documentare nel README l’avvio e il reset dell’ambiente isolato
+- [x] Eseguire e documentare i cinque test richiesti del hotfix di storno prima del push
+- [x] Aggiungere T6: storno di un transfer con giacenza retailer preesistente
+- [x] Verificare e correggere l’anti-negativo nel reverseInterCompanyStock M11.D
+- [ ] Preparare migration unica M13: alert, alignment mode, flag retailer, soglie, delivery status e audit email
+- [ ] Implementare dry-run, pagina risposta rivenditore e reportistica admin dopo le approvazioni di fase
+
 ## Promozioni Rivenditori
 - [x] Ripristinare il pricing promo sul branch main: catalogo, dettaglio, carrello e checkout
 - [x] Verificare in live i prezzi e i risparmi promo per tutti i rivenditori di test

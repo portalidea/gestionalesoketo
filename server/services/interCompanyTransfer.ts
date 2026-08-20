@@ -314,28 +314,37 @@ export async function reverseInterCompanyStock(input: {
         continue;
       }
 
-      const newQty = Math.max(0, inv.quantity - item.quantity);
+      const availableQty = inv.quantity;
+      const reversedQty = Math.min(availableQty, item.quantity);
+      const missingQty = item.quantity - reversedQty;
+      const newQty = availableQty - reversedQty;
       await tx
         .update(inventoryByBatch)
         .set({ quantity: newQty, updatedAt: new Date() })
         .where(eq(inventoryByBatch.id, inv.id));
 
+      if (missingQty > 0) {
+        warnings.push(
+          `[M11.D] Storno parziale ${item.productName}: richiesti ${item.quantity} pz, disponibili ${availableQty} pz, mancanti ${missingQty} pz`,
+        );
+      }
+
       // Record OUT movement
       await tx.insert(stockMovements).values({
         productId: item.productId,
         type: "OUT",
-        quantity: item.quantity,
-        previousQuantity: inv.quantity,
+        quantity: reversedQty,
+        previousQuantity: availableQty,
         newQuantity: newQty,
         batchId: soketoBatch.id,
         fromLocationId: soketoWarehouse.id,
-        notes: `Storno automatico transfer inter-company — annullamento ordine E-Keto ${input.orderNumber ?? input.orderId}`,
-        notesInternal: `[M11.D] Reversal for cancelled E-Keto order ${input.orderId}`,
+        notes: `Storno automatico transfer inter-company — annullamento ordine E-Keto ${input.orderNumber ?? input.orderId}${missingQty > 0 ? `. Discrepanza: richiesti ${item.quantity} pz, disponibili ${availableQty} pz, rimossi ${reversedQty} pz, mancanti ${missingQty} pz.` : ""}`,
+        notesInternal: `[M11.D] Reversal for cancelled E-Keto order ${input.orderId}; requested=${item.quantity}; available=${availableQty}; reversed=${reversedQty}; missing=${missingQty}`,
         createdBy: input.createdBy,
         companyId: SOKETO_COMPANY_ID,
       });
 
-      reversed.push(`${item.productName}: -${item.quantity} pz (batch ${sourceBatch.batchNumber})`);
+      reversed.push(`${item.productName}: -${reversedQty} pz (batch ${sourceBatch.batchNumber})`);
     }
   });
 

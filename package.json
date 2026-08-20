@@ -14,7 +14,12 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:push": "echo 'ERROR: NON usare db:push. Applicare migration manualmente via Supabase SQL Editor.' && exit 1"
+    "db:push": "echo 'ERROR: NON usare db:push. Applicare migration manualmente via Supabase SQL Editor.' && exit 1",
+    "testdb:start": "bash scripts/test-db/local-postgres.sh start",
+    "testdb:reset": "bash scripts/test-db/local-postgres.sh reset",
+    "testdb:stop": "bash scripts/test-db/local-postgres.sh stop",
+    "testdb:seed": "tsx scripts/seed-hotfix-m13.ts",
+    "testdb:reversal": "tsx scripts/test-hotfix-reversal.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.2",

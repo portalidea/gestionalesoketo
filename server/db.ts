@@ -1015,11 +1015,13 @@ export async function transferBatchToRetailer(input: {
   notes: string | null;
   createdBy: string;
   companyId: string; // M11.A
+  /** Valorizzato dai transfer originati da un ordine; assente nei transfer manuali. */
+  orderId?: string;
 }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const warehouse = await getCentralWarehouseLocation();
+  const warehouse = await getCentralWarehouseLocation(input.companyId);
   if (!warehouse) throw new Error("Magazzino centrale non configurato");
 
   const retailerLoc = await getRetailerLocation(input.retailerId);
@@ -1110,6 +1112,8 @@ export async function transferBatchToRetailer(input: {
         quantity: input.quantity,
         previousQuantity: central.quantity,
         newQuantity: central.quantity - input.quantity,
+        sourceDocumentType: input.orderId ? "order_transfer" : null,
+        sourceDocument: input.orderId ?? null,
         retailerId: input.retailerId,
         batchId: input.batchId,
         fromLocationId: warehouse.id,
