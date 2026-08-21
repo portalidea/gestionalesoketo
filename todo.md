@@ -37,22 +37,8 @@
 - [x] Eseguire e documentare i cinque test richiesti del hotfix di storno prima del push
 - [x] Aggiungere T6: storno di un transfer con giacenza retailer preesistente
 - [x] Verificare e correggere l’anti-negativo nel reverseInterCompanyStock M11.D
-- [x] Proporre e ottenere approvazione dello schema email_log generico prima della migration M13
-- [x] Verificare RLS reale e il percorso frontend/PostgREST prima di applicare la migration M13
-- [x] Rigenerare e validare la migration unica M13 con RLS, FK nullable, indici parziali, trigger settings e CHECK
-- [x] Verificare il ruolo PostgreSQL effettivo del backend tRPC/Drizzle e il suo BYPASSRLS
-- [x] Verificare scritture M13 con RLS attivo usando un ruolo locale non superuser
-- [x] M13: aggiungere company_id ai run e vincolo cron univoco per company/finestra
-- [x] M13: rendere esplicita la notifica interna con is_internal e retailer_id ON DELETE SET NULL
-- [x] M13: recuperare nel job i run running oltre due ore prima di creare il run della finestra
-- [x] M13: dichiarare il ruolo superuser dell'ambiente isolato e il limite della sua verifica RLS
-- [x] M13: introdurre email_log idempotente per company/finestra/destinatario prima della chiamata a Resend
-- [x] M13: marcare la notification come skipped/already_sent_in_window quando l'idempotenza database blocca il reinvio
-- [x] M13: testare recovery+nuovo run e manuale+cron sulla stessa finestra senza doppio invio
-- [ ] M13: verificare in produzione tabelle, colonne retailers, RLS, settings bootstrap, indici e constraint applicati
-- [x] M13: registrare il cron M13 con invio reale esplicitamente disabilitato
-- [ ] M13: produrre solo dry-run alignment e fermarsi prima di qualsiasi invio reale, in attesa di validazione HTML su rivenditore reale
-- [x] Implementare dry-run, pagina risposta rivenditore e reportistica admin dopo le approvazioni di fase
+- [ ] Preparare migration unica M13: alert, alignment mode, flag retailer, soglie, delivery status e audit email
+- [ ] Implementare dry-run, pagina risposta rivenditore e reportistica admin dopo le approvazioni di fase
 
 ## Promozioni Rivenditori
 - [x] Ripristinare il pricing promo sul branch main: catalogo, dettaglio, carrello e checkout

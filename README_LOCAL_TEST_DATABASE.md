@@ -9,9 +9,6 @@ Questo ambiente è **interamente isolato** dal database Supabase di produzione. 
 | `scripts/test-db/local-postgres.sh` | Avvio, reset, stop e URL del PostgreSQL nativo locale. |
 | `scripts/seed-hotfix-m13.ts` | Seed idempotente con fixture magazzino, trasferimenti e lotti M13. |
 | `scripts/test-hotfix-reversal.ts` | Sei test d’integrazione dell’hotfix di storno, con evidenze prima/dopo. |
-| `scripts/test-db/verify-m13-rls.sql` | Prova RLS M13 con un ruolo locale `NOBYPASSRLS`, separata dal replay. |
-| `scripts/test-db/verify-m13-company-scoping.sql` | Verifica l’unicità cron per company e la notifica interna esplicita. |
-| `scripts/test-m13-run-recovery.ts` | Verifica il recupero di un run cron bloccato senza toccare altre company o finestre. |
 | `reports/test-evidence/` | Output runtime JSON/HTML dei test; non viene versionato. |
 
 ## Prerequisiti
@@ -73,18 +70,6 @@ reports/test-evidence/hotfix-reversal-evidence.html
 ```
 
 Per visualizzare l’HTML localmente, aprire `reports/test-evidence/hotfix-reversal-evidence.html` nel browser.
-
-## Verifiche M13: RLS, company e run bloccati
-
-```bash
-pnpm testdb:reset
-source .local-test-postgres/env.sh
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/test-db/verify-m13-rls.sql
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/test-db/verify-m13-company-scoping.sql
-pnpm testdb:m13-recovery
-```
-
-> Il replay usa volutamente `postgresql://postgres@…`: il ruolo locale `postgres` ha sia `rolsuper=true` sia `rolbypassrls=true`. Il replay della migration **non dimostra quindi da solo** il comportamento RLS di un ruolo applicativo ristretto. La prova separata `verify-m13-rls.sql` crea un ruolo `NOBYPASSRLS`, concede i privilegi SQL minimi e conferma che RLS senza policy ne blocca la scrittura. L’architettura di produzione è stata verificata separatamente: il backend Drizzle usa il ruolo `postgres` con `BYPASSRLS=true`.
 
 ## Gestione del runtime locale
 

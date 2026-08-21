@@ -15,10 +15,6 @@
     {
       "path": "/api/cron/tier-evaluation",
       "schedule": "0 5 1 * *"
-    },
-    {
-      "path": "/api/cron/expiry-alerts",
-      "schedule": "15 5 1 * *"
     }
   ],
   "rewrites": [
