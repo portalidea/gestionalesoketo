@@ -52,7 +52,6 @@
 - [ ] M13: verificare in produzione tabelle, colonne retailers, RLS, settings bootstrap, indici e constraint applicati
 - [x] M13: registrare il cron M13 con invio reale esplicitamente disabilitato
 - [ ] M13: produrre solo dry-run alignment e fermarsi prima di qualsiasi invio reale, in attesa di validazione HTML su rivenditore reale
-- [ ] M13: diagnosticare e risolvere il loader continuo della route /reports/scadenze in produzione prima del dry-run reale
 - [x] Implementare dry-run, pagina risposta rivenditore e reportistica admin dopo le approvazioni di fase
 
 ## Promozioni Rivenditori
