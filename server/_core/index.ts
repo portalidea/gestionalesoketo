@@ -9,6 +9,7 @@ import { serveStatic, setupVite } from "./vite";
 import fattureInCloudRoutes from "../fattureincloud-routes";
 import { cronRoutes } from "../cron-monthly-report";
 import { cronAlertRoutes } from "../cron-alerts";
+import { resendWebhookRoutes } from "../resend-webhook-routes";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -32,6 +33,8 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+  // Deve precedere express.json(): Svix firma il body raw byte-per-byte.
+  app.use("/api", express.raw({ type: "application/json" }), resendWebhookRoutes);
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   // Fatture in Cloud OAuth and webhook routes

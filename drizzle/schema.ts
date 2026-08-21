@@ -191,6 +191,9 @@ export const retailers = pgTable("retailers", {
   consecutiveMonthsBelow: integer("consecutive_months_below").default(0).notNull(),
   atRisk: boolean("at_risk").default(false).notNull(),
   lastTierEvaluation: date("last_tier_evaluation"),
+  // M13: alert scadenze rivenditori
+  isActive: boolean("isActive").default(true).notNull(),
+  expiryAlertOptOut: boolean("expiryAlertOptOut").default(false).notNull(),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -1161,3 +1164,163 @@ export const promotions = pgTable("promotions", {
 });
 export type Promotion = typeof promotions.$inferSelect;
 export type InsertPromotion = typeof promotions.$inferInsert;
+
+// ============= M13: Retailer Expiry Alerts =============
+
+export const expiryAlertSettings = pgTable("expiry_alert_settings", {
+  companyId: uuid("company_id").primaryKey().references(() => companies.id, { onDelete: "cascade" }),
+  minPiecesThreshold: integer("min_pieces_threshold").default(5).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  check("expiry_alert_settings_min_threshold_check", sql`${t.minPiecesThreshold} >= 1`),
+]);
+export type ExpiryAlertSettings = typeof expiryAlertSettings.$inferSelect;
+
+export const expiryAlertRuns = pgTable(
+  "expiry_alert_runs",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    mode: text("mode").default("alert").notNull(),
+    runDate: date("run_date").notNull(),
+    periodStart: date("period_start"),
+    periodEnd: date("period_end"),
+    trigger: text("trigger").notNull(),
+    status: text("status").notNull(),
+    retailersEvaluated: integer("retailers_evaluated").default(0).notNull(),
+    retailersNotified: integer("retailers_notified").default(0).notNull(),
+    emailsSent: integer("emails_sent").default(0).notNull(),
+    emailsFailed: integer("emails_failed").default(0).notNull(),
+    itemsFlagged: integer("items_flagged").default(0).notNull(),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("uniq_cron_run_period").on(t.companyId, t.periodStart, t.periodEnd).where(sql`trigger = 'cron' AND status <> 'failed'`),
+    check("expiry_alert_runs_mode_check", sql`${t.mode} IN ('alignment', 'alert', 'internal')`),
+    check("expiry_alert_runs_trigger_check", sql`${t.trigger} IN ('cron', 'manual', 'dry_run')`),
+    check("expiry_alert_runs_status_check", sql`${t.status} IN ('running', 'completed', 'failed')`),
+  ],
+);
+export type ExpiryAlertRun = typeof expiryAlertRuns.$inferSelect;
+
+export const emailLog = pgTable(
+  "email_log",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    provider: text("provider").default("resend").notNull(),
+    providerMessageId: text("provider_message_id"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    emailType: text("email_type").notNull(),
+    relatedEntityType: text("related_entity_type"),
+    relatedEntityId: text("related_entity_id"),
+    recipientEmail: text("recipient_email").notNull(),
+    recipientName: text("recipient_name"),
+    fromEmail: text("from_email"),
+    replyToEmail: text("reply_to_email"),
+    subject: text("subject").notNull(),
+    templateKey: text("template_key"),
+    templateVersion: text("template_version"),
+    metadata: jsonb("metadata").default(sql`'{}'::jsonb`).notNull(),
+    textBody: text("text_body"),
+    status: text("status").default("queued").notNull(),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    openedAt: timestamp("opened_at", { withTimezone: true }),
+    clickedAt: timestamp("clicked_at", { withTimezone: true }),
+    bouncedAt: timestamp("bounced_at", { withTimezone: true }),
+    complainedAt: timestamp("complained_at", { withTimezone: true }),
+    lastEventAt: timestamp("last_event_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("uq_email_log_idempotency").on(t.idempotencyKey),
+    uniqueIndex("uq_email_log_provider_message").on(t.provider, t.providerMessageId).where(sql`provider_message_id IS NOT NULL`),
+    index("idx_email_log_related_entity").on(t.relatedEntityType, t.relatedEntityId),
+    index("idx_email_log_recipient_created").on(t.recipientEmail, t.createdAt),
+    index("idx_email_log_status_created").on(t.status, t.createdAt),
+    check("email_log_status_check", sql`${t.status} IN ('queued', 'sent', 'failed', 'delivered', 'opened', 'clicked', 'bounced', 'complained')`),
+  ],
+);
+export type EmailLog = typeof emailLog.$inferSelect;
+
+export const emailEvents = pgTable(
+  "email_events",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    emailLogId: uuid("email_log_id").notNull().references(() => emailLog.id, { onDelete: "cascade" }),
+    provider: text("provider").default("resend").notNull(),
+    providerEventId: text("provider_event_id").notNull(),
+    eventType: text("event_type").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    payload: jsonb("payload"),
+    receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    unique("email_events_provider_event_unique").on(t.provider, t.providerEventId),
+    index("idx_email_events_log_time").on(t.emailLogId, t.occurredAt),
+  ],
+);
+export type EmailEvent = typeof emailEvents.$inferSelect;
+
+export const expiryAlertNotifications = pgTable(
+  "expiry_alert_notifications",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    runId: uuid("run_id").notNull().references(() => expiryAlertRuns.id, { onDelete: "cascade" }),
+    retailerId: uuid("retailer_id").references(() => retailers.id, { onDelete: "set null" }),
+    isInternal: boolean("is_internal").notNull().default(false),
+    retailerName: text("retailer_name").notNull(),
+    recipientEmail: text("recipient_email").notNull(),
+    status: text("status").notNull(),
+    skipReason: text("skip_reason"),
+    emailLogId: uuid("email_log_id").references(() => emailLog.id, { onDelete: "set null" }),
+    responseToken: text("response_token").notNull().unique(),
+    tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }).notNull(),
+    respondedAt: timestamp("responded_at", { withTimezone: true }),
+    responseType: text("response_type"),
+    responseNote: text("response_note"),
+    itemsCount: integer("items_count").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("uq_expiry_notification_retailer").on(t.runId, t.retailerId).where(sql`retailer_id IS NOT NULL`),
+    uniqueIndex("uq_expiry_notification_internal").on(t.runId).where(sql`is_internal = true`),
+    index("idx_expiry_alert_notifications_run").on(t.runId),
+    index("idx_expiry_alert_notifications_email_log").on(t.emailLogId),
+    check("expiry_alert_notifications_status_check", sql`${t.status} IN ('pending', 'sent', 'failed', 'skipped')`),
+    check("expiry_alert_notifications_internal_check", sql`NOT ${t.isInternal} OR ${t.retailerId} IS NULL`),
+  ],
+);
+export type ExpiryAlertNotification = typeof expiryAlertNotifications.$inferSelect;
+
+export const expiryAlertItems = pgTable(
+  "expiry_alert_items",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    notificationId: uuid("notification_id").notNull().references(() => expiryAlertNotifications.id, { onDelete: "cascade" }),
+    productId: uuid("product_id").references(() => products.id, { onDelete: "set null" }),
+    productName: text("product_name").notNull(),
+    batchId: uuid("batch_id").references(() => productBatches.id, { onDelete: "set null" }),
+    batchCode: text("batch_code").notNull(),
+    expiryDate: date("expiry_date").notNull(),
+    quantityPieces: integer("quantity_pieces").notNull(),
+    piecesPerUnit: integer("pieces_per_unit").default(1).notNull(),
+    deliveryStatus: text("delivery_status").default("delivered").notNull(),
+    lastTransferDate: date("last_transfer_date"),
+    declaredQuantity: integer("declared_quantity"),
+    adjustmentApplied: boolean("adjustment_applied").default(false).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("idx_eai_notification").on(t.notificationId),
+    index("idx_eai_batch").on(t.batchId),
+    check("expiry_alert_items_quantity_check", sql`${t.quantityPieces} >= 0`),
+    check("expiry_alert_items_pieces_per_unit_check", sql`${t.piecesPerUnit} >= 1`),
+    check("expiry_alert_items_delivery_status_check", sql`${t.deliveryStatus} IN ('delivered', 'in_transit')`),
+  ],
+);
+export type ExpiryAlertItem = typeof expiryAlertItems.$inferSelect;

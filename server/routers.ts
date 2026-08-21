@@ -43,6 +43,7 @@ import { companiesRouter } from "./companies-router";
 import { tierRulesRouter } from "./tier-rules-router";
 import { paymentReconciliationRouter } from "./payment-reconciliation-router";
 import { promotionsRouter } from "./promotions-router";
+import { expiryAlertsRouter } from "./expiry-alert-router";
 import { uuidSchema } from "../shared/schemas";
 
 const uuid = uuidSchema;
@@ -2164,6 +2165,8 @@ export const appRouter = router({
   paymentReconciliation: paymentReconciliationRouter,
   // ============= F16 — PROMOTIONS ADMIN =============
   promotions: promotionsRouter,
+  // ============= M13 — EXPIRY ALERTS =============
+  expiryAlerts: expiryAlertsRouter,
 });
 
 export type AppRouter = typeof appRouter;
