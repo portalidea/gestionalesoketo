@@ -4,6 +4,7 @@ import { router, adminProcedure, publicProcedure } from "./_core/trpc";
 import { getDb } from "./db";
 import { runExpiryAlertForCompany } from "./services/expiryAlertService";
 import { sql } from "drizzle-orm";
+import { renderM13AlignmentEmail, type M13RenderedItem } from "./services/m13EmailDelivery";
 
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
@@ -78,6 +79,27 @@ export const expiryAlertsRouter = router({
           ))
         ORDER BY n.retailer_name
       `);
+    }),
+
+  getAlignmentEmailPreview: adminProcedure
+    .input(z.object({ notificationId: z.string().uuid(), origin: z.string().url() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+      const notification = await db.execute(sql`
+        SELECT n.retailer_name AS "retailerName", n.response_token AS "responseToken"
+        FROM expiry_alert_notifications n
+        JOIN expiry_alert_runs r ON r.id = n.run_id
+        WHERE n.id = ${input.notificationId}::uuid AND r.company_id = ${ctx.activeCompanyId}::uuid AND r.mode = 'alignment'
+      `);
+      const row = notification[0] as { retailerName: string; responseToken: string } | undefined;
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Notifica alignment non trovata" });
+      const items = await db.execute(sql`
+        SELECT product_name AS "productName", batch_code AS "batchCode", expiry_date::text AS "expiryDate",
+          quantity_pieces::int AS "quantityPieces", pieces_per_unit::int AS "piecesPerUnit"
+        FROM expiry_alert_items WHERE notification_id = ${input.notificationId}::uuid ORDER BY expiry_date, product_name, batch_code
+      `) as unknown as M13RenderedItem[];
+      return renderM13AlignmentEmail({ retailerName: row.retailerName, responseUrl: `${input.origin}/scadenze/${row.responseToken}`, items });
     }),
 
   getResponseByToken: publicProcedure
