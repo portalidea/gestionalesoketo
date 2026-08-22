@@ -53,6 +53,21 @@
 - [x] M13: registrare il cron M13 con invio reale esplicitamente disabilitato
 - [ ] M13: produrre solo dry-run alignment e fermarsi prima di qualsiasi invio reale, in attesa di validazione HTML su rivenditore reale
 - [x] Implementare dry-run, pagina risposta rivenditore e reportistica admin dopo le approvazioni di fase
+- [x] M13: misurare in sola lettura la copertura storica dei lotti retailer riconducibili a TRANSFER con batchId e toLocationId
+- [x] M13: censire senza implementazioni le fonti alternative per ricostruire la consegna lotto-location quando manca il TRANSFER
+- [x] M13: rendere prioritaria la classificazione PEC rispetto alla soppressione riordino nel job e nel riepilogo SQL
+- [x] M13: identificare in sola lettura l'UUID reale del retailer inter-company con giacenza e confrontarlo con la costante M11.D
+- [x] M13: verificare in sola lettura il mantenimento della soglia min_pieces_threshold nel dispatcher e nel riepilogo per retailer
+- [x] M13/M11.D: audit completo degli usi della costante inter-company, con distinzione retailerId/locationId e chiamanti isInterCompanyOrder
+- [ ] M11.D: censimento read-only di ordini, carichi SoKeto, giacenze, costi con markup e consumo etichette per il retailer inter-company reale
+- [x] M13: rinominare e usare la costante retailer inter-company reale per l'esclusione alert, senza modificare M11.D
+- [x] M13: riallineare le query read-only all'UUID retailer inter-company reale
+- [x] Audit read-only: mostrare la query M6.2.E di valorizzazione e stabilire se limita le location al centrale
+- [x] Audit read-only: verificare l'impatto di batchNumber uguali con ID lotto differenti tra company
+- [x] Documentare post-M13 che il carico SoKeto è manuale e che M11.D automatico non va corretto senza decisione di processo
+- [x] M13: applicare min_pieces_threshold anche al riepilogo Query 2 read-only
+- [x] M13: rieseguire typecheck e suite completa sul database isolato prima del commit autorizzato
+- [ ] M13: committare e pushare esclusivamente feature/m13-expiry-alerts-safe, senza merge su main
 
 ## Promozioni Rivenditori
 - [x] Ripristinare il pricing promo sul branch main: catalogo, dettaglio, carrello e checkout

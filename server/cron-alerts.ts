@@ -270,7 +270,7 @@ cronAlertRoutes.get("/cron/tier-evaluation", async (req: Request, res: Response)
 });
 
 /**
- * M13 — Snapshot allineamento delle giacenze retailer.
+ * M13 — Calcolo alert scadenze retailer con soppressione inferita dai riordini.
  *
  * Per sicurezza il job è inattivo finché M13_CRON_ENABLED non è esattamente
  * "true". Anche una volta abilitato, questa milestone opera solo in dry-run:
@@ -295,7 +295,7 @@ cronAlertRoutes.get("/cron/expiry-alerts", async (req: Request, res: Response) =
     for (const company of allCompanies) {
       const run = await runExpiryAlertForCompany({
         companyId: company.id,
-        mode: "alignment",
+        mode: "alert",
         trigger: "cron",
         dryRun: true,
         now,

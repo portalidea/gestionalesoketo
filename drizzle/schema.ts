@@ -1170,10 +1170,12 @@ export type InsertPromotion = typeof promotions.$inferInsert;
 export const expiryAlertSettings = pgTable("expiry_alert_settings", {
   companyId: uuid("company_id").primaryKey().references(() => companies.id, { onDelete: "cascade" }),
   minPiecesThreshold: integer("min_pieces_threshold").default(5).notNull(),
+  reorderToleranceDays: integer("reorder_tolerance_days").default(7).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   check("expiry_alert_settings_min_threshold_check", sql`${t.minPiecesThreshold} >= 1`),
+  check("expiry_alert_settings_reorder_tolerance_check", sql`${t.reorderToleranceDays} >= 0 AND ${t.reorderToleranceDays} <= 90`),
 ]);
 export type ExpiryAlertSettings = typeof expiryAlertSettings.$inferSelect;
 
@@ -1326,3 +1328,27 @@ export const expiryAlertItems = pgTable(
   ],
 );
 export type ExpiryAlertItem = typeof expiryAlertItems.$inferSelect;
+
+export const expiryAlertSuppressions = pgTable("expiry_alert_suppressions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  runId: uuid("run_id").notNull().references(() => expiryAlertRuns.id, { onDelete: "cascade" }),
+  retailerId: uuid("retailer_id").references(() => retailers.id, { onDelete: "set null" }),
+  retailerName: text("retailer_name").notNull(),
+  productId: uuid("product_id").references(() => products.id, { onDelete: "set null" }),
+  productName: text("product_name").notNull(),
+  oldBatchId: uuid("old_batch_id").references(() => productBatches.id, { onDelete: "set null" }),
+  oldBatchCode: text("old_batch_code").notNull(),
+  oldDeliveryAt: timestamp("old_delivery_at", { withTimezone: true }).notNull(),
+  newBatchId: uuid("new_batch_id").references(() => productBatches.id, { onDelete: "set null" }),
+  newBatchCode: text("new_batch_code").notNull(),
+  newDeliveryAt: timestamp("new_delivery_at", { withTimezone: true }).notNull(),
+  toleranceDays: integer("tolerance_days").notNull(),
+  reason: text("reason").default("reorder_suppression").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("idx_expiry_alert_suppressions_run").on(t.runId),
+  index("idx_expiry_alert_suppressions_retailer_product").on(t.retailerId, t.productId),
+  check("expiry_alert_suppressions_tolerance_check", sql`${t.toleranceDays} >= 0 AND ${t.toleranceDays} <= 90`),
+  check("expiry_alert_suppressions_reason_check", sql`${t.reason} = 'reorder_suppression'`),
+]);
+export type ExpiryAlertSuppression = typeof expiryAlertSuppressions.$inferSelect;

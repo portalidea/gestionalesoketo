@@ -30,8 +30,8 @@ async function main() {
   const inThirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const results: Array<{ id: string; result: string; raw: unknown }> = [];
 
-  const t1 = await runExpiryAlertForCompany({ companyId: TEST_IDS.originCompany, mode: "alignment", trigger: "dry_run", dryRun: true, now });
-  assert(t1.retailersEvaluated === 1 && t1.itemsFlagged === 1, "T1 alignment deve includere un retailer e un lotto");
+  const t1 = await runExpiryAlertForCompany({ companyId: TEST_IDS.originCompany, mode: "alert", trigger: "dry_run", dryRun: true, now, periodStart: today, periodEnd: inThirtyDays });
+  assert(t1.retailersEvaluated === 1 && t1.itemsFlagged === 1, "T1 alert deve includere un retailer e un lotto nella finestra");
   const [t1Item] = await sql`SELECT quantity_pieces, pieces_per_unit, delivery_status FROM expiry_alert_items LIMIT 1`;
   assert(t1Item.quantity_pieces === 50 && t1Item.pieces_per_unit === 6, "T1 snapshot confezioni/pezzi errato");
   const [{ count: intercompanyAlignmentCount }] = await sql`
@@ -40,7 +40,7 @@ async function main() {
     JOIN expiry_alert_runs run ON run.id = n.run_id
     WHERE run.id = ${t1.runId} AND n.retailer_id = ${TEST_IDS.interCompanyRetailer}
   `;
-  assert(intercompanyAlignmentCount === 0, "T1 inter-company non deve entrare in alignment");
+  assert(intercompanyAlignmentCount === 0, "T1 inter-company non deve entrare nell'alert");
   results.push({ id: "T1", result: "PASS", raw: { t1, t1Item, intercompanyAlignmentCount } });
 
   const t2 = await runExpiryAlertForCompany({ companyId: TEST_IDS.originCompany, mode: "alert", trigger: "dry_run", dryRun: true, now, periodStart: today, periodEnd: inThirtyDays });
@@ -55,23 +55,23 @@ async function main() {
   results.push({ id: "T2", result: "PASS", raw: { t2, intercompanyAlertCount } });
 
   await sql`UPDATE expiry_alert_settings SET min_pieces_threshold = 51 WHERE company_id = ${TEST_IDS.originCompany}`;
-  const t3 = await runExpiryAlertForCompany({ companyId: TEST_IDS.originCompany, mode: "alignment", trigger: "dry_run", dryRun: true, now });
+  const t3 = await runExpiryAlertForCompany({ companyId: TEST_IDS.originCompany, mode: "alert", trigger: "dry_run", dryRun: true, now, periodStart: today, periodEnd: inThirtyDays });
   assert(t3.notificationsSkippedBelowThreshold === 1, "T3 soglia deve produrre skipped");
   await sql`UPDATE expiry_alert_settings SET min_pieces_threshold = 5 WHERE company_id = ${TEST_IDS.originCompany}`;
   results.push({ id: "T3", result: "PASS", raw: t3 });
 
-  const t4 = await runExpiryAlertForCompany({ companyId: TEST_IDS.soketoCompany, mode: "alignment", trigger: "dry_run", dryRun: true, now });
+  const t4 = await runExpiryAlertForCompany({ companyId: TEST_IDS.soketoCompany, mode: "alert", trigger: "dry_run", dryRun: true, now, periodStart: today, periodEnd: inThirtyDays });
   assert(t4.retailersEvaluated === 0 && t4.itemsFlagged === 0, "T4 company scope deve escludere fixture E-Keto");
   results.push({ id: "T4", result: "PASS", raw: t4 });
 
   await sql`UPDATE retailers SET "expiryAlertOptOut" = true WHERE id = ${TEST_IDS.normalRetailer}`;
-  const t5 = await runExpiryAlertForCompany({ companyId: TEST_IDS.originCompany, mode: "alignment", trigger: "dry_run", dryRun: true, now });
+  const t5 = await runExpiryAlertForCompany({ companyId: TEST_IDS.originCompany, mode: "alert", trigger: "dry_run", dryRun: true, now, periodStart: today, periodEnd: inThirtyDays });
   assert(t5.retailersEvaluated === 0, "T5 opt-out deve escludere il retailer");
   await sql`UPDATE retailers SET "expiryAlertOptOut" = false WHERE id = ${TEST_IDS.normalRetailer}`;
   results.push({ id: "T5", result: "PASS", raw: t5 });
 
   await sql`UPDATE retailers SET email = 'arikirls@pec.nikys.it' WHERE id = ${TEST_IDS.normalRetailer}`;
-  const t5b = await runExpiryAlertForCompany({ companyId: TEST_IDS.originCompany, mode: "alignment", trigger: "dry_run", dryRun: true, now });
+  const t5b = await runExpiryAlertForCompany({ companyId: TEST_IDS.originCompany, mode: "alert", trigger: "dry_run", dryRun: true, now, periodStart: today, periodEnd: inThirtyDays });
   const [t5bNotification] = await sql`
     SELECT status, skip_reason
     FROM expiry_alert_notifications
@@ -97,7 +97,7 @@ async function main() {
     SELECT id, recipient_email, retailer_name FROM expiry_alert_notifications
     WHERE status = 'pending' ORDER BY created_at LIMIT 1
   `;
-  const idempotencyKey = buildM13IdempotencyKey({ mode: "alignment", companyId: TEST_IDS.originCompany, runDate: today, retailerId: TEST_IDS.normalRetailer });
+  const idempotencyKey = buildM13IdempotencyKey({ mode: "alert", companyId: TEST_IDS.originCompany, periodStart: today, retailerId: TEST_IDS.normalRetailer });
   const reservationInput = { idempotencyKey, notificationId, recipientEmail, recipientName: retailerName, subject: "T8", textBody: "Test isolato", metadata: { test: "T8" } };
   const firstReservation = await prepareM13NotificationDelivery(database, reservationInput);
   const duplicateReservation = await prepareM13NotificationDelivery(database, reservationInput);
@@ -113,7 +113,7 @@ async function main() {
   results.push({ id: "T9", result: "PASS", raw: t9Log });
 
   // T10: il gateway reale è coperto dalla suite Vitest m13EmailDelivery.test.ts, eseguita separatamente.
-  results.push({ id: "T10", result: "PENDING_EXTERNAL_UNIT", raw: "Eseguire Vitest gateway disabilitato" });
+  results.push({ id: "T10", result: "SEPARATE_VITEST_SUITE", raw: "server/services/m13EmailDelivery.test.ts" });
   console.log(JSON.stringify({ generatedAt: new Date().toISOString(), results }, null, 2));
 }
 

@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useRoute } from "wouter";
 import { trpc } from "@/lib/trpc";
 
@@ -9,7 +8,6 @@ export default function ExpiryResponse() {
   const [, params] = useRoute("/scadenze/:token");
   const token = params?.token ?? "";
   const response = trpc.expiryAlerts.getResponseByToken.useQuery({ token }, { enabled: Boolean(token) });
-  const [packages, setPackages] = useState<Record<string, number>>({});
   const submit = trpc.expiryAlerts.submitResponse.useMutation({ onSuccess: () => response.refetch() });
 
   if (response.isLoading) return <main className="max-w-3xl mx-auto p-6 text-center">Caricamento inventario…</main>;
@@ -17,26 +15,23 @@ export default function ExpiryResponse() {
   const { notification: rawNotification, items: rawItems } = response.data;
   const notification = rawNotification as unknown as ResponseNotification;
   const items = rawItems as unknown as ResponseItem[];
-  const blocked = Boolean(notification.respondedAt) || new Date(notification.tokenExpiresAt) < new Date();
+  const expired = new Date(notification.tokenExpiresAt) < new Date();
 
   return <main className="min-h-screen bg-slate-50 p-4 md:p-10">
     <section className="max-w-3xl mx-auto rounded-xl bg-white shadow-sm border p-6 md:p-8">
-      <p className="text-sm font-semibold text-emerald-700">SoKeto · verifica inventario</p>
-      <h1 className="text-2xl font-bold mt-1">Dichiarazione giacenza — {notification.retailerName}</h1>
-      <p className="text-sm text-muted-foreground mt-3">Indica le confezioni realmente presenti. I pezzi sono mostrati come dato secondario; la rettifica, se necessaria, verrà registrata come movimento ADJUSTMENT con causale M13.</p>
-      {blocked && <p className="mt-4 rounded-md bg-amber-50 text-amber-800 p-3 text-sm">{notification.respondedAt ? "La dichiarazione è già stata registrata." : "Questo link è scaduto."}</p>}
+      <p className="text-sm font-semibold text-emerald-700">SoKeto · alert scadenze</p>
+      <h1 className="text-2xl font-bold mt-1">Segnalazione lotti esauriti — {notification.retailerName}</h1>
+      <p className="text-sm text-muted-foreground mt-3">Se uno dei lotti indicati è già esaurito, puoi segnalarcelo con un clic. Non ti chiediamo di dichiarare le giacenze residue.</p>
+      {expired && <p className="mt-4 rounded-md bg-amber-50 text-amber-800 p-3 text-sm">Questo link è scaduto.</p>}
       <div className="mt-6 space-y-3">
         {items.map((item) => {
-          const declaredPackages = item.declaredQuantity === null ? null : Math.floor(item.declaredQuantity / item.piecesPerUnit);
-          const value = packages[item.id] ?? declaredPackages ?? Math.floor(item.quantityPieces / item.piecesPerUnit);
           return <div key={item.id} className="grid gap-2 md:grid-cols-[1fr_150px] border rounded-lg p-4">
             <div><p className="font-medium">{item.productName}</p><p className="text-sm text-muted-foreground">Lotto {item.batchCode} · Scadenza {item.expiryDate} · {Math.floor(item.quantityPieces / item.piecesPerUnit)} confezioni + {item.quantityPieces % item.piecesPerUnit} pz</p></div>
-            <label className="text-sm">Confezioni reali<input disabled={blocked || submit.isPending} className="mt-1 w-full rounded border px-2 py-1" type="number" min="0" value={value} onChange={(e) => setPackages({ ...packages, [item.id]: Number(e.target.value) })} /><span className="text-xs text-muted-foreground">= {value * item.piecesPerUnit} pz</span></label>
+            <button disabled={expired || item.adjustmentApplied || submit.isPending} onClick={() => submit.mutate({ token, itemId: item.id })} className="self-center rounded bg-emerald-700 px-3 py-2 text-sm text-white disabled:opacity-50">{item.adjustmentApplied ? "Esaurito segnalato" : submit.isPending ? "Registrazione…" : "Segnala esaurito"}</button>
           </div>;
         })}
       </div>
       {submit.error && <p className="mt-4 text-sm text-destructive">{submit.error.message}</p>}
-      {!blocked && <button disabled={submit.isPending} onClick={() => submit.mutate({ token, items: items.map((item) => ({ itemId: item.id, declaredPackages: packages[item.id] ?? Math.floor(item.quantityPieces / item.piecesPerUnit) })) })} className="mt-6 rounded bg-emerald-700 px-4 py-2 text-white disabled:opacity-50">{submit.isPending ? "Registrazione…" : "Conferma dichiarazione"}</button>}
     </section>
   </main>;
 }
