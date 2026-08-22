@@ -3,7 +3,7 @@ import { trpc } from "@/lib/trpc";
 import { useState } from "react";
 
 type RunRow = { id: string; runDate: string; mode: string; status: string; retailersEvaluated: number; itemsFlagged: number };
-type NotificationRow = { id: string; retailerName: string; status: string; skipReason: string | null; itemsCount: number };
+type NotificationRow = { id: string; retailerName: string; status: string; skipReason: string | null; responseType: string | null; responseNote: string | null; itemsCount: number; hasDeclarationAnomaly: boolean };
 
 export default function ExpiryAlerts() {
   const utils = trpc.useUtils();
@@ -11,7 +11,8 @@ export default function ExpiryAlerts() {
   const runs = trpc.expiryAlerts.listRuns.useQuery({ limit: 30 });
   const [threshold, setThreshold] = useState<number | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const notifications = trpc.expiryAlerts.getNotifications.useQuery({ runId: selectedRunId ?? "00000000-0000-0000-0000-000000000000" }, { enabled: Boolean(selectedRunId) });
+  const [anomaliesOnly, setAnomaliesOnly] = useState(false);
+  const notifications = trpc.expiryAlerts.getNotifications.useQuery({ runId: selectedRunId ?? "00000000-0000-0000-0000-000000000000", anomaliesOnly }, { enabled: Boolean(selectedRunId) });
   const dryRun = trpc.expiryAlerts.runAlignment.useMutation({ onSuccess: () => utils.expiryAlerts.listRuns.invalidate() });
   const updateSettings = trpc.expiryAlerts.updateSettings.useMutation({ onSuccess: () => utils.expiryAlerts.getSettings.invalidate() });
   const currentThreshold = threshold ?? settings.data?.minPiecesThreshold ?? 5;
@@ -28,7 +29,7 @@ export default function ExpiryAlerts() {
       </section>
       {dryRun.data && <div className="rounded border border-emerald-200 bg-emerald-50 p-4 text-sm">Run {dryRun.data.runId}: {dryRun.data.retailersEvaluated} rivenditori, {dryRun.data.itemsFlagged} righe snapshot, 0 email inviate.</div>}
       <section className="rounded-lg border bg-card overflow-hidden"><div className="p-4 border-b"><h2 className="font-semibold">Storico run</h2></div><div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-muted/50"><tr><th className="p-3 text-left">Data</th><th className="p-3 text-left">Modalità</th><th className="p-3 text-left">Stato</th><th className="p-3 text-right">Rivenditori</th><th className="p-3 text-right">Righe</th></tr></thead><tbody>{runRows.map((run) => <tr key={run.id} onClick={() => setSelectedRunId(run.id)} className="border-t cursor-pointer hover:bg-muted/40"><td className="p-3">{run.runDate}</td><td className="p-3">{run.mode}</td><td className="p-3">{run.status}</td><td className="p-3 text-right">{run.retailersEvaluated}</td><td className="p-3 text-right">{run.itemsFlagged}</td></tr>)}</tbody></table></div></section>
-      {selectedRunId && <section className="rounded-lg border bg-card overflow-hidden"><div className="p-4 border-b"><h2 className="font-semibold">Notifiche del run</h2></div><div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-muted/50"><tr><th className="p-3 text-left">Rivenditore</th><th className="p-3 text-left">Stato</th><th className="p-3 text-left">Motivo</th><th className="p-3 text-right">Righe</th></tr></thead><tbody>{notificationRows.map((n) => <tr key={n.id} className="border-t"><td className="p-3">{n.retailerName}</td><td className="p-3">{n.status}</td><td className="p-3">{n.skipReason ?? "—"}</td><td className="p-3 text-right">{n.itemsCount}</td></tr>)}</tbody></table></div></section>}
+      {selectedRunId && <section className="rounded-lg border bg-card overflow-hidden"><div className="flex items-center justify-between gap-3 p-4 border-b"><h2 className="font-semibold">Notifiche del run</h2><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={anomaliesOnly} onChange={(e) => setAnomaliesOnly(e.target.checked)} />Solo anomalie dichiarazione</label></div><div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-muted/50"><tr><th className="p-3 text-left">Rivenditore</th><th className="p-3 text-left">Stato</th><th className="p-3 text-left">Anomalia / nota</th><th className="p-3 text-right">Righe</th></tr></thead><tbody>{notificationRows.map((n) => <tr key={n.id} className="border-t"><td className="p-3">{n.retailerName}</td><td className="p-3">{n.status}</td><td className="p-3">{n.hasDeclarationAnomaly ? <span className="font-medium text-amber-700">Dichiarazione superiore allo snapshot: verifica amministrativa richiesta.</span> : n.skipReason ?? n.responseNote ?? "—"}</td><td className="p-3 text-right">{n.itemsCount}</td></tr>)}</tbody></table></div></section>}
     </div>
   </DashboardLayout>;
 }

@@ -60,18 +60,22 @@ export const expiryAlertsRouter = router({
     }),
 
   getNotifications: adminProcedure
-    .input(z.object({ runId: z.string().uuid() }))
+    .input(z.object({ runId: z.string().uuid(), anomaliesOnly: z.boolean().default(false) }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
       return db.execute(sql`
         SELECT n.id, n.retailer_name AS "retailerName", n.recipient_email AS "recipientEmail", n.status, n.skip_reason AS "skipReason",
           n.response_token AS "responseToken", n.responded_at AS "respondedAt", n.response_type AS "responseType", n.response_note AS "responseNote",
-          n.items_count::int AS "itemsCount", e.status AS "emailStatus", e.provider_message_id AS "providerMessageId", e.error_message AS "emailError"
+          n.items_count::int AS "itemsCount", e.status AS "emailStatus", e.provider_message_id AS "providerMessageId", e.error_message AS "emailError",
+          EXISTS (SELECT 1 FROM expiry_alert_items i WHERE i.notification_id = n.id AND i.declaration_anomaly = true) AS "hasDeclarationAnomaly"
         FROM expiry_alert_notifications n
         JOIN expiry_alert_runs r ON r.id = n.run_id AND r.company_id = ${ctx.activeCompanyId}::uuid
         LEFT JOIN email_log e ON e.id = n.email_log_id
         WHERE n.run_id = ${input.runId}::uuid
+          AND (${input.anomaliesOnly} = false OR EXISTS (
+            SELECT 1 FROM expiry_alert_items i WHERE i.notification_id = n.id AND i.declaration_anomaly = true
+          ))
         ORDER BY n.retailer_name
       `);
     }),
@@ -85,7 +89,7 @@ export const expiryAlertsRouter = router({
         SELECT n.id, n.retailer_name AS "retailerName", n.status, n.token_expires_at AS "tokenExpiresAt", n.responded_at AS "respondedAt",
           r.mode, r.company_id AS "companyId"
         FROM expiry_alert_notifications n JOIN expiry_alert_runs r ON r.id = n.run_id
-        WHERE n.response_token = ${input.token}::uuid
+        WHERE n.response_token = ${input.token}
       `);
       if (!header[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Link non valido" });
       const items = await db.execute(sql`
@@ -101,7 +105,7 @@ export const expiryAlertsRouter = router({
     .input(z.object({
       token: z.string().uuid(),
       note: z.string().max(2000).optional(),
-      items: z.array(z.object({ itemId: z.string().uuid(), declaredQuantity: z.number().int().min(0) })).min(1),
+      items: z.array(z.object({ itemId: z.string().uuid(), declaredPackages: z.number().int().min(0) })).min(1),
     }))
     .mutation(async ({ input }) => {
       const db = await getDb();
@@ -110,7 +114,7 @@ export const expiryAlertsRouter = router({
         const notification = await tx.execute(sql`
           SELECT n.id, n.retailer_id AS "retailerId", r.company_id AS "companyId", n.responded_at AS "respondedAt", n.token_expires_at AS "tokenExpiresAt"
           FROM expiry_alert_notifications n JOIN expiry_alert_runs r ON r.id = n.run_id
-          WHERE n.response_token = ${input.token}::uuid FOR UPDATE
+          WHERE n.response_token = ${input.token} FOR UPDATE
         `);
         const row = notification[0] as any;
         if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Link non valido" });
@@ -118,9 +122,11 @@ export const expiryAlertsRouter = router({
         if (new Date(row.tokenExpiresAt) < new Date()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Link scaduto" });
         if (!row.retailerId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Notifica interna non rettificabile via link retailer" });
 
+        const anomalies: Array<{ itemId: string; code: string; snapshotPieces: number; currentPieces: number; declaredPieces: number }> = [];
+        let hasDeclaredStock = false;
         for (const requested of input.items) {
           const item = await tx.execute(sql`
-            SELECT i.id, i.product_id AS "productId", i.batch_id AS "batchId", i.quantity_pieces::int AS "snapshotQuantity",
+            SELECT i.id, i.product_id AS "productId", i.batch_id AS "batchId", i.quantity_pieces::int AS "snapshotQuantity", i.pieces_per_unit::int AS "piecesPerUnit",
               l.id AS "locationId", ibb.id AS "inventoryId", ibb.quantity::int AS "currentQuantity"
             FROM expiry_alert_items i
             JOIN locations l ON l."retailerId" = ${row.retailerId}::uuid AND l."companyId" = ${row.companyId}::uuid AND l.type = 'retailer'
@@ -130,22 +136,46 @@ export const expiryAlertsRouter = router({
           `);
           const stock = item[0] as any;
           if (!stock?.productId || !stock?.batchId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Riga non più rettificabile" });
-          const delta = requested.declaredQuantity - Number(stock.currentQuantity);
-          if (delta !== 0) {
-            await tx.execute(sql`UPDATE "inventoryByBatch" SET quantity = ${requested.declaredQuantity}, "updatedAt" = now() WHERE id = ${stock.inventoryId}::uuid`);
+          const declaredPieces = requested.declaredPackages * Number(stock.piecesPerUnit);
+          const snapshotPieces = Number(stock.snapshotQuantity);
+          const currentPieces = Number(stock.currentQuantity);
+          if (declaredPieces > 0) hasDeclaredStock = true;
+          if (declaredPieces > snapshotPieces || declaredPieces > currentPieces) {
+            anomalies.push({
+              itemId: requested.itemId,
+              code: declaredPieces > snapshotPieces ? "declaration_exceeds_snapshot" : "declaration_exceeds_current_stock",
+              snapshotPieces,
+              currentPieces,
+              declaredPieces,
+            });
             await tx.execute(sql`
-              INSERT INTO "stockMovements" ("productId", type, quantity, "previousQuantity", "newQuantity", "batchId", "toLocationId", "sourceDocumentType", "sourceDocument", notes, "notesInternal", "adjustmentReason", "adjustmentNote", "companyId")
-              VALUES (${stock.productId}::uuid, 'ADJUSTMENT', ${delta}, ${stock.currentQuantity}, ${requested.declaredQuantity}, ${stock.batchId}::uuid, ${stock.locationId}::uuid,
-                'm13_expiry_response', ${row.id}::text, 'dichiarazione rivenditore — M13', ${`notification_id=${row.id}; snapshot=${stock.snapshotQuantity}; dichiarato=${requested.declaredQuantity}`}, 'other', 'dichiarazione rivenditore — M13', ${row.companyId}::uuid)
+              UPDATE expiry_alert_items
+              SET declared_quantity = ${declaredPieces}, adjustment_applied = false, declaration_anomaly = true
+              WHERE id = ${requested.itemId}::uuid
+            `);
+            continue;
+          }
+          const delta = declaredPieces - currentPieces;
+          if (delta < 0) {
+            await tx.execute(sql`UPDATE "inventoryByBatch" SET quantity = ${declaredPieces}, "updatedAt" = now() WHERE id = ${stock.inventoryId}::uuid`);
+            await tx.execute(sql`
+              INSERT INTO "stockMovements" ("productId", "retailerId", type, quantity, "previousQuantity", "newQuantity", "batchId", "sourceDocumentType", "sourceDocument", notes, "notesInternal", "adjustmentReason", "adjustmentNote", "companyId")
+              VALUES (${stock.productId}::uuid, ${row.retailerId}::uuid, 'ADJUSTMENT', ${Math.abs(delta)}, ${currentPieces}, ${declaredPieces}, ${stock.batchId}::uuid,
+                'm13_retailer_declaration', ${row.id}::text, 'dichiarazione rivenditore — M13 (dichiarazione esterna non autenticata)', ${`notification_id=${row.id}; snapshot=${snapshotPieces}; dichiarato=${declaredPieces}; origine=dichiarazione esterna non autenticata; createdBy=null`}, 'other', 'dichiarazione rivenditore — M13', ${row.companyId}::uuid)
             `);
           }
-          await tx.execute(sql`UPDATE expiry_alert_items SET declared_quantity = ${requested.declaredQuantity}, adjustment_applied = ${delta !== 0} WHERE id = ${requested.itemId}::uuid`);
+          await tx.execute(sql`
+            UPDATE expiry_alert_items
+            SET declared_quantity = ${declaredPieces}, adjustment_applied = ${delta < 0}, declaration_anomaly = false
+            WHERE id = ${requested.itemId}::uuid
+          `);
         }
         await tx.execute(sql`
-          UPDATE expiry_alert_notifications SET responded_at = now(), response_type = 'inventory_declaration', response_note = ${input.note ?? null}
+          UPDATE expiry_alert_notifications
+          SET responded_at = now(), response_type = ${hasDeclaredStock ? "has_stock" : "sold_out"}, response_note = ${input.note?.trim() || null}
           WHERE id = ${row.id}::uuid
         `);
-        return { success: true };
+        return { success: true, anomalies: anomalies.length };
       });
     }),
 });

@@ -12,6 +12,26 @@ export type M13DeliveryResult =
   | { delivered: true; providerMessageId: string }
   | { delivered: false; reason: "delivery_disabled" | "missing_api_key" | "provider_error"; errorMessage?: string };
 
+export type M13RenderedItem = {
+  productName: string;
+  batchCode: string;
+  quantityPieces: number;
+  piecesPerUnit: number;
+};
+
+/** Formatta quantità senza imporre alcun testo commerciale o amministrativo. */
+export function formatM13Quantity(quantityPieces: number, piecesPerUnit: number): string {
+  if (piecesPerUnit <= 1) return `${quantityPieces} pz`;
+  const packages = Math.floor(quantityPieces / piecesPerUnit);
+  const remainder = quantityPieces % piecesPerUnit;
+  return remainder === 0 ? `${packages} confezioni (${quantityPieces} pz)` : `${packages} confezioni + ${remainder} pz (${quantityPieces} pz)`;
+}
+
+/** Compone solo struttura e quantità; il testo introduttivo resta fornito dall'amministratore. */
+export function renderM13PlainText(input: { introText: string; items: M13RenderedItem[] }): string {
+  return [input.introText.trim(), "", ...input.items.map((item) => `- ${item.productName} · lotto ${item.batchCode}: ${formatM13Quantity(item.quantityPieces, item.piecesPerUnit)}`)].join("\n");
+}
+
 /**
  * Protezione hard-stop: l'invio M13 resta spento finché non viene impostata
  * esplicitamente la variabile di produzione dopo validazione umana dell'HTML.

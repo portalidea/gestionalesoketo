@@ -91,6 +91,7 @@ reset_database() {
     drizzle/migrations/0026_promotions.sql
     drizzle/migrations/0027_tier_engine_retailer_opt_in.sql
     drizzle/migrations/0028_m13_expiry_alerts.sql
+    drizzle/migrations/0029_m13_item_declaration_anomaly.sql
   )
 
   for file in "${files[@]}"; do

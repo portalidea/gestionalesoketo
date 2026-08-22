@@ -1,9 +1,7 @@
-import { Router, type Request, type Response } from "express";
+import type { Request, Response } from "express";
 import { Webhook } from "svix";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
-
-export const resendWebhookRoutes = Router();
 
 const rank: Record<string, number> = { queued: 0, sent: 1, delivered: 2, opened: 3, clicked: 4 };
 const terminal = new Set(["bounced", "complained", "failed"]);
@@ -13,7 +11,7 @@ function eventStatus(type: string): string | null {
   return ["sent", "delivered", "opened", "clicked", "bounced", "complained", "failed"].includes(suffix) ? suffix : null;
 }
 
-resendWebhookRoutes.post("/webhooks/resend", async (req: Request, res: Response) => {
+export const resendWebhookHandler = async (req: Request, res: Response) => {
   const secret = process.env.RESEND_WEBHOOK_SECRET;
   if (!secret) { res.status(503).json({ error: "Webhook Resend non configurato" }); return; }
   const raw = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : "";
@@ -48,4 +46,4 @@ resendWebhookRoutes.post("/webhooks/resend", async (req: Request, res: Response)
     });
     res.status(200).json({ received: true });
   } catch (error) { console.error("[webhooks/resend]", error); res.status(500).json({ error: "Errore interno" }); }
-});
+};

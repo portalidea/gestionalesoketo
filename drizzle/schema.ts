@@ -1313,11 +1313,13 @@ export const expiryAlertItems = pgTable(
     lastTransferDate: date("last_transfer_date"),
     declaredQuantity: integer("declared_quantity"),
     adjustmentApplied: boolean("adjustment_applied").default(false).notNull(),
+    declarationAnomaly: boolean("declaration_anomaly").default(false).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
     index("idx_eai_notification").on(t.notificationId),
     index("idx_eai_batch").on(t.batchId),
+    index("idx_eai_declaration_anomaly").on(t.notificationId).where(sql`${t.declarationAnomaly} = true`),
     check("expiry_alert_items_quantity_check", sql`${t.quantityPieces} >= 0`),
     check("expiry_alert_items_pieces_per_unit_check", sql`${t.piecesPerUnit} >= 1`),
     check("expiry_alert_items_delivery_status_check", sql`${t.deliveryStatus} IN ('delivered', 'in_transit')`),
