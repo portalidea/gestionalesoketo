@@ -34,11 +34,25 @@ async function main() {
   assert(t1.retailersEvaluated === 1 && t1.itemsFlagged === 1, "T1 alignment deve includere un retailer e un lotto");
   const [t1Item] = await sql`SELECT quantity_pieces, pieces_per_unit, delivery_status FROM expiry_alert_items LIMIT 1`;
   assert(t1Item.quantity_pieces === 50 && t1Item.pieces_per_unit === 6, "T1 snapshot confezioni/pezzi errato");
-  results.push({ id: "T1", result: "PASS", raw: { t1, t1Item } });
+  const [{ count: intercompanyAlignmentCount }] = await sql`
+    SELECT COUNT(*)::int AS count
+    FROM expiry_alert_notifications n
+    JOIN expiry_alert_runs run ON run.id = n.run_id
+    WHERE run.id = ${t1.runId} AND n.retailer_id = ${TEST_IDS.interCompanyRetailer}
+  `;
+  assert(intercompanyAlignmentCount === 0, "T1 inter-company non deve entrare in alignment");
+  results.push({ id: "T1", result: "PASS", raw: { t1, t1Item, intercompanyAlignmentCount } });
 
   const t2 = await runExpiryAlertForCompany({ companyId: TEST_IDS.originCompany, mode: "alert", trigger: "dry_run", dryRun: true, now, periodStart: today, periodEnd: inThirtyDays });
   assert(t2.itemsFlagged === 1 && t2.retailersEvaluated === 1, "T2 alert deve filtrare la finestra scadenze");
-  results.push({ id: "T2", result: "PASS", raw: t2 });
+  const [{ count: intercompanyAlertCount }] = await sql`
+    SELECT COUNT(*)::int AS count
+    FROM expiry_alert_notifications n
+    JOIN expiry_alert_runs run ON run.id = n.run_id
+    WHERE run.id = ${t2.runId} AND n.retailer_id = ${TEST_IDS.interCompanyRetailer}
+  `;
+  assert(intercompanyAlertCount === 0, "T2 inter-company non deve entrare in alert");
+  results.push({ id: "T2", result: "PASS", raw: { t2, intercompanyAlertCount } });
 
   await sql`UPDATE expiry_alert_settings SET min_pieces_threshold = 51 WHERE company_id = ${TEST_IDS.originCompany}`;
   const t3 = await runExpiryAlertForCompany({ companyId: TEST_IDS.originCompany, mode: "alignment", trigger: "dry_run", dryRun: true, now });
@@ -55,6 +69,17 @@ async function main() {
   assert(t5.retailersEvaluated === 0, "T5 opt-out deve escludere il retailer");
   await sql`UPDATE retailers SET "expiryAlertOptOut" = false WHERE id = ${TEST_IDS.normalRetailer}`;
   results.push({ id: "T5", result: "PASS", raw: t5 });
+
+  await sql`UPDATE retailers SET email = 'arikirls@pec.nikys.it' WHERE id = ${TEST_IDS.normalRetailer}`;
+  const t5b = await runExpiryAlertForCompany({ companyId: TEST_IDS.originCompany, mode: "alignment", trigger: "dry_run", dryRun: true, now });
+  const [t5bNotification] = await sql`
+    SELECT status, skip_reason
+    FROM expiry_alert_notifications
+    WHERE run_id = ${t5b.runId} AND retailer_id = ${TEST_IDS.normalRetailer}
+  `;
+  assert(t5bNotification.status === "skipped" && t5bNotification.skip_reason === "pec_address", "T5b PEC deve essere skipped senza invio");
+  await sql`UPDATE retailers SET email = 'normal@test.invalid' WHERE id = ${TEST_IDS.normalRetailer}`;
+  results.push({ id: "T5b", result: "PASS", raw: { t5b, t5bNotification } });
 
   await sql`
     INSERT INTO expiry_alert_runs (company_id, mode, run_date, period_start, period_end, trigger, status, created_at)

@@ -1,0 +1,88 @@
+{
+  "execution_scope": "isolated_worktree_8b52fc8_local_postgresql_only",
+  "database": "postgresql://postgres@127.0.0.1:55432/gestionalesoketo_test?sslmode=disable",
+  "external_services_contacted": [],
+  "results": [
+    {
+      "id": "T1",
+      "name": "alignment snapshot confezioni e pezzi",
+      "status": "PASS",
+      "raw": {
+        "runId": "9178da8a-25ca-427c-86ea-51ac38eba9b4",
+        "companyId": "00000000-0000-0000-0000-000000000001",
+        "mode": "alignment",
+        "retailersEvaluated": 1,
+        "notificationsCreated": 1,
+        "itemsFlagged": 1,
+        "snapshotItem": { "quantity_pieces": 50, "pieces_per_unit": 6, "delivery_status": "delivered" }
+      }
+    },
+    {
+      "id": "T2",
+      "name": "filtro alert nella finestra scadenze",
+      "status": "PASS",
+      "raw": { "runId": "10702e1a-5181-4e2f-baf3-f9a805503c05", "mode": "alert", "retailersEvaluated": 1, "notificationsCreated": 1, "itemsFlagged": 1 }
+    },
+    {
+      "id": "T3",
+      "name": "soglia configurabile e skipped",
+      "status": "PASS",
+      "raw": { "runId": "6dc2f6ff-85c6-4a3b-b89e-e3a4cd99681a", "notificationsCreated": 1, "notificationsSkippedBelowThreshold": 1, "itemsFlagged": 1 }
+    },
+    {
+      "id": "T4",
+      "name": "isolamento company",
+      "status": "PASS",
+      "raw": { "runId": "0dc3c0f4-4b72-498b-ae4f-34bb3c8efad5", "companyId": "00000000-0000-0000-0000-000000000002", "retailersEvaluated": 0, "notificationsCreated": 0, "itemsFlagged": 0 }
+    },
+    {
+      "id": "T5",
+      "name": "opt-out rivenditore",
+      "status": "PASS",
+      "raw": { "runId": "d47e48f2-6692-44eb-b755-c6d60bd75434", "retailersEvaluated": 0, "notificationsCreated": 0, "itemsFlagged": 0 }
+    },
+    {
+      "id": "T6",
+      "name": "recovery run cron oltre due ore",
+      "status": "PASS",
+      "raw": { "runId": "d4da0480-05e9-4cca-8cce-30304f59a690", "recoveredRunIds": ["9b69ac94-c0e9-4dc0-b793-e3c8bfb7600c"], "retailersEvaluated": 1, "itemsFlagged": 1 }
+    },
+    {
+      "id": "T7",
+      "name": "dry-run senza email_log",
+      "status": "PASS",
+      "raw": { "emailLogCountAfterDryRuns": 0 }
+    },
+    {
+      "id": "T8",
+      "name": "idempotenza database-first per finestra",
+      "status": "PASS",
+      "raw": {
+        "firstReservation": { "reserved": true, "emailLogId": "ff3c405f-4a81-4e97-a0cb-532bb549d35c" },
+        "duplicateReservation": { "reserved": false, "reason": "already_sent_in_window" },
+        "notification": { "status": "skipped", "skip_reason": "already_sent_in_window" },
+        "idempotencyKey": "m13:alignment:00000000-0000-0000-0000-000000000001:2026-08-21:33333333-3333-3333-3333-333333333333"
+      }
+    },
+    {
+      "id": "T9",
+      "name": "salvataggio provider message id",
+      "status": "PASS",
+      "raw": { "provider_message_id": "local-provider-message-id", "status": "sent" }
+    },
+    {
+      "id": "T10",
+      "name": "gateway invio reale disabilitato",
+      "status": "PASS",
+      "raw": { "vitestFile": "server/services/m13EmailDelivery.test.ts", "tests": 2, "result": "isM13RealDeliveryEnabled: disabled by default; requires explicit true" }
+    }
+  ],
+  "additional_checks": [
+    "PASS: ruolo non-BYPASSRLS bloccato da RLS senza policy",
+    "PASS: il duplicato cron della stessa company è bloccato",
+    "PASS: una sola notifica interna per run è ammessa",
+    "PASS: recupero M13 limita l'update alla company e finestra cron obsolete.",
+    "Typecheck: tsc --noEmit completato",
+    "Unit suite: 3 files, 8 tests passed"
+  ]
+}

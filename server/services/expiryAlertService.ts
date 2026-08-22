@@ -6,6 +6,7 @@ import {
   expiryAlertRuns,
   expiryAlertSettings,
 } from "../../drizzle/schema";
+import { SOKETO_SRL_RETAILER_ID } from "../../shared/const";
 import { recoverStaleExpiryAlertCronRuns } from "./expiryAlertRunRecovery";
 
 export type ExpiryAlertMode = "alignment" | "alert";
@@ -70,6 +71,20 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 /**
+ * Le caselle PEC non sono un canale operativo affidabile per Resend. Il test
+ * viene effettuato sul dominio, senza alterare l'indirizzo memorizzato.
+ */
+function isPecEmailAddress(email: string): boolean {
+  const domain = email.trim().toLowerCase().split("@")[1] ?? "";
+  return domain.startsWith("pec.")
+    || domain.includes(".pec.")
+    || domain.endsWith("legalmail.it")
+    || domain.endsWith("postecert.it")
+    || domain.endsWith("pec.aruba.it")
+    || domain === "pec.it";
+}
+
+/**
  * Snapshot per retailer ricavato unicamente da inventoryByBatch. Ogni join è
  * vincolato alla company chiamante; nessun lotto o location cross-company può
  * entrare nel run.
@@ -127,6 +142,7 @@ async function findCandidateItems(
       AND r."isActive" = true
       AND r."expiryAlertOptOut" = false
       AND NULLIF(TRIM(r.email), '') IS NOT NULL
+      AND r.id <> ${SOKETO_SRL_RETAILER_ID}::uuid
       AND ${expiryCondition}
     ORDER BY r.name, pb."expirationDate", p.name, pb."batchNumber"
   `);
@@ -201,14 +217,16 @@ export async function runExpiryAlertForCompany(input: ExpiryAlertRunInput): Prom
     for (const [retailerId, items] of Array.from(groups.entries())) {
       const totalPieces = items.reduce((sum: number, item: CandidateItem) => sum + item.quantityPieces, 0);
       const belowThreshold = totalPieces < settings.minPiecesThreshold;
+      const pecAddress = isPecEmailAddress(items[0].recipientEmail);
+      const skipReason = pecAddress ? "pec_address" : belowThreshold ? "below_threshold" : null;
       const [notification] = await database.insert(expiryAlertNotifications).values({
         runId,
         retailerId,
         isInternal: false,
         retailerName: items[0].retailerName,
         recipientEmail: items[0].recipientEmail,
-        status: belowThreshold ? "skipped" : "pending",
-        skipReason: belowThreshold ? "below_threshold" : null,
+        status: skipReason ? "skipped" : "pending",
+        skipReason,
         responseToken: crypto.randomUUID(),
         tokenExpiresAt: tokenExpiry(now),
         itemsCount: items.length,
@@ -227,7 +245,7 @@ export async function runExpiryAlertForCompany(input: ExpiryAlertRunInput): Prom
         lastTransferDate: item.lastTransferDate,
       })));
       notificationsCreated++;
-      if (belowThreshold) notificationsSkippedBelowThreshold++;
+      if (belowThreshold && !pecAddress) notificationsSkippedBelowThreshold++;
     }
 
     await database.update(expiryAlertRuns).set({

@@ -88,7 +88,8 @@ export async function seedHotfixM13() {
           (${id.originCentral}, ${id.batchSoon}, 70, ${id.originCompany}),
           (${id.originCentral}, ${id.batchFourMonths}, 120, ${id.originCompany}),
           (${id.originCentral}, ${id.batchExpired}, 120, ${id.originCompany}),
-          (${id.normalRetailerLocation}, ${id.batchSoon}, 50, ${id.originCompany})
+          (${id.normalRetailerLocation}, ${id.batchSoon}, 50, ${id.originCompany}),
+          (${id.interCompanyRetailerLocation}, ${id.batchSoon}, 30, ${id.originCompany})
       `;
       await tx`
         INSERT INTO "stockMovements" ("productId", type, quantity, "previousQuantity", "newQuantity", "batchId", "fromLocationId", "toLocationId", "sourceDocumentType", "sourceDocument", notes, "companyId")
