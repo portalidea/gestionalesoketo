@@ -68,6 +68,9 @@
 - [x] M13: applicare min_pieces_threshold anche al riepilogo Query 2 read-only
 - [x] M13: rieseguire typecheck e suite completa sul database isolato prima del commit autorizzato
 - [ ] M13: committare e pushare esclusivamente feature/m13-expiry-alerts-safe, senza merge su main
+- [ ] M13: eseguire il merge autorizzato su main, verificare deploy e confermare cron/invii reali disabilitati
+- [ ] M13: risolvere il merge autorizzato tenendo le versioni branch dei conflitti M13 e todo.md, poi pushare main solo se pnpm check passa
+- [x] M13: aggiungere MERGE_M13_ISTRUZIONI.md con dipendenze, router, file branch e sequenza verifiche per un merge futuro
 
 ## Promozioni Rivenditori
 - [x] Ripristinare il pricing promo sul branch main: catalogo, dettaglio, carrello e checkout
