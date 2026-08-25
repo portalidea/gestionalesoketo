@@ -27,6 +27,21 @@ import { runExpiryAlertForCompany } from "./services/expiryAlertService";
 
 export const cronAlertRoutes = Router();
 
+export type ScheduledDispatcherResult = {
+  date: string;
+  tierEvaluation: {
+    executed: boolean;
+    companies: number;
+    results: Array<{ company: string; mode: string; enabledRetailers: number; skipped: boolean; evaluated: number }>;
+  };
+  expiryAlerts: {
+    scheduled: boolean;
+    enabled: boolean;
+    companies: number;
+    results: Array<Awaited<ReturnType<typeof runExpiryAlertForCompany>>>;
+  };
+};
+
 /** Authenticate cron requests */
 function authCron(req: Request, res: Response): boolean {
   const cronSecret = process.env.CRON_SECRET;
@@ -265,6 +280,78 @@ cronAlertRoutes.get("/cron/tier-evaluation", async (req: Request, res: Response)
     });
   } catch (err: any) {
     console.error("[cron/tier-evaluation] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Dispatcher mensile condiviso, invocato ogni giorno dalla singola pianificazione
+ * Vercel disponibile. Il primo giorno mantiene la valutazione tier; il decimo
+ * esegue M13 in sola modalità alert e persiste i soli snapshot operativi.
+ */
+export async function runScheduledDispatcher(input: { now?: Date; m13CronEnabled?: boolean } = {}): Promise<ScheduledDispatcherResult> {
+  const now = input.now ?? new Date();
+  const database = await getDb();
+  if (!database) throw new Error("DB unavailable");
+
+  const allCompanies = await database.execute<{ id: string; name: string }>(sql`
+    SELECT id, name FROM companies WHERE "isActive" = true
+  `);
+
+  const tierEvaluation: ScheduledDispatcherResult["tierEvaluation"] = {
+    executed: false,
+    companies: allCompanies.length,
+    results: [],
+  };
+  if (isMonthlyTierEvaluationDate(now)) {
+    tierEvaluation.executed = true;
+    for (const company of allCompanies) {
+      const evaluation = await evaluateTierEngineForCompany(company.id, { now });
+      tierEvaluation.results.push({
+        company: company.name,
+        mode: evaluation.mode,
+        enabledRetailers: evaluation.enabledRetailers,
+        skipped: evaluation.skipped,
+        evaluated: evaluation.results.length,
+      });
+    }
+  }
+
+  const m13Enabled = input.m13CronEnabled ?? process.env.M13_CRON_ENABLED === "true";
+  const expiryAlerts: ScheduledDispatcherResult["expiryAlerts"] = {
+    scheduled: now.getUTCDate() === 10,
+    enabled: m13Enabled,
+    companies: 0,
+    results: [],
+  };
+  if (expiryAlerts.scheduled && m13Enabled) {
+    expiryAlerts.companies = allCompanies.length;
+    for (const company of allCompanies) {
+      // M13 registra run/notifiche/item/soppressioni e non richiama alcun
+      // gateway email né crea righe email_log in questa milestone.
+      expiryAlerts.results.push(await runExpiryAlertForCompany({
+        companyId: company.id,
+        mode: "alert",
+        trigger: "cron",
+        dryRun: true,
+        now,
+      }));
+    }
+  }
+
+  return {
+    date: now.toISOString().slice(0, 10),
+    tierEvaluation,
+    expiryAlerts,
+  };
+}
+
+cronAlertRoutes.get("/cron/dispatcher", async (req: Request, res: Response) => {
+  if (!authCron(req, res)) return;
+  try {
+    res.json({ success: true, ...(await runScheduledDispatcher()) });
+  } catch (err: any) {
+    console.error("[cron/dispatcher] Error:", err);
     res.status(500).json({ error: err.message });
   }
 });

@@ -13,8 +13,8 @@
   },
   "crons": [
     {
-      "path": "/api/cron/tier-evaluation",
-      "schedule": "0 5 1 * *"
+      "path": "/api/cron/dispatcher",
+      "schedule": "0 5 * * *"
     }
   ],
   "rewrites": [

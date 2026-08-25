@@ -84,6 +84,11 @@
 - [x] Eseguire il primo giorno di ogni mese il motore tier solo sui rivenditori abilitati, rispettando le modalità osservazione e attiva
 - [x] Aggiungere nel pannello admin il toggle di abilitazione e lo stato dell’ultima valutazione per ogni rivenditore
 
+## M13 — Dispatcher Cron Alert
+- [x] Sostituire il cron mensile dedicato tier con un dispatcher giornaliero condiviso, preservando lo slot Hobby residuo
+- [x] Eseguire M13 alert-only il giorno 10 con M13_CRON_ENABLED=true, senza chiamare il gateway email
+- [x] Verificare in database isolato run completed, emails_sent=0, notifiche/item persistiti e zero righe email_log
+
 ## Test e Documentazione
 - [x] Scrivere test per procedure critiche
 - [ ] Creare documentazione tecnica
