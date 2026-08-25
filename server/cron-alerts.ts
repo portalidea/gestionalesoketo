@@ -23,6 +23,7 @@ import {
 import { sendEmail } from "./email";
 import { ENV } from "./_core/env";
 import { evaluateTierEngineForCompany, isMonthlyTierEvaluationDate } from "./services/tierEngineService";
+import { runExpiryAlertForCompany } from "./services/expiryAlertService";
 
 export const cronAlertRoutes = Router();
 
@@ -264,6 +265,46 @@ cronAlertRoutes.get("/cron/tier-evaluation", async (req: Request, res: Response)
     });
   } catch (err: any) {
     console.error("[cron/tier-evaluation] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * M13 — Calcolo alert scadenze retailer con soppressione inferita dai riordini.
+ *
+ * Per sicurezza il job è inattivo finché M13_CRON_ENABLED non è esattamente
+ * "true". Anche una volta abilitato, questa milestone opera solo in dry-run:
+ * crea snapshot/notifiche e non contatta mai Resend.
+ */
+cronAlertRoutes.get("/cron/expiry-alerts", async (req: Request, res: Response) => {
+  if (!authCron(req, res)) return;
+  if (process.env.M13_CRON_ENABLED !== "true") {
+    res.json({ success: true, skipped: true, reason: "M13_CRON_ENABLED non attivo; nessun run e nessun invio eseguiti" });
+    return;
+  }
+
+  const db = await getDb();
+  if (!db) { res.status(500).json({ error: "DB unavailable" }); return; }
+
+  try {
+    const allCompanies = await db.execute<{ id: string; name: string }>(sql`
+      SELECT id, name FROM companies WHERE "isActive" = true
+    `);
+    const now = new Date();
+    const results = [];
+    for (const company of allCompanies) {
+      const run = await runExpiryAlertForCompany({
+        companyId: company.id,
+        mode: "alert",
+        trigger: "cron",
+        dryRun: true,
+        now,
+      });
+      results.push({ companyName: company.name, ...run });
+    }
+    res.json({ success: true, dryRun: true, realEmailDelivery: false, companies: allCompanies.length, results });
+  } catch (err: any) {
+    console.error("[cron/expiry-alerts] Error:", err);
     res.status(500).json({ error: err.message });
   }
 });

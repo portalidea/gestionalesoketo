@@ -14,11 +14,18 @@ export const PROMO_REFERENCE_DISCOUNT = 44.05;
  */
 export const INTERCOMPANY_MARKUP = 0.07;
 
+/** ID della location retailer inter-company "Soketo Srl" su E-Keto Food. */
+export const SOKETO_SRL_INTERCOMPANY_LOCATION_ID = "d2955b43-4882-4543-a77b-7321cb333468";
+
+/** ID del retailer inter-company "Soketo Srl" su E-Keto Food. */
+export const SOKETO_SRL_INTERCOMPANY_RETAILER_ID = "4cad141e-11c4-4eb8-840a-0ebd457a5993";
+
 /**
- * ID retailer "Soketo Srl" su E-Keto Food — destinatario dei transfer
- * inter-company che triggherano il carico automatico su company SoKeto.
+ * Compatibilità M11.D: conserva il valore legacy locationId e il comportamento
+ * automatico esistente. Non usare nei nuovi flussi; il processo inter-company
+ * manuale va deciso in una milestone dedicata.
  */
-export const SOKETO_SRL_RETAILER_ID = "d2955b43-4882-4543-a77b-7321cb333468";
+export const SOKETO_SRL_RETAILER_ID = SOKETO_SRL_INTERCOMPANY_LOCATION_ID;
 
 /**
  * ID company SoKeto Srl nel sistema multi-tenant.

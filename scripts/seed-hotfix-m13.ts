@@ -8,11 +8,11 @@ export const TEST_IDS = {
   soketoCompany: "00000000-0000-0000-0000-000000000002",
   adminUser: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
   normalRetailer: "33333333-3333-3333-3333-333333333333",
-  interCompanyRetailer: "d2955b43-4882-4543-a77b-7321cb333468",
+  interCompanyRetailer: "4cad141e-11c4-4eb8-840a-0ebd457a5993",
   originCentral: "44444444-4444-4444-4444-444444444444",
   soketoCentral: "55555555-5555-5555-5555-555555555555",
   normalRetailerLocation: "66666666-6666-6666-6666-666666666666",
-  interCompanyRetailerLocation: "77777777-7777-7777-7777-777777777777",
+  interCompanyRetailerLocation: "d2955b43-4882-4543-a77b-7321cb333468",
   productBoxes: "88888888-8888-8888-8888-888888888881",
   productPieces: "88888888-8888-8888-8888-888888888882",
   batchSoon: "99999999-9999-9999-9999-999999999991",
@@ -88,7 +88,8 @@ export async function seedHotfixM13() {
           (${id.originCentral}, ${id.batchSoon}, 70, ${id.originCompany}),
           (${id.originCentral}, ${id.batchFourMonths}, 120, ${id.originCompany}),
           (${id.originCentral}, ${id.batchExpired}, 120, ${id.originCompany}),
-          (${id.normalRetailerLocation}, ${id.batchSoon}, 50, ${id.originCompany})
+          (${id.normalRetailerLocation}, ${id.batchSoon}, 50, ${id.originCompany}),
+          (${id.interCompanyRetailerLocation}, ${id.batchSoon}, 30, ${id.originCompany})
       `;
       await tx`
         INSERT INTO "stockMovements" ("productId", type, quantity, "previousQuantity", "newQuantity", "batchId", "fromLocationId", "toLocationId", "sourceDocumentType", "sourceDocument", notes, "companyId")

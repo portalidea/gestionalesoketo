@@ -130,6 +130,7 @@ const warehouseRouter = router({
         WHERE sm."timestamp" >= ${dateFrom.toISOString()}::timestamptz
           AND sm."timestamp" <= ${dateTo.toISOString()}::timestamptz
           AND sm."companyId" = ${companyId}
+          AND COALESCE(sm."sourceDocumentType", '') <> 'm13_retailer_declaration'
       `);
 
       // Period movements (previous)
@@ -144,6 +145,7 @@ const warehouseRouter = router({
         WHERE sm."timestamp" >= ${prev.dateFrom.toISOString()}::timestamptz
           AND sm."timestamp" <= ${prev.dateTo.toISOString()}::timestamptz
           AND sm."companyId" = ${companyId}
+          AND COALESCE(sm."sourceDocumentType", '') <> 'm13_retailer_declaration'
       `);
 
       // Time series
@@ -156,6 +158,7 @@ const warehouseRouter = router({
         WHERE sm."timestamp" >= ${dateFrom.toISOString()}::timestamptz
           AND sm."timestamp" <= ${dateTo.toISOString()}::timestamptz
           AND sm."companyId" = ${companyId}
+          AND COALESCE(sm."sourceDocumentType", '') <> 'm13_retailer_declaration'
         GROUP BY DATE(sm."timestamp")
         ORDER BY DATE(sm."timestamp")
       `);
