@@ -62,6 +62,8 @@ import Companies from "./pages/Companies";
 import TierRules from "./pages/TierRules";
 import Labels from "./pages/Labels";
 import Promotions from "./pages/Promotions";
+import ExpiryAlerts from "./pages/ExpiryAlerts";
+import ExpiryResponse from "./pages/ExpiryResponse";
 
 const ADMIN_ROLES = ["admin", "operator", "viewer"];
 const RETAILER_ROLES = ["retailer_admin", "retailer_user"];
@@ -103,6 +105,7 @@ function Router() {
       <Route path="/set-password" component={SetPassword} />
       <Route path="/auth/callback" component={AuthCallback} />
       <Route path="/auth/verify" component={AuthVerify} />
+      <Route path="/scadenze/:token" component={ExpiryResponse} />
 
       {/* ═══════════════════════════════════════════════════════════
           Partner Portal routes — only retailer_admin / retailer_user
@@ -232,6 +235,9 @@ function Router() {
       </Route>
       <Route path="/reports/promozioni">
         <RequireRole allowedRoles={["admin"]}><PromozioniReport /></RequireRole>
+      </Route>
+      <Route path="/reports/scadenze">
+        <RequireRole allowedRoles={["admin"]}><ExpiryAlerts /></RequireRole>
       </Route>
       <Route path="/reports">
         <RequireRole allowedRoles={ADMIN_ROLES}><ReportsHub /></RequireRole>
