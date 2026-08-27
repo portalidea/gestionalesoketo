@@ -926,6 +926,12 @@ export const salesStores = pgTable(
     apiCredentials: jsonb("apiCredentials"),
     isActive: boolean("isActive").default(true).notNull(),
     lastSyncAt: timestamp("lastSyncAt", { withTimezone: true }),
+    /**
+     * Prima data (nel calendario Europe/Rome) che il servizio può importare
+     * dal canale. NULL significa configurazione incompleta: il servizio
+     * fallisce chiuso e non importa né scarica alcun ordine.
+     */
+    orderImportStartDate: date("orderImportStartDate"),
     notes: text("notes"),
     companyId: uuid("companyId").references(() => companies.id),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),

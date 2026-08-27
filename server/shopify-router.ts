@@ -52,6 +52,7 @@ export const shopifyRouter = router({
           storeIdentifier: salesStores.storeIdentifier,
           isActive: salesStores.isActive,
           lastSyncAt: salesStores.lastSyncAt,
+          orderImportStartDate: salesStores.orderImportStartDate,
           apiCredentials: salesStores.apiCredentials,
           companyId: salesStores.companyId,
         })
@@ -78,10 +79,11 @@ export const shopifyRouter = router({
         storeIdentifier: store.storeIdentifier,
         isActive: store.isActive,
         lastSyncAt: store.lastSyncAt,
-        isConfigured: !!(store.apiCredentials as any)?.accessToken,
-        companyId: store.companyId,
-        companyName,
-      };
+          isConfigured: !!(store.apiCredentials as any)?.accessToken,
+          companyId: store.companyId,
+          companyName,
+          orderImportStartDate: store.orderImportStartDate,
+        };
     }),
 
     configure: staffProcedure
@@ -90,6 +92,7 @@ export const shopifyRouter = router({
           name: z.string().min(1),
           storeIdentifier: z.string().min(1),
           accessToken: z.string().min(1),
+          orderImportStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Formato atteso YYYY-MM-DD"),
         }),
       )
       .mutation(async ({ input }) => {
@@ -123,6 +126,7 @@ export const shopifyRouter = router({
               name: input.name,
               storeIdentifier: input.storeIdentifier,
               apiCredentials: { accessToken: input.accessToken },
+              orderImportStartDate: input.orderImportStartDate,
               updatedAt: new Date(),
             })
             .where(eq(salesStores.id, storeId));
@@ -134,6 +138,7 @@ export const shopifyRouter = router({
               name: input.name,
               storeIdentifier: input.storeIdentifier,
               apiCredentials: { accessToken: input.accessToken },
+              orderImportStartDate: input.orderImportStartDate,
               isActive: true,
             })
             .returning();
@@ -500,6 +505,7 @@ export const shopifyRouter = router({
         // Process each order
         let imported = 0;
         let duplicates = 0;
+        let skipped = 0;
         let processedStock = 0;
         let failed = 0;
         const errors: Array<{ orderId: string; error: string }> = [];
@@ -510,6 +516,14 @@ export const shopifyRouter = router({
 
             if (importResult.status === "duplicate") {
               duplicates++;
+              continue;
+            }
+            if (importResult.status !== "imported" || !importResult.marketplaceOrderId) {
+              skipped++;
+              errors.push({
+                orderId: String(shopifyOrder.order_number || shopifyOrder.id),
+                error: importResult.reason || `Ordine escluso: ${importResult.status}`,
+              });
               continue;
             }
 
@@ -546,13 +560,14 @@ export const shopifyRouter = router({
           .where(eq(salesStores.id, store.id));
 
         console.log(
-          `[shopify.orders.syncRecent] done: fetched=${allOrders.length} imported=${imported} duplicates=${duplicates} processedStock=${processedStock} failed=${failed}`,
+          `[shopify.orders.syncRecent] done: fetched=${allOrders.length} imported=${imported} duplicates=${duplicates} skipped=${skipped} processedStock=${processedStock} failed=${failed}`,
         );
 
         return {
           fetched: allOrders.length,
           imported,
           duplicates,
+          skipped,
           processedStock,
           failed,
           errors,

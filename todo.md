@@ -125,3 +125,14 @@
 - [x] Aggiungere interfaccia UI per connessione/disconnessione account
 - [x] Implementare log sincronizzazioni con stato e errori
 - [ ] Creare job schedulato per sincronizzazione periodica
+
+## Shopify — import e scarico automatici dal 1 settembre 2026
+- [x] Preparare query read-only sul possibile doppio scarico Shopify del 26 giugno
+- [x] Salvare una data di inizio import per store e bloccare a livello di servizio ordini Shopify precedenti al cutoff
+- [x] Rendere atomico lo scarico marketplace: aggiornamento inventario e movimento ledger nella stessa transazione
+- [x] Valorizzare companyId nei movimenti SHOPIFY_EXIT e verificare gli analoghi writer AMAZON_EXIT e MARKETPLACE_RETURN
+- [x] Integrare nel dispatcher giornaliero l’import Shopify paid idempotente con cutoff per-store
+- [x] Validare cutoff, successo atomico, rollback del movimento e doppio import sul database isolato
+- [x] Recuperare esplicitamente i gap Shopify fino a sette giorni e bloccare senza import quelli superiori
+- [x] Aggiornare lastSyncAt Shopify solo se l'intera finestra è stata elaborata senza errori
+- [x] Testare recupero gap di tre giorni, blocco gap di dieci giorni e watermark invariato dopo errore di processamento

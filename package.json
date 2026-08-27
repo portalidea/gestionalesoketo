@@ -21,7 +21,8 @@
     "testdb:seed": "tsx scripts/seed-hotfix-m13.ts",
     "testdb:reversal": "tsx scripts/test-hotfix-reversal.ts",
     "testdb:m13-recovery": "tsx scripts/test-m13-run-recovery.ts",
-    "testdb:m13-idempotency": "tsx scripts/test-m13-idempotency.ts"
+    "testdb:m13-idempotency": "tsx scripts/test-m13-idempotency.ts",
+    "testdb:shopify": "tsx scripts/test-shopify-automatic-stock.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.2",
