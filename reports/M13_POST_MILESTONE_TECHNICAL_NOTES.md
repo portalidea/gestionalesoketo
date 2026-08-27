@@ -27,3 +27,20 @@ Di conseguenza, la correzione dell'automatismo `isInterCompanyOrder()` /
 carico manuale. Qualsiasi scelta tra processo manuale e automatismo M11.D,
 inclusi eventuali storni, riconciliazioni e impatti contabili, richiede una
 milestone separata e una decisione operativa esplicita.
+
+### Decisione operativa successiva
+
+L'audit del flusso M11.D ha confermato che il normale trasferimento ordine
+scarica il centrale E-Keto e carica la location retailer **Soketo Srl** nella
+company E-Keto; `loadInterCompanyStock()` aggiungerebbe quindi la medesima
+quantità al centrale SoKeto senza scaricare quella location. Inoltre scrive un
+movimento `IN` non accoppiato e riusa la costante legacy anche nel consumo
+etichette. M11.D è pertanto **codice morto da rimuovere**, non un automatismo
+da riattivare correggendo la costante.
+
+Il flusso approvato per i trasferimenti tra le due entità è il servizio
+`intercompanyOrderTransfer`: lotto speculare per company, costo del lotto
+sorgente senza markup, due movimenti `TRANSFER` mono-company collegati e
+transazione con lock. La rimozione fisica di M11.D resta un lavoro separato,
+da pianificare con una verifica preventiva degli ordini storici e del consumo
+etichette.

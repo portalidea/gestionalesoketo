@@ -26,6 +26,7 @@ import RetailerDetail from "./pages/RetailerDetail";
 import Retailers from "./pages/Retailers";
 import Team from "./pages/Team";
 import Warehouse from "./pages/Warehouse";
+import ManualIntercompanyTransfer from "./pages/ManualIntercompanyTransfer";
 import DdtImports from "./pages/DdtImports";
 import DdtImportDetail from "./pages/DdtImportDetail";
 import Orders from "./pages/Orders";
@@ -169,6 +170,9 @@ function Router() {
       </Route>
       <Route path="/warehouse">
         <RequireRole allowedRoles={ADMIN_ROLES}><Warehouse /></RequireRole>
+      </Route>
+      <Route path="/warehouse/travasi-intercompany">
+        <RequireRole allowedRoles={ADMIN_ROLES}><ManualIntercompanyTransfer /></RequireRole>
       </Route>
       <Route path="/movements">
         <RequireRole allowedRoles={ADMIN_ROLES}><Movements /></RequireRole>

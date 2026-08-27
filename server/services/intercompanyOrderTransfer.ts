@@ -33,6 +33,11 @@ function getDirectionForDestination(destinationCompanyId: string): IntercompanyD
   return null;
 }
 
+function getDirection(sourceCompanyId: string, destinationCompanyId: string): IntercompanyDirection | null {
+  const direction = getDirectionForDestination(destinationCompanyId);
+  return direction?.sourceCompanyId === sourceCompanyId ? direction : null;
+}
+
 async function getCentralWarehouse(tx: any, companyId: string) {
   const [warehouse] = await tx.select({ id: locations.id, name: locations.name })
     .from(locations)
@@ -113,5 +118,200 @@ export async function confirmIntercompanyTransferAndAssign(input: { orderItemId:
     await tx.insert(stockMovements).values({ productId: item.productId, type: "TRANSFER", quantity: quantityPieces, previousQuantity: targetInventory?.quantity ?? 0, newQuantity: (targetInventory?.quantity ?? 0) + quantityPieces, sourceDocumentType: INTERCOMPANY_TRANSFER_SOURCE_TYPE, sourceDocument: ref, batchId: targetBatch.id, fromLocationId: null, toLocationId: destinationWarehouse.id, notes: note, notesInternal: `Travaso ${direction.sourceCompanyName}→${direction.destinationCompanyName}; ordine=${ref}; movimentoSorgente=${sourceMovement.id}; batchSorgente=${source.id}`, createdBy: input.actorUserId, companyId: direction.destinationCompanyId });
     await tx.update(orderItems).set({ batchId: targetBatch.id }).where(eq(orderItems.id, item.id));
     return { alreadyAssigned: false, batchId: targetBatch.id, batchNumber: source.batchNumber, quantityPieces, sourceMovementId: sourceMovement.id, directionLabel: `${direction.sourceCompanyName} → ${direction.destinationCompanyName}` };
+  });
+}
+
+export async function getManualIntercompanySourceBatches(input: {
+  sourceCompanyId: string;
+  destinationCompanyId: string;
+  productId: string;
+}) {
+  const direction = getDirection(input.sourceCompanyId, input.destinationCompanyId);
+  if (!direction) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Selezionare due company distinte tra E-Keto e SoKeto." });
+  }
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+  const sourceWarehouse = await getCentralWarehouse(db, direction.sourceCompanyId);
+  const batches = await db.select({
+    batchId: productBatches.id,
+    batchNumber: productBatches.batchNumber,
+    expirationDate: productBatches.expirationDate,
+    availablePieces: inventoryByBatch.quantity,
+    costPrice: productBatches.costPrice,
+    productName: products.name,
+    piecesPerUnit: products.piecesPerUnit,
+  })
+    .from(productBatches)
+    .innerJoin(products, eq(products.id, productBatches.productId))
+    .innerJoin(inventoryByBatch, and(eq(inventoryByBatch.batchId, productBatches.id), eq(inventoryByBatch.locationId, sourceWarehouse.id)))
+    .where(and(
+      eq(productBatches.productId, input.productId),
+      eq(productBatches.companyId, direction.sourceCompanyId),
+      gt(inventoryByBatch.quantity, 0),
+    ))
+    .orderBy(productBatches.expirationDate);
+  return {
+    sourceCompanyName: direction.sourceCompanyName,
+    destinationCompanyName: direction.destinationCompanyName,
+    directionLabel: `${direction.sourceCompanyName} → ${direction.destinationCompanyName}`,
+    batches,
+  };
+}
+
+export async function confirmManualIntercompanyTransfer(input: {
+  sourceCompanyId: string;
+  destinationCompanyId: string;
+  sourceBatchId: string;
+  quantityPieces: number;
+  notes: string;
+  transferReference: string;
+  actorUserId: string;
+}) {
+  const direction = getDirection(input.sourceCompanyId, input.destinationCompanyId);
+  if (!direction) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Selezionare due company distinte tra E-Keto e SoKeto." });
+  }
+  if (!Number.isInteger(input.quantityPieces) || input.quantityPieces <= 0) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "La quantità deve essere un numero intero di pezzi maggiore di zero." });
+  }
+  const notes = input.notes.trim();
+  if (!notes) throw new TRPCError({ code: "BAD_REQUEST", message: "La nota è obbligatoria per il travaso manuale." });
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${input.transferReference}))`);
+    const [existingTransfer] = await tx.select({
+      id: stockMovements.id,
+      batchId: stockMovements.batchId,
+      quantity: stockMovements.quantity,
+    })
+      .from(stockMovements)
+      .where(and(
+        eq(stockMovements.sourceDocumentType, "intercompany_manual_transfer"),
+        eq(stockMovements.sourceDocument, input.transferReference),
+      ))
+      .limit(1);
+    if (existingTransfer) {
+      return {
+        alreadyTransferred: true,
+        transferReference: input.transferReference,
+        directionLabel: `${direction.sourceCompanyName} → ${direction.destinationCompanyName}`,
+        productName: null,
+        batchNumber: null,
+        quantityPieces: existingTransfer.quantity,
+        sourceMovementId: existingTransfer.id,
+        targetBatchId: existingTransfer.batchId,
+      };
+    }
+    const sourceWarehouse = await getCentralWarehouse(tx, direction.sourceCompanyId);
+    const destinationWarehouse = await getCentralWarehouse(tx, direction.destinationCompanyId);
+    const [source] = await tx.select({
+      id: productBatches.id,
+      productId: productBatches.productId,
+      batchNumber: productBatches.batchNumber,
+      expirationDate: productBatches.expirationDate,
+      productionDate: productBatches.productionDate,
+      producerId: productBatches.producerId,
+      costPrice: productBatches.costPrice,
+      productName: products.name,
+      inventoryId: inventoryByBatch.id,
+      availablePieces: inventoryByBatch.quantity,
+    })
+      .from(productBatches)
+      .innerJoin(products, eq(products.id, productBatches.productId))
+      .innerJoin(inventoryByBatch, and(eq(inventoryByBatch.batchId, productBatches.id), eq(inventoryByBatch.locationId, sourceWarehouse.id)))
+      .where(and(eq(productBatches.id, input.sourceBatchId), eq(productBatches.companyId, direction.sourceCompanyId)))
+      .for("update")
+      .limit(1);
+    if (!source || source.availablePieces < input.quantityPieces) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Giacenza ${direction.sourceCompanyName} insufficiente: aggiorna la preview prima di confermare.` });
+    }
+    let [targetBatch] = await tx.select({ id: productBatches.id, costPrice: productBatches.costPrice })
+      .from(productBatches)
+      .where(and(
+        eq(productBatches.companyId, direction.destinationCompanyId),
+        eq(productBatches.productId, source.productId),
+        eq(productBatches.batchNumber, source.batchNumber),
+      ))
+      .limit(1);
+    if (!targetBatch) {
+      [targetBatch] = await tx.insert(productBatches).values({
+        productId: source.productId,
+        batchNumber: source.batchNumber,
+        expirationDate: source.expirationDate,
+        productionDate: source.productionDate,
+        producerId: source.producerId,
+        initialQuantity: input.quantityPieces,
+        costPrice: source.costPrice,
+        companyId: direction.destinationCompanyId,
+        notes: `Lotto speculare da ${direction.sourceCompanyName} — travaso manuale`,
+      }).returning({ id: productBatches.id, costPrice: productBatches.costPrice });
+    }
+    const [targetInventory] = await tx.select({ id: inventoryByBatch.id, quantity: inventoryByBatch.quantity })
+      .from(inventoryByBatch)
+      .where(and(eq(inventoryByBatch.locationId, destinationWarehouse.id), eq(inventoryByBatch.batchId, targetBatch.id)))
+      .for("update")
+      .limit(1);
+    await tx.update(inventoryByBatch)
+      .set({ quantity: source.availablePieces - input.quantityPieces, updatedAt: new Date() })
+      .where(eq(inventoryByBatch.id, source.inventoryId));
+    if (targetInventory) {
+      await tx.update(inventoryByBatch)
+        .set({ quantity: targetInventory.quantity + input.quantityPieces, updatedAt: new Date() })
+        .where(eq(inventoryByBatch.id, targetInventory.id));
+    } else {
+      await tx.insert(inventoryByBatch).values({
+        locationId: destinationWarehouse.id,
+        batchId: targetBatch.id,
+        quantity: input.quantityPieces,
+        companyId: direction.destinationCompanyId,
+      });
+    }
+    const transferReference = input.transferReference;
+    const movementNotes = `Travaso manuale inter-company ${direction.sourceCompanyName} → ${direction.destinationCompanyName}: ${notes}`;
+    const [sourceMovement] = await tx.insert(stockMovements).values({
+      productId: source.productId,
+      type: "TRANSFER",
+      quantity: input.quantityPieces,
+      previousQuantity: source.availablePieces,
+      newQuantity: source.availablePieces - input.quantityPieces,
+      sourceDocumentType: "intercompany_manual_transfer",
+      sourceDocument: transferReference,
+      batchId: source.id,
+      fromLocationId: sourceWarehouse.id,
+      toLocationId: null,
+      notes: movementNotes,
+      notesInternal: `Travaso manuale ${direction.sourceCompanyName}→${direction.destinationCompanyName}; ref=${transferReference}; batchDest=${targetBatch.id}`,
+      createdBy: input.actorUserId,
+      companyId: direction.sourceCompanyId,
+    }).returning({ id: stockMovements.id });
+    await tx.insert(stockMovements).values({
+      productId: source.productId,
+      type: "TRANSFER",
+      quantity: input.quantityPieces,
+      previousQuantity: targetInventory?.quantity ?? 0,
+      newQuantity: (targetInventory?.quantity ?? 0) + input.quantityPieces,
+      sourceDocumentType: "intercompany_manual_transfer",
+      sourceDocument: transferReference,
+      batchId: targetBatch.id,
+      fromLocationId: null,
+      toLocationId: destinationWarehouse.id,
+      notes: movementNotes,
+      notesInternal: `Travaso manuale ${direction.sourceCompanyName}→${direction.destinationCompanyName}; ref=${transferReference}; movimentoSorgente=${sourceMovement.id}; batchSorgente=${source.id}`,
+      createdBy: input.actorUserId,
+      companyId: direction.destinationCompanyId,
+    });
+    return {
+      alreadyTransferred: false,
+      transferReference,
+      directionLabel: `${direction.sourceCompanyName} → ${direction.destinationCompanyName}`,
+      productName: source.productName,
+      batchNumber: source.batchNumber,
+      quantityPieces: input.quantityPieces,
+      sourceMovementId: sourceMovement.id,
+      targetBatchId: targetBatch.id,
+    };
   });
 }

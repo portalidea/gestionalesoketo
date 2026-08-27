@@ -25,7 +25,8 @@
     "testdb:shopify": "tsx scripts/test-shopify-automatic-stock.ts",
     "testdb:intercompany": "tsx scripts/test-intercompany-order-transfer.ts",
     "testdb:intercompany:eketo-to-soketo": "tsx scripts/test-intercompany-eketo-to-soketo.ts",
-    "testdb:intercompany:report": "tsx scripts/test-intercompany-transfers-report.ts"
+    "testdb:intercompany:report": "tsx scripts/test-intercompany-transfers-report.ts",
+    "testdb:intercompany:manual": "tsx scripts/test-manual-intercompany-transfer.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.2",

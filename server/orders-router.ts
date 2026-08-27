@@ -34,7 +34,12 @@ import { sendOrderStatusEmail } from "./services/orderEmailService";
 import { voidCommissionForOrder } from "./services/commissionService";
 import * as ficDocService from "./services/ficDocumentService";
 import { allocateBatchesSelectively } from "./services/selectiveFefoAllocation";
-import { confirmIntercompanyTransferAndAssign, getIntercompanySourceBatches } from "./services/intercompanyOrderTransfer";
+import {
+  confirmIntercompanyTransferAndAssign,
+  confirmManualIntercompanyTransfer,
+  getIntercompanySourceBatches,
+  getManualIntercompanySourceBatches,
+} from "./services/intercompanyOrderTransfer";
 
 // --- Zod Schemas ---
 
@@ -901,18 +906,42 @@ export const ordersRouter = router({
       };
     }),
 
-  /** Preview read-only dei lotti SoKeto per una riga E-Keto senza lotto locale. */
+  /** Preview read-only del centrale dell'altra company per una riga ordine senza lotto locale. */
   getIntercompanySourceBatches: staffProcedure
     .input(z.object({ orderItemId: uuidSchema }))
     .query(({ input, ctx }) => getIntercompanySourceBatches(input.orderItemId, ctx.activeCompanyId)),
 
-  /** Conferma staff esplicita: travaso atomico SoKeto → E-Keto e assegnazione batch. */
+  /** Conferma staff esplicita: travaso atomico inter-company e assegnazione batch. */
   confirmIntercompanyTransferAndAssign: staffProcedure
     .input(z.object({ orderItemId: uuidSchema, sourceBatchId: uuidSchema }))
     .mutation(({ input, ctx }) => confirmIntercompanyTransferAndAssign({
       ...input,
       actorUserId: ctx.user!.id,
       activeCompanyId: ctx.activeCompanyId,
+    })),
+
+  /** Preview staff dei lotti disponibili nel centrale origine per un travaso manuale. */
+  getManualIntercompanySourceBatches: staffProcedure
+    .input(z.object({
+      sourceCompanyId: uuidSchema,
+      destinationCompanyId: uuidSchema,
+      productId: uuidSchema,
+    }))
+    .query(({ input }) => getManualIntercompanySourceBatches(input)),
+
+  /** Conferma staff: travaso manuale atomico centrale→centrale con nota obbligatoria. */
+  confirmManualIntercompanyTransfer: staffProcedure
+    .input(z.object({
+      sourceCompanyId: uuidSchema,
+      destinationCompanyId: uuidSchema,
+      sourceBatchId: uuidSchema,
+      quantityPieces: z.number().int().positive(),
+      notes: z.string().trim().min(1).max(1000),
+      transferReference: z.string().regex(/^manual:[0-9a-f-]{36}$/i).max(100),
+    }))
+    .mutation(({ input, ctx }) => confirmManualIntercompanyTransfer({
+      ...input,
+      actorUserId: ctx.user!.id,
     })),
 
   /**
