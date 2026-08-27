@@ -47,25 +47,30 @@ function parseDateRange(input: { dateFrom?: string; dateTo?: string }) {
   return getDefaultDateRange();
 }
 
-async function loadIntercompanyTransfers(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, dateFrom: Date, dateTo: Date) {
+export async function loadIntercompanyTransfers(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, dateFrom: Date, dateTo: Date) {
   const rows = await db.execute<any>(sql`
-    SELECT sm.id, sm."timestamp", p."name" AS "productName", p.sku AS "productSku",
+    SELECT sm.id, sm."timestamp", sm."sourceDocument", p."name" AS "productName", p.sku AS "productSku",
       pb."batchNumber", sm.quantity, pb."costPrice"::text AS "unitCost",
       (sm.quantity * pb."costPrice")::text AS "totalCost", o.id AS "orderId",
-      o."orderNumber", o.status AS "orderStatus", u.name AS "operatorName"
+      o."orderNumber", o.status AS "orderStatus", u.name AS "operatorName",
+      CASE WHEN sm."companyId" = ${SOKETO_COMPANY_ID}::uuid THEN 'SoKeto → E-Keto'
+           WHEN sm."companyId" = ${EKETO_COMPANY_ID}::uuid THEN 'E-Keto → SoKeto'
+      END AS direction
     FROM "stockMovements" sm
     INNER JOIN products p ON p.id = sm."productId"
     INNER JOIN "productBatches" pb ON pb.id = sm."batchId"
     LEFT JOIN orders o ON o.id::text = sm."sourceDocument"
     LEFT JOIN users u ON u.id = sm."createdBy"
     WHERE sm.type = 'TRANSFER'
-      AND sm."companyId" = ${SOKETO_COMPANY_ID}::uuid
-      AND sm."sourceDocumentType" = 'intercompany_transfer'
+      AND sm."companyId" IN (${SOKETO_COMPANY_ID}::uuid, ${EKETO_COMPANY_ID}::uuid)
+      AND sm."sourceDocumentType" IN ('intercompany_transfer', 'intercompany_manual_transfer')
+      AND sm."fromLocationId" IS NOT NULL
+      AND sm."toLocationId" IS NULL
       AND sm."timestamp" >= ${dateFrom.toISOString()}::timestamptz
       AND sm."timestamp" <= ${dateTo.toISOString()}::timestamptz
     ORDER BY sm."timestamp" DESC
   `);
-  return (rows as any[]).map((row) => ({ ...row, direction: "SoKeto → E-Keto" }));
+  return rows as any[];
 }
 
 // ============= WAREHOUSE REPORTS =============
@@ -1137,8 +1142,7 @@ const intercompanyTransfersRouter = router({
       return {
         items,
         totalCost: items.reduce((sum, item) => sum + Number(item.totalCost ?? 0), 0),
-        sourceCompanyId: SOKETO_COMPANY_ID,
-        destinationCompanyId: EKETO_COMPANY_ID,
+        supportedDirections: ["SoKeto → E-Keto", "E-Keto → SoKeto"],
       };
     }),
   exportCsv: adminProcedure
@@ -1148,9 +1152,9 @@ const intercompanyTransfersRouter = router({
       if (!db) throw new Error("DB non disponibile");
       const { dateFrom, dateTo } = parseDateRange(input);
       const items = await loadIntercompanyTransfers(db, dateFrom, dateTo);
-      let csvContent = "Data;Direzione;Prodotto;SKU;Lotto;Quantità;Costo unitario;Costo totale;Ordine;Stato ordine;Operatore\n";
+      let csvContent = "Data;Direzione;Prodotto;SKU;Lotto;Quantità;Costo unitario;Costo totale;Riferimento;Ordine;Stato ordine;Operatore\n";
       for (const row of items) {
-        csvContent += `${formatDateCSV(row.timestamp)};${row.direction};${escCsv(row.productName)};${escCsv(row.productSku)};${escCsv(row.batchNumber)};${row.quantity};${formatNumIT(Number(row.unitCost))};${formatNumIT(Number(row.totalCost))};${escCsv(row.orderNumber ?? "")};${row.orderStatus ?? ""};${escCsv(row.operatorName ?? "")}\n`;
+        csvContent += `${formatDateCSV(row.timestamp)};${row.direction};${escCsv(row.productName)};${escCsv(row.productSku)};${escCsv(row.batchNumber)};${row.quantity};${formatNumIT(Number(row.unitCost))};${formatNumIT(Number(row.totalCost))};${escCsv(row.sourceDocument ?? "")};${escCsv(row.orderNumber ?? "")};${row.orderStatus ?? ""};${escCsv(row.operatorName ?? "")}\n`;
       }
       return { csvContent, filename: `travasi_intercompany_${formatFilenameDate(dateFrom)}_${formatFilenameDate(dateTo)}.csv` };
     }),

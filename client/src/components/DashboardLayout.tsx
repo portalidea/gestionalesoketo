@@ -72,6 +72,7 @@ const baseMenuItems: MenuItem[] = [
   { icon: Factory, label: "Produttori", path: "/producers" },
   { icon: Package, label: "Prodotti", path: "/products" },
   { icon: Warehouse, label: "Magazzino Centrale", path: "/warehouse" },
+  { icon: ArrowLeftRight, label: "Travasi inter-company", path: "/warehouse/travasi-intercompany" },
   { icon: ArrowLeftRight, label: "Movimenti", path: "/movements" },
   { icon: FileText, label: "DDT Import", path: "/ddt-imports" },
   { icon: Tag, label: "Etichette", path: "/labels" },

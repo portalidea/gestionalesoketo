@@ -136,3 +136,21 @@
 - [x] Recuperare esplicitamente i gap Shopify fino a sette giorni e bloccare senza import quelli superiori
 - [x] Aggiornare lastSyncAt Shopify solo se l'intera finestra è stata elaborata senza errori
 - [x] Testare recupero gap di tre giorni, blocco gap di dieci giorni e watermark invariato dopo errore di processamento
+
+## Travaso inter-company E-Keto → SoKeto
+- [x] Estendere preview e conferma ordine staff al travaso E-Keto verso SoKeto, con lotto speculare e ledger mono-company
+- [x] Rendere la UI ordine disponibile anche alle righe SoKeto senza lotto locale e con disponibilità E-Keto
+- [x] Estendere il report travasi con la direzione E-Keto → SoKeto
+- [x] Testare atomicità, lotto speculare, insufficienza, idempotenza e isolamento ledger per la nuova direzione
+- [x] Verificare con dati isolati che il report mensile restituisca una sola riga per direzione e non raddoppi il totale dei travasi
+
+## Audit M11.D — carico storico inter-company
+- [x] Ricostruire in sola lettura il flusso isInterCompanyOrder/loadInterCompanyStock, includendo transizione, location, lotto, markup e rischio di doppia contabilizzazione
+
+## Travaso manuale inter-company fra centrali
+- [x] Documentare M11.D come codice morto da rimuovere senza correggere la costante legacy
+- [x] Aggiungere preview e conferma staff per travasi manuali bidirezionali fra magazzini centrali
+- [x] Riutilizzare lock, lotto speculare, costo origine e due ledger TRANSFER con sourceDocument di travaso manuale
+- [x] Realizzare la pagina admin con company, prodotto, lotto, quantità e note obbligatorie
+- [x] Verificare report mensile, atomicità e idempotenza dei travasi manuali per entrambe le direzioni
+- [ ] Committare, pushare e fondere su main il travaso manuale bidirezionale dopo autorizzazione esplicita
