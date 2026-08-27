@@ -154,3 +154,14 @@
 - [x] Realizzare la pagina admin con company, prodotto, lotto, quantità e note obbligatorie
 - [x] Verificare report mensile, atomicità e idempotenza dei travasi manuali per entrambe le direzioni
 - [ ] Committare, pushare e fondere su main il travaso manuale bidirezionale dopo autorizzazione esplicita
+
+## Audit Shopify — sincronizzazione varianti
+- [ ] Ricostruire in sola lettura chiavi, creazione, paginazione e criteri della sync varianti Shopify per spiegare le varianti non importate
+- [ ] Verificare in sola lettura parser Link, paginazione REST, filtro catalogo e metriche di completamento della sync varianti
+
+## Shopify — paginazione varianti osservabile
+- [x] Correggere il parser Link per rel=next con o senza virgolette
+- [x] Segnalare partial quando una pagina piena da 250 prodotti non presenta un cursore next
+- [x] Esporre nel pannello pagesFetched, productsFetched, variantsFetched, imported e updated
+- [x] Testare i due formati Link e i due esiti senza header richiesti
+- [ ] Committare, pushare e fondere su main la correzione della paginazione Shopify dopo autorizzazione esplicita

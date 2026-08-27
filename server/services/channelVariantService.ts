@@ -25,11 +25,23 @@ export interface SyncVariantsResult {
   status: "completed" | "partial" | "timeout";
   totalProducts: number;
   totalVariants: number;
+  pagesFetched: number;
+  productsFetched: number;
+  variantsFetched: number;
+  invalidProducts: number;
 }
 
 // ─── Sync Variants from Shopify (bulk upsert) ───────────────────────────────
 
 const CHUNK_SIZE = 200;
+
+export function resolveVariantSyncOutcome(errors: string[], paginationError?: string): {
+  errors: string[];
+  status: "completed" | "partial";
+} {
+  const allErrors = paginationError ? [...errors, paginationError] : errors;
+  return { errors: allErrors, status: allErrors.length > 0 ? "partial" : "completed" };
+}
 
 /**
  * Sync all variants from Shopify store using bulk upsert.
@@ -60,9 +72,9 @@ export async function syncVariantsFromShopify(
   // 2. Fetch all products/variants from Shopify
   const client = new ShopifyClient(store.storeIdentifier, credentials.accessToken);
 
-  let products: ShopifyProduct[];
+  let fetchedCatalog: Awaited<ReturnType<ShopifyClient["fetchAllProducts"]>>;
   try {
-    products = await client.fetchAllProducts();
+    fetchedCatalog = await client.fetchAllProducts();
   } catch (fetchErr: any) {
     console.error(
       `[channelVariantService.sync] fetchAllProducts failed: ${fetchErr.message}`,
@@ -75,12 +87,17 @@ export async function syncVariantsFromShopify(
       status: "partial",
       totalProducts: 0,
       totalVariants: 0,
+      pagesFetched: 0,
+      productsFetched: 0,
+      variantsFetched: 0,
+      invalidProducts: 0,
     };
   }
+  const { products } = fetchedCatalog;
 
   const fetchElapsed = Date.now() - startTime;
   console.log(
-    `[channelVariantService.sync] storeId=${storeId} fetched ${products.length} products in ${fetchElapsed}ms`,
+    `[channelVariantService.sync] storeId=${storeId} fetched pages=${fetchedCatalog.pagesFetched} rawProducts=${fetchedCatalog.productsFetched} validProducts=${products.length} variants=${fetchedCatalog.variantsFetched} in ${fetchElapsed}ms`,
   );
 
   // 3. Flatten all variants into upsert-ready rows
@@ -119,14 +136,19 @@ export async function syncVariantsFromShopify(
   );
 
   if (allRows.length === 0) {
+    const outcome = resolveVariantSyncOutcome([], fetchedCatalog.paginationError);
     return {
       imported: 0,
       updated: 0,
       unmapped: 0,
-      errors: [],
-      status: "completed",
+      errors: outcome.errors,
+      status: outcome.status,
       totalProducts: products.length,
       totalVariants: 0,
+      pagesFetched: fetchedCatalog.pagesFetched,
+      productsFetched: fetchedCatalog.productsFetched,
+      variantsFetched: fetchedCatalog.variantsFetched,
+      invalidProducts: fetchedCatalog.invalidProducts,
     };
   }
 
@@ -196,7 +218,7 @@ export async function syncVariantsFromShopify(
     );
 
   const elapsed = Date.now() - startTime;
-  const status = errors.length > 0 ? "partial" : "completed";
+  const outcome = resolveVariantSyncOutcome(errors, fetchedCatalog.paginationError);
 
   console.log(
     `[channelVariantService.sync] bulk upsert ${allRows.length} variants done in ${elapsed}ms. imported=${imported} updated=${updated} unmapped=${unmapped} errors=${errors.length}`,
@@ -206,10 +228,14 @@ export async function syncVariantsFromShopify(
     imported,
     updated,
     unmapped,
-    errors,
-    status,
+    errors: outcome.errors,
+    status: outcome.status,
     totalProducts: products.length,
     totalVariants: allRows.length,
+    pagesFetched: fetchedCatalog.pagesFetched,
+    productsFetched: fetchedCatalog.productsFetched,
+    variantsFetched: fetchedCatalog.variantsFetched,
+    invalidProducts: fetchedCatalog.invalidProducts,
   };
 }
 

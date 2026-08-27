@@ -70,6 +70,28 @@ export const ShopifyProductSchema = z.object({
 export type ShopifyVariant = z.infer<typeof ShopifyVariantSchema>;
 export type ShopifyProduct = z.infer<typeof ShopifyProductSchema>;
 
+export interface ShopifyProductsFetchResult {
+  products: ShopifyProduct[];
+  pagesFetched: number;
+  productsFetched: number;
+  variantsFetched: number;
+  invalidProducts: number;
+  pageProductCounts: number[];
+  possiblyTruncated: boolean;
+  paginationError?: string;
+}
+
+/**
+ * Estrae l'URL della pagina successiva dalla sintassi Link REST di Shopify.
+ * Shopify può serializzare rel=next oppure rel="next"; l'URL deve essere
+ * riutilizzato invariato perché page_info è un cursore opaco.
+ */
+export function parseShopifyNextPageUrl(linkHeader: string | null): string | undefined {
+  if (!linkHeader) return undefined;
+  const nextMatch = linkHeader.match(/<([^>]+)>\s*;\s*rel\s*=\s*"?next"?/i);
+  return nextMatch?.[1];
+}
+
 // ─── Client ──────────────────────────────────────────────────────────────────
 
 export class ShopifyClient {
@@ -209,36 +231,55 @@ export class ShopifyClient {
    * Fetch all products with their variants (paginated, max 250 per page).
    * Uses safeParse for graceful error handling on malformed products.
    */
-  async fetchAllProducts(): Promise<ShopifyProduct[]> {
+  async fetchAllProducts(): Promise<ShopifyProductsFetchResult> {
     const allProducts: ShopifyProduct[] = [];
     let url: string | null = "/products.json?limit=250&fields=id,title,variants";
     let pageCount = 0;
+    let rawProductsFetched = 0;
+    let variantsFetched = 0;
+    let invalidProducts = 0;
+    const pageProductCounts: number[] = [];
+    let possiblyTruncated = false;
+    let paginationError: string | undefined;
 
     while (url) {
       pageCount++;
-      console.log(
-        `[shopifyClient.fetchAllProducts] page ${pageCount}, accumulated ${allProducts.length} products`,
-      );
+      console.log(`[shopifyClient.fetchAllProducts] page=${pageCount} request=${url}`);
 
       const { data, linkHeader } = await this.requestWithHeaders<{
         products: unknown[];
       }>(url);
 
+      const rawPageProducts = data.products.length;
+      rawProductsFetched += rawPageProducts;
+      pageProductCounts.push(rawPageProducts);
+      let validPageProducts = 0;
+      let pageVariants = 0;
       for (const p of data.products) {
         const parsed = ShopifyProductSchema.safeParse(p);
         if (parsed.success) {
           allProducts.push(parsed.data);
+          validPageProducts++;
+          pageVariants += parsed.data.variants.length;
         } else {
+          invalidProducts++;
           console.warn(
             `[shopifyClient.fetchAllProducts] safeParse failed for product, skipping. Error: ${parsed.error.message}. Payload sample: ${JSON.stringify(p).slice(0, 500)}`,
           );
         }
       }
+      variantsFetched += pageVariants;
 
-      const nextPageInfo = this.parseNextPageInfo(linkHeader);
-      url = nextPageInfo
-        ? `/products.json?page_info=${nextPageInfo}&limit=250`
-        : null;
+      const nextPageUrl = parseShopifyNextPageUrl(linkHeader);
+      if (!nextPageUrl && rawPageProducts === 250) {
+        possiblyTruncated = true;
+        paginationError = `Pagina ${pageCount} piena (250 prodotti) senza Link rel=next: catalogo potenzialmente incompleto.`;
+        console.error(`[shopifyClient.fetchAllProducts] ${paginationError}`);
+      }
+      console.log(
+        `[shopifyClient.fetchAllProducts] page=${pageCount} rawProducts=${rawPageProducts} validProducts=${validPageProducts} variants=${pageVariants} linkHeader=${linkHeader ? "present" : "absent"} nextPage=${nextPageUrl ? "detected" : "absent"}`,
+      );
+      url = nextPageUrl ?? null;
 
       // Pause 200ms between pages to avoid rate limit
       if (url) {
@@ -246,10 +287,17 @@ export class ShopifyClient {
       }
     }
 
-    console.log(
-      `[shopifyClient.fetchAllProducts] total: ${allProducts.length} products in ${pageCount} pages`,
-    );
-    return allProducts;
+    console.log(`[shopifyClient.fetchAllProducts] complete pages=${pageCount} rawProducts=${rawProductsFetched} validProducts=${allProducts.length} variants=${variantsFetched} invalidProducts=${invalidProducts} possiblyTruncated=${possiblyTruncated}`);
+    return {
+      products: allProducts,
+      pagesFetched: pageCount,
+      productsFetched: rawProductsFetched,
+      variantsFetched,
+      invalidProducts,
+      pageProductCounts,
+      possiblyTruncated,
+      paginationError,
+    };
   }
 
   /**
@@ -356,15 +404,6 @@ export class ShopifyClient {
     throw new Error("[shopifyClient] Max retries exceeded");
   }
 
-  private parseNextPageInfo(linkHeader: string | null): string | undefined {
-    if (!linkHeader) return undefined;
-    // Link: <...?page_info=abc123&limit=50>; rel="next"
-    const nextMatch = linkHeader.match(
-      /<[^>]*[?&]page_info=([^&>]+)[^>]*>;\s*rel="next"/,
-    );
-    return nextMatch?.[1];
-  }
-
   private isRetryableError(error: unknown): boolean {
     if (error instanceof TypeError) return true; // network errors
     if (error instanceof Error && error.message.includes("fetch")) return true;
@@ -372,6 +411,17 @@ export class ShopifyClient {
     if (error instanceof Error && error.message.includes("NS_ERROR_NET_RESET")) return true;
     if (error instanceof Error && error.message.includes("socket hang up")) return true;
     return false;
+  }
+
+  /** Compatibilità con la paginazione ordini, che espone solo page_info. */
+  private parseNextPageInfo(linkHeader: string | null): string | undefined {
+    const nextPageUrl = parseShopifyNextPageUrl(linkHeader);
+    if (!nextPageUrl) return undefined;
+    try {
+      return new URL(nextPageUrl).searchParams.get("page_info") ?? undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private sleep(ms: number): Promise<void> {
