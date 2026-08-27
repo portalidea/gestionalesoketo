@@ -33,6 +33,7 @@ import { cancelOrderWithTransferReversal } from "./services/orderTransferReversa
 import { sendOrderStatusEmail } from "./services/orderEmailService";
 import { voidCommissionForOrder } from "./services/commissionService";
 import * as ficDocService from "./services/ficDocumentService";
+import { allocateBatchesSelectively } from "./services/selectiveFefoAllocation";
 
 // --- Zod Schemas ---
 
@@ -513,6 +514,30 @@ export const ordersRouter = router({
         markupPercentageOverride: input.markupPercentageOverride ?? undefined,
       });
 
+      // Carica le assegnazioni prima della riscrittura per conservare i lotti
+      // già preparati quando prodotto e quantità rimangono compatibili.
+      const existingAssignments = await db
+        .select({
+          productId: orderItems.productId,
+          batchId: orderItems.batchId,
+          quantity: orderItems.quantity,
+        })
+        .from(orderItems)
+        .where(eq(orderItems.orderId, input.orderId));
+      const selectiveAllocation = await allocateBatchesSelectively({
+        companyId: ctx.activeCompanyId,
+        items: pricing.items,
+        existingAssignments: existingAssignments.map((item) => ({
+          productId: item.productId,
+          batchId: item.batchId,
+          quantity: item.quantity,
+        })),
+      });
+      const allAllocations = pricing.items.map((item) => ({
+        ...item,
+        allocations: selectiveAllocation.allocationsByProduct.get(item.productId) ?? [],
+      }));
+
       await db.transaction(async (tx) => {
         // Elimina vecchi items
         await tx.delete(orderItems).where(eq(orderItems.orderId, input.orderId));
@@ -531,27 +556,86 @@ export const ordersRouter = router({
           })
           .where(eq(orders.id, input.orderId));
 
-        // Inserisci nuovi items
-        const itemValues = pricing.items.map((pi) => ({
-          orderId: input.orderId,
-          productId: pi.productId,
-          quantity: pi.quantity,
-          unitPriceBase: pi.unitPriceBase,
-          discountPercent: pi.discountPercent,
-          unitPriceFinal: pi.unitPriceFinal,
-          vatRate: pi.vatRate,
-          lineTotalNet: pi.lineTotalNet,
-          lineTotalGross: pi.lineTotalGross,
-          productSku: pi.productSku,
-          productName: pi.productName,
-        }));
+        // Inserisci nuovi items mantenendo l'allocazione FEFO e lo split per lotto.
+        const itemValues: Array<{
+          orderId: string;
+          productId: string;
+          quantity: number;
+          unitPriceBase: string;
+          discountPercent: string;
+          unitPriceFinal: string;
+          vatRate: string;
+          lineTotalNet: string;
+          lineTotalGross: string;
+          productSku: string;
+          productName: string;
+          batchId: string | null;
+        }> = [];
+
+        for (const pi of allAllocations) {
+          if (pi.allocations.length === 0) {
+            itemValues.push({
+              orderId: input.orderId,
+              productId: pi.productId,
+              quantity: pi.quantity,
+              unitPriceBase: pi.unitPriceBase,
+              discountPercent: pi.discountPercent,
+              unitPriceFinal: pi.unitPriceFinal,
+              vatRate: pi.vatRate,
+              lineTotalNet: pi.lineTotalNet,
+              lineTotalGross: pi.lineTotalGross,
+              productSku: pi.productSku,
+              productName: pi.productName,
+              batchId: null,
+            });
+            continue;
+          }
+
+          for (const allocation of pi.allocations) {
+            const ratio = allocation.quantity / pi.quantity;
+            itemValues.push({
+              orderId: input.orderId,
+              productId: pi.productId,
+              quantity: allocation.quantity,
+              unitPriceBase: pi.unitPriceBase,
+              discountPercent: pi.discountPercent,
+              unitPriceFinal: pi.unitPriceFinal,
+              vatRate: pi.vatRate,
+              lineTotalNet: (parseFloat(pi.lineTotalNet) * ratio).toFixed(2),
+              lineTotalGross: (parseFloat(pi.lineTotalGross) * ratio).toFixed(2),
+              productSku: pi.productSku,
+              productName: pi.productName,
+              batchId: allocation.batchId,
+            });
+          }
+
+          const allocatedQuantity = pi.allocations.reduce((sum, allocation) => sum + allocation.quantity, 0);
+          const unallocatedQuantity = pi.quantity - allocatedQuantity;
+          if (unallocatedQuantity > 0) {
+            const ratio = unallocatedQuantity / pi.quantity;
+            itemValues.push({
+              orderId: input.orderId,
+              productId: pi.productId,
+              quantity: unallocatedQuantity,
+              unitPriceBase: pi.unitPriceBase,
+              discountPercent: pi.discountPercent,
+              unitPriceFinal: pi.unitPriceFinal,
+              vatRate: pi.vatRate,
+              lineTotalNet: (parseFloat(pi.lineTotalNet) * ratio).toFixed(2),
+              lineTotalGross: (parseFloat(pi.lineTotalGross) * ratio).toFixed(2),
+              productSku: pi.productSku,
+              productName: pi.productName,
+              batchId: null,
+            });
+          }
+        }
 
         await tx.insert(orderItems).values(itemValues);
       });
 
       return {
         totalGross: pricing.totalGross,
-        warnings: pricing.warnings,
+        warnings: [...pricing.warnings, ...selectiveAllocation.warnings],
       };
     }),
 
