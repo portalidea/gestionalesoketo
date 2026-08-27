@@ -41,6 +41,7 @@ export default function MarketplaceShopifyVariants() {
   const [search, setSearch] = useState("");
   const [onlyUnmapped, setOnlyUnmapped] = useState(initialUnmapped);
   const [page, setPage] = useState(0);
+  const [lastSyncResult, setLastSyncResult] = useState<any>(null);
   const pageSize = 25;
 
   const utils = trpc.useUtils();
@@ -56,8 +57,9 @@ export default function MarketplaceShopifyVariants() {
 
   const syncMutation = trpc.shopify.variants.syncFromShopify.useMutation({
     onSuccess: (data) => {
+      setLastSyncResult(data);
       toast.success(
-        `Sync completato: ${data.imported} nuove, ${data.updated} aggiornate, ${data.unmapped} da mappare`,
+        `Sync ${data.status}: ${data.pagesFetched} pagine, ${data.imported} nuove, ${data.updated} aggiornate`,
       );
       refetch();
     },
@@ -221,6 +223,27 @@ export default function MarketplaceShopifyVariants() {
             Sync da Shopify
           </Button>
         </div>
+
+        {lastSyncResult && (
+          <Card className={lastSyncResult.status === "completed" ? "border-emerald-300" : "border-amber-300"}>
+            <CardContent className="pt-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-medium">Ultima sincronizzazione varianti</p>
+                  <p className="text-sm text-muted-foreground">Stato: <span className={lastSyncResult.status === "completed" ? "font-medium text-emerald-700" : "font-medium text-amber-700"}>{lastSyncResult.status}</span></p>
+                </div>
+                <div className="grid grid-cols-2 gap-x-7 gap-y-3 text-sm sm:grid-cols-5">
+                  <div><p className="text-muted-foreground">Pagine lette</p><p className="text-xl font-semibold">{lastSyncResult.pagesFetched}</p></div>
+                  <div><p className="text-muted-foreground">Prodotti letti</p><p className="text-xl font-semibold">{lastSyncResult.productsFetched}</p></div>
+                  <div><p className="text-muted-foreground">Varianti lette</p><p className="text-xl font-semibold">{lastSyncResult.variantsFetched}</p></div>
+                  <div><p className="text-muted-foreground">Nuove</p><p className="text-xl font-semibold">{lastSyncResult.imported}</p></div>
+                  <div><p className="text-muted-foreground">Aggiornate</p><p className="text-xl font-semibold">{lastSyncResult.updated}</p></div>
+                </div>
+              </div>
+              {lastSyncResult.errors?.length > 0 && <div className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-950"><p className="font-medium">Sincronizzazione da verificare</p>{lastSyncResult.errors.map((error: string, index: number) => <p key={`${index}-${error}`} className="mt-1">{error}</p>)}</div>}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Filters */}
         <Card>

@@ -188,6 +188,10 @@ export const shopifyRouter = router({
           status: "partial",
           totalProducts: 0,
           totalVariants: 0,
+          pagesFetched: 0,
+          productsFetched: 0,
+          variantsFetched: 0,
+          invalidProducts: 0,
         };
       }
     }),
