@@ -641,7 +641,7 @@ export const shopifyRouter = router({
 
     getById: staffProcedure
       .input(z.object({ marketplaceOrderId: uuid }))
-      .query(async ({ input }) => {
+      .query(async ({ input, ctx }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -686,7 +686,10 @@ export const shopifyRouter = router({
             notesInternal: stockMovements.notesInternal,
           })
           .from(stockMovements)
-          .where(eq(stockMovements.marketplaceOrderId, input.marketplaceOrderId))
+          .where(and(
+            eq(stockMovements.marketplaceOrderId, input.marketplaceOrderId),
+            eq(stockMovements.companyId, ctx.activeCompanyId),
+          ))
           .orderBy(asc(stockMovements.timestamp));
 
         const canRetry =

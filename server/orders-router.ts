@@ -34,6 +34,7 @@ import { sendOrderStatusEmail } from "./services/orderEmailService";
 import { voidCommissionForOrder } from "./services/commissionService";
 import * as ficDocService from "./services/ficDocumentService";
 import { allocateBatchesSelectively } from "./services/selectiveFefoAllocation";
+import { confirmIntercompanyTransferAndAssign, getIntercompanySourceBatches } from "./services/intercompanyOrderTransfer";
 
 // --- Zod Schemas ---
 
@@ -899,6 +900,20 @@ export const ordersRouter = router({
         requiredQuantity: item.quantity,
       };
     }),
+
+  /** Preview read-only dei lotti SoKeto per una riga E-Keto senza lotto locale. */
+  getIntercompanySourceBatches: staffProcedure
+    .input(z.object({ orderItemId: uuidSchema }))
+    .query(({ input, ctx }) => getIntercompanySourceBatches(input.orderItemId, ctx.activeCompanyId)),
+
+  /** Conferma staff esplicita: travaso atomico SoKeto → E-Keto e assegnazione batch. */
+  confirmIntercompanyTransferAndAssign: staffProcedure
+    .input(z.object({ orderItemId: uuidSchema, sourceBatchId: uuidSchema }))
+    .mutation(({ input, ctx }) => confirmIntercompanyTransferAndAssign({
+      ...input,
+      actorUserId: ctx.user!.id,
+      activeCompanyId: ctx.activeCompanyId,
+    })),
 
   /**
    * 10. Genera proforma FiC e salva riferimento

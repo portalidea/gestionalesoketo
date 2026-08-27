@@ -267,6 +267,7 @@ function BatchSelector({
 }) {
   const utils = trpc.useUtils();
   const [autoSelected, setAutoSelected] = useState(false);
+  const [sourceToConfirm, setSourceToConfirm] = useState<{ batchId: string; batchNumber: string; expirationDate: string; availablePieces: number } | null>(null);
 
   const batchesQuery = trpc.orders.suggestBatchForItem.useQuery(
     { orderItemId: item.id },
@@ -283,6 +284,20 @@ function BatchSelector({
       } else {
         toast.success("Lotto rimosso");
       }
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const intercompanySources = trpc.orders.getIntercompanySourceBatches.useQuery(
+    { orderItemId: item.id },
+    { enabled: canEdit && !item.batchId },
+  );
+  const confirmIntercompany = trpc.orders.confirmIntercompanyTransferAndAssign.useMutation({
+    onSuccess: (result) => {
+      utils.orders.getById.invalidate({ id: orderId });
+      utils.orders.suggestBatchForItem.invalidate({ orderItemId: item.id });
+      utils.orders.getIntercompanySourceBatches.invalidate({ orderItemId: item.id });
+      toast.success(result.alreadyAssigned ? "Lotto già assegnato" : `Travaso completato: lotto ${result.batchNumber} assegnato`);
+      setSourceToConfirm(null);
     },
     onError: (err) => toast.error(err.message),
   });
@@ -334,7 +349,7 @@ function BatchSelector({
 
   // Editabile: mostra select con FEFO badge e stock
   return (
-    <div className="min-w-[200px]">
+    <div className="min-w-[200px] space-y-1.5">
       <Select
         value={item.batchId ?? NO_BATCH}
         onValueChange={(val) => {
@@ -381,6 +396,30 @@ function BatchSelector({
           })}
         </SelectContent>
       </Select>
+      {intercompanySources.data?.eligible && !item.batchId && (
+        <AlertDialog open={!!sourceToConfirm} onOpenChange={(open) => !open && setSourceToConfirm(null)}>
+          <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950">
+            <p className="font-medium">Nessun lotto E-Keto disponibile. Lotti nel centrale SoKeto:</p>
+            {intercompanySources.data.batches.filter((batch) => batch.canTransfer).map((batch) => (
+              <Button key={batch.batchId} type="button" variant="outline" size="sm" className="mt-1 mr-1 h-7 text-xs" onClick={() => setSourceToConfirm(batch)}>
+                Travaso {batch.batchNumber} · scad. {batch.expirationDate} · {batch.availablePieces} pz
+              </Button>
+            ))}
+          </div>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Confermi il travaso SoKeto → E-Keto?</AlertDialogTitle>
+              <AlertDialogDescription>{sourceToConfirm ? `Verranno trasferiti ${intercompanySources.data.requiredPieces} pezzi del lotto ${sourceToConfirm.batchNumber}, scadenza ${sourceToConfirm.expirationDate}, dal centrale SoKeto al centrale E-Keto. Saranno registrati due movimenti TRANSFER e il lotto sarà assegnato a questa riga.` : "Seleziona un lotto SoKeto disponibile."}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Annulla</AlertDialogCancel>
+              <AlertDialogAction disabled={!sourceToConfirm || confirmIntercompany.isPending} onClick={(event) => { event.preventDefault(); if (sourceToConfirm) confirmIntercompany.mutate({ orderItemId: item.id, sourceBatchId: sourceToConfirm.batchId }); }}>
+                {confirmIntercompany.isPending ? "Travaso in corso…" : "Conferma travaso"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
     </div>
   );
 }

@@ -17,7 +17,7 @@ import { sql } from "drizzle-orm";
 import { staffProcedure, adminProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
 import { uuidSchema } from "../shared/schemas";
-import { PROMO_REFERENCE_DISCOUNT } from "../shared/const";
+import { EKETO_COMPANY_ID, PROMO_REFERENCE_DISCOUNT, SOKETO_COMPANY_ID } from "../shared/const";
 
 // ============= HELPERS =============
 
@@ -45,6 +45,27 @@ function parseDateRange(input: { dateFrom?: string; dateTo?: string }) {
     return { dateFrom: new Date(input.dateFrom), dateTo: new Date(input.dateTo) };
   }
   return getDefaultDateRange();
+}
+
+async function loadIntercompanyTransfers(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, dateFrom: Date, dateTo: Date) {
+  const rows = await db.execute<any>(sql`
+    SELECT sm.id, sm."timestamp", p."name" AS "productName", p.sku AS "productSku",
+      pb."batchNumber", sm.quantity, pb."costPrice"::text AS "unitCost",
+      (sm.quantity * pb."costPrice")::text AS "totalCost", o.id AS "orderId",
+      o."orderNumber", o.status AS "orderStatus", u.name AS "operatorName"
+    FROM "stockMovements" sm
+    INNER JOIN products p ON p.id = sm."productId"
+    INNER JOIN "productBatches" pb ON pb.id = sm."batchId"
+    LEFT JOIN orders o ON o.id::text = sm."sourceDocument"
+    LEFT JOIN users u ON u.id = sm."createdBy"
+    WHERE sm.type = 'TRANSFER'
+      AND sm."companyId" = ${SOKETO_COMPANY_ID}::uuid
+      AND sm."sourceDocumentType" = 'intercompany_transfer'
+      AND sm."timestamp" >= ${dateFrom.toISOString()}::timestamptz
+      AND sm."timestamp" <= ${dateTo.toISOString()}::timestamptz
+    ORDER BY sm."timestamp" DESC
+  `);
+  return (rows as any[]).map((row) => ({ ...row, direction: "SoKeto → E-Keto" }));
 }
 
 // ============= WAREHOUSE REPORTS =============
@@ -1105,6 +1126,36 @@ const promozioniRouter = router({
     }),
 });
 
+const intercompanyTransfersRouter = router({
+  getMonthly: adminProcedure
+    .input(dateRangeInput)
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("DB non disponibile");
+      const { dateFrom, dateTo } = parseDateRange(input);
+      const items = await loadIntercompanyTransfers(db, dateFrom, dateTo);
+      return {
+        items,
+        totalCost: items.reduce((sum, item) => sum + Number(item.totalCost ?? 0), 0),
+        sourceCompanyId: SOKETO_COMPANY_ID,
+        destinationCompanyId: EKETO_COMPANY_ID,
+      };
+    }),
+  exportCsv: adminProcedure
+    .input(dateRangeInput)
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("DB non disponibile");
+      const { dateFrom, dateTo } = parseDateRange(input);
+      const items = await loadIntercompanyTransfers(db, dateFrom, dateTo);
+      let csvContent = "Data;Direzione;Prodotto;SKU;Lotto;Quantità;Costo unitario;Costo totale;Ordine;Stato ordine;Operatore\n";
+      for (const row of items) {
+        csvContent += `${formatDateCSV(row.timestamp)};${row.direction};${escCsv(row.productName)};${escCsv(row.productSku)};${escCsv(row.batchNumber)};${row.quantity};${formatNumIT(Number(row.unitCost))};${formatNumIT(Number(row.totalCost))};${escCsv(row.orderNumber ?? "")};${row.orderStatus ?? ""};${escCsv(row.operatorName ?? "")}\n`;
+      }
+      return { csvContent, filename: `travasi_intercompany_${formatFilenameDate(dateFrom)}_${formatFilenameDate(dateTo)}.csv` };
+    }),
+});
+
 // ============= COMBINED ROUTER =============
 
 export const reportsRouter = router({
@@ -1112,5 +1163,6 @@ export const reportsRouter = router({
   sales: salesRouter,
   marketplace: marketplaceRouter,
   promozioni: promozioniRouter,
+  intercompanyTransfers: intercompanyTransfersRouter,
   export: exportRouter,
 });

@@ -1,4 +1,4 @@
-import { and, asc, eq, gt } from "drizzle-orm";
+import { and, asc, eq, gt, inArray } from "drizzle-orm";
 import { inventoryByBatch, locations, productBatches } from "../../drizzle/schema";
 import { getDb } from "../db";
 
@@ -57,15 +57,13 @@ export async function allocateBatchesSelectively({
   const allocationsByProduct = new Map<string, BatchAllocation[]>();
   const warnings: string[] = [];
 
-  for (const item of items) {
-    const allocations: BatchAllocation[] = [];
-    const piecesPerUnit = item.piecesPerUnit ?? 1;
-    let remaining = item.quantity;
-    let reassignedUnavailableBatch = false;
-
-    if (warehouse) {
-      const availableBatches = await db
+  // Una sola lettura FEFO per tutti i prodotti dell'ordine. Il grouping
+  // successivo mantiene il comportamento per-prodotto senza una query N+1.
+  const uniqueProductIds = Array.from(new Set(items.map((item) => item.productId)));
+  const availableBatches = warehouse && uniqueProductIds.length > 0
+    ? await db
         .select({
+          productId: productBatches.productId,
           batchId: productBatches.id,
           batchNumber: productBatches.batchNumber,
           expirationDate: productBatches.expirationDate,
@@ -81,17 +79,33 @@ export async function allocateBatchesSelectively({
         )
         .where(
           and(
-            eq(productBatches.productId, item.productId),
+            inArray(productBatches.productId, uniqueProductIds),
             eq(productBatches.companyId, companyId),
             gt(inventoryByBatch.quantity, 0),
           ),
         )
-        .orderBy(asc(productBatches.expirationDate));
+        .orderBy(asc(productBatches.productId), asc(productBatches.expirationDate))
+    : [];
+  const availableBatchesByProduct = new Map<string, typeof availableBatches>();
+  for (const batch of availableBatches) {
+    const grouped = availableBatchesByProduct.get(batch.productId) ?? [];
+    grouped.push(batch);
+    availableBatchesByProduct.set(batch.productId, grouped);
+  }
+
+  for (const item of items) {
+    const allocations: BatchAllocation[] = [];
+    const piecesPerUnit = item.piecesPerUnit ?? 1;
+    let remaining = item.quantity;
+    let reassignedUnavailableBatch = false;
+
+    if (warehouse) {
+      const productAvailableBatches = availableBatchesByProduct.get(item.productId) ?? [];
 
       const remainingByBatch = new Map(
-        availableBatches.map((batch) => [batch.batchId, Math.floor(batch.centralStock / piecesPerUnit)]),
+        productAvailableBatches.map((batch) => [batch.batchId, Math.floor(batch.centralStock / piecesPerUnit)]),
       );
-      const batchById = new Map(availableBatches.map((batch) => [batch.batchId, batch]));
+      const batchById = new Map(productAvailableBatches.map((batch) => [batch.batchId, batch]));
 
       // Quando la quantità diminuisce, preserva prima le righe con scadenza più prossima.
       const priorAssignments = existingAssignments
@@ -130,7 +144,7 @@ export async function allocateBatchesSelectively({
       }
 
       // La parte non preservabile viene assegnata FEFO, evitando quantità già riservate sopra.
-      for (const batch of availableBatches) {
+      for (const batch of productAvailableBatches) {
         if (remaining <= 0) break;
         const availableUnits = remainingByBatch.get(batch.batchId) ?? 0;
         if (availableUnits <= 0) continue;

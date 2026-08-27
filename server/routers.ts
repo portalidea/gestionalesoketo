@@ -274,7 +274,7 @@ export const appRouter = router({
         const inventoryItems = await db.getInventoryByBatchByRetailer(input.id);
         const tInv = Date.now() - t1;
         const t2 = Date.now();
-        const recentMovements = await db.getStockMovementsByRetailer(input.id, 50);
+        const recentMovements = await db.getStockMovementsByRetailer(input.id, ctx.activeCompanyId, 50);
         const tMov = Date.now() - t2;
         const t3 = Date.now();
         const retailerAlerts = await db.getAlertsByRetailer(input.id);
@@ -400,10 +400,10 @@ export const appRouter = router({
 
     dependentsCount: staffProcedure
       .input(z.object({ id: uuid }))
-      .query(async ({ input }) => {
+      .query(async ({ input, ctx }) => {
         const t0 = Date.now();
         console.log('[dependentsCount] start', { retailerId: input.id });
-        const r = await db.getRetailerDependentsCount(input.id);
+        const r = await db.getRetailerDependentsCount(input.id, ctx.activeCompanyId);
         const totalMs = Date.now() - t0;
         console.log('[dependentsCount] DONE', { ...r, total_ms: totalMs });
         return r;
@@ -1036,18 +1036,20 @@ export const appRouter = router({
 
     listByRetailer: staffProcedure
       .input(z.object({ retailerId: uuid, limit: z.number().int().optional() }))
-      .query(async ({ input }) => {
+      .query(async ({ input, ctx }) => {
         return await db.getStockMovementsByRetailer(
           input.retailerId,
+          ctx.activeCompanyId,
           input.limit ?? 100,
         );
       }),
 
     listByLocation: staffProcedure
       .input(z.object({ locationId: uuid, limit: z.number().int().optional() }))
-      .query(async ({ input }) => {
+      .query(async ({ input, ctx }) => {
         return await db.getStockMovementsByLocationId(
           input.locationId,
+          ctx.activeCompanyId,
           input.limit ?? 100,
         );
       }),
@@ -1083,8 +1085,9 @@ export const appRouter = router({
           offset: z.number().int().min(0).optional(),
         }),
       )
-      .query(async ({ input }) => {
+      .query(async ({ input, ctx }) => {
         return await db.getStockMovementsAll({
+          companyId: ctx.activeCompanyId,
           type: input.type,
           locationId: input.locationId,
           batchSearch: input.batchSearch,
