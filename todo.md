@@ -165,3 +165,16 @@
 - [x] Esporre nel pannello pagesFetched, productsFetched, variantsFetched, imported e updated
 - [x] Testare i due formati Link e i due esiti senza header richiesti
 - [ ] Committare, pushare e fondere su main la correzione della paginazione Shopify dopo autorizzazione esplicita
+
+## Audit Shopify — varianti mancanti dopo sync
+- [ ] Verificare bundle UI pubblicato, osservabilità server e punto esatto di perdita delle nuove SKU Shopify senza correggere prima della diagnosi
+
+## Audit Shopify — fallimento bulk upsert varianti
+- [ ] Ricostruire in sola lettura errore PostgreSQL completo e catalogo reale delle colonne inserite prima di correggere il writer o introdurre retry per-riga
+
+## Shopify — bulk upsert varianti duplicate
+- [x] Deduplicare per store e SKU tenendo l’ultima variante Shopify e riportare le SKU duplicate
+- [x] Esporre message, code, detail e constraint dagli errori PostgreSQL della sync
+- [x] Ritentare per-riga un chunk bulk fallito e riportare le SKU non scrivibili
+- [x] Testare un chunk con SKU duplicate senza fallimento delle altre varianti
+- [ ] Committare, pushare e fondere su main la correzione delle SKU duplicate Shopify dopo autorizzazione esplicita

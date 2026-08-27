@@ -240,7 +240,8 @@ export default function MarketplaceShopifyVariants() {
                   <div><p className="text-muted-foreground">Aggiornate</p><p className="text-xl font-semibold">{lastSyncResult.updated}</p></div>
                 </div>
               </div>
-              {lastSyncResult.errors?.length > 0 && <div className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-950"><p className="font-medium">Sincronizzazione da verificare</p>{lastSyncResult.errors.map((error: string, index: number) => <p key={`${index}-${error}`} className="mt-1">{error}</p>)}</div>}
+              {lastSyncResult.duplicateSkus?.length > 0 && <div className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-950"><p className="font-medium">SKU duplicate su Shopify ({lastSyncResult.duplicateSkus.length})</p><p className="mt-1">È stata mantenuta l’ultima occorrenza ricevuta per ciascuna SKU: {lastSyncResult.duplicateSkus.join(", ")}</p></div>}
+              {lastSyncResult.errors?.length > 0 && <div className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-950"><p className="font-medium">Sincronizzazione da verificare</p>{lastSyncResult.errors.map((error: string, index: number) => <p key={`${index}-${error}`} className="mt-1">{error}</p>)}{lastSyncResult.failedSkus?.length > 0 && <p className="mt-2 font-medium">SKU non scrivibili: {lastSyncResult.failedSkus.join(", ")}</p>}{lastSyncResult.errorDetails?.map((detail: any, index: number) => <p key={`${detail.scope}-${detail.sku ?? detail.chunk}-${index}`} className="mt-1 font-mono text-xs">{detail.scope}{detail.sku ? ` ${detail.sku}` : detail.chunk ? ` chunk ${detail.chunk}` : ""}: {detail.message}{detail.code ? ` · code=${detail.code}` : ""}{detail.constraint ? ` · constraint=${detail.constraint}` : ""}{detail.detail ? ` · ${detail.detail}` : ""}</p>)}</div>}
             </CardContent>
           </Card>
         )}
