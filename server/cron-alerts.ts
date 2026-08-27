@@ -24,6 +24,7 @@ import { sendEmail } from "./email";
 import { ENV } from "./_core/env";
 import { evaluateTierEngineForCompany, isMonthlyTierEvaluationDate } from "./services/tierEngineService";
 import { runExpiryAlertForCompany } from "./services/expiryAlertService";
+import { runScheduledShopifyOrderSync, type ShopifyOrdersFetcher, type ShopifyScheduledSyncStoreResult } from "./services/marketplaceOrderService";
 
 export const cronAlertRoutes = Router();
 
@@ -39,6 +40,11 @@ export type ScheduledDispatcherResult = {
     enabled: boolean;
     companies: number;
     results: Array<Awaited<ReturnType<typeof runExpiryAlertForCompany>>>;
+  };
+  shopifyOrderSync: {
+    scheduled: boolean;
+    stores: number;
+    results: ShopifyScheduledSyncStoreResult[];
   };
 };
 
@@ -289,7 +295,11 @@ cronAlertRoutes.get("/cron/tier-evaluation", async (req: Request, res: Response)
  * Vercel disponibile. Il primo giorno mantiene la valutazione tier; il decimo
  * esegue M13 in sola modalità alert e persiste i soli snapshot operativi.
  */
-export async function runScheduledDispatcher(input: { now?: Date; m13CronEnabled?: boolean } = {}): Promise<ScheduledDispatcherResult> {
+export async function runScheduledDispatcher(input: {
+  now?: Date;
+  m13CronEnabled?: boolean;
+  shopifyFetchOrders?: ShopifyOrdersFetcher;
+} = {}): Promise<ScheduledDispatcherResult> {
   const now = input.now ?? new Date();
   const database = await getDb();
   if (!database) throw new Error("DB unavailable");
@@ -339,10 +349,21 @@ export async function runScheduledDispatcher(input: { now?: Date; m13CronEnabled
     }
   }
 
+  // Shopify è un polling giornaliero deterministico, senza un secondo cron
+  // Vercel. Ogni store applica internamente il proprio cutoff e il vincolo
+  // (storeId, channelOrderId) elimina gli import duplicati nella sovrapposizione.
+  const shopifySync = await runScheduledShopifyOrderSync({ now, fetchOrders: input.shopifyFetchOrders });
+  const shopifyOrderSync: ScheduledDispatcherResult["shopifyOrderSync"] = {
+    scheduled: true,
+    stores: shopifySync.stores.length,
+    results: shopifySync.stores,
+  };
+
   return {
     date: now.toISOString().slice(0, 10),
     tierEvaluation,
     expiryAlerts,
+    shopifyOrderSync,
   };
 }
 

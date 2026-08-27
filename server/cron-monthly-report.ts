@@ -201,6 +201,7 @@ cronRoutes.get("/cron/shopify-stock-sync", async (req: Request, res: Response) =
 
     let imported = 0;
     let duplicates = 0;
+    let skipped = 0;
     let processedStock = 0;
     let failed = 0;
 
@@ -209,6 +210,10 @@ cronRoutes.get("/cron/shopify-stock-sync", async (req: Request, res: Response) =
         const importResult = await importShopifyOrder(store.id, shopifyOrder);
         if (importResult.status === "duplicate") {
           duplicates++;
+          continue;
+        }
+        if (importResult.status !== "imported" || !importResult.marketplaceOrderId) {
+          skipped++;
           continue;
         }
         imported++;
@@ -233,7 +238,7 @@ cronRoutes.get("/cron/shopify-stock-sync", async (req: Request, res: Response) =
       .where(eq(salesStores.id, store.id));
 
     console.log(
-      `[cron/shopify-stock-sync] fetched=${allOrders.length} imported=${imported} duplicates=${duplicates} processedStock=${processedStock} failed=${failed} retried=${retryResult.retried} retrySucceeded=${retryResult.succeeded}`,
+      `[cron/shopify-stock-sync] fetched=${allOrders.length} imported=${imported} duplicates=${duplicates} skipped=${skipped} processedStock=${processedStock} failed=${failed} retried=${retryResult.retried} retrySucceeded=${retryResult.succeeded}`,
     );
 
     res.json({
@@ -241,6 +246,7 @@ cronRoutes.get("/cron/shopify-stock-sync", async (req: Request, res: Response) =
       fetched: allOrders.length,
       imported,
       duplicates,
+      skipped,
       processedStock,
       failed,
       retried: retryResult.retried,

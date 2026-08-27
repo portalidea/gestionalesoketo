@@ -44,6 +44,7 @@ export default function MarketplaceShopify() {
   const [name, setName] = useState("");
   const [storeIdentifier, setStoreIdentifier] = useState("");
   const [accessToken, setAccessToken] = useState("");
+  const [orderImportStartDate, setOrderImportStartDate] = useState("2026-09-01");
 
   const configureMutation = trpc.shopify.store.configure.useMutation({
     onSuccess: (data) => {
@@ -143,10 +144,10 @@ export default function MarketplaceShopify() {
                 className="space-y-4"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  configureMutation.mutate({ name, storeIdentifier, accessToken });
+                  configureMutation.mutate({ name, storeIdentifier, accessToken, orderImportStartDate });
                 }}
               >
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="store-name">Nome Store</Label>
                     <Input
@@ -177,6 +178,19 @@ export default function MarketplaceShopify() {
                       onChange={(e) => setAccessToken(e.target.value)}
                       required
                     />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="order-import-start-date">Data inizio import</Label>
+                    <Input
+                      id="order-import-start-date"
+                      type="date"
+                      value={orderImportStartDate}
+                      onChange={(e) => setOrderImportStartDate(e.target.value)}
+                      required
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Gli ordini precedenti non saranno mai importati né scaricati.
+                    </p>
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -214,6 +228,9 @@ export default function MarketplaceShopify() {
                     <p>Ultimo sync: {new Date(store.lastSyncAt).toLocaleString("it-IT")}</p>
                   ) : (
                     <p>Mai sincronizzato</p>
+                  )}
+                  {store.orderImportStartDate && (
+                    <p>Import da: {new Date(`${store.orderImportStartDate}T00:00:00`).toLocaleDateString("it-IT")}</p>
                   )}
                   <Badge variant={store.isConfigured ? "default" : "destructive"} className="mt-1">
                     {store.isConfigured ? "Connesso" : "Non configurato"}
