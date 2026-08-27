@@ -32,6 +32,9 @@ export const SOKETO_SRL_RETAILER_ID = SOKETO_SRL_INTERCOMPANY_LOCATION_ID;
  */
 export const SOKETO_COMPANY_ID = "00000000-0000-0000-0000-000000000002";
 
+/** ID company E-Keto Food nel sistema multi-tenant. */
+export const EKETO_COMPANY_ID = "00000000-0000-0000-0000-000000000001";
+
 export const AXIOS_TIMEOUT_MS = 30_000;
 export const UNAUTHED_ERR_MSG = "Please login (10001)";
 export const NOT_ADMIN_ERR_MSG = "You do not have required permission (10002)";

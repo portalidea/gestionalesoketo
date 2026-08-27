@@ -228,7 +228,7 @@ export async function updateRetailer(id: string, data: Partial<InsertRetailer>) 
  * `inventory` legacy. La shape esposta resta la stessa per compatibilità
  * con il dialog frontend.
  */
-export async function getRetailerDependentsCount(id: string) {
+export async function getRetailerDependentsCount(id: string, companyId: string) {
   const db = await getDb();
   if (!db) return { inventory: 0, stockMovements: 0, alerts: 0, syncLogs: 0 };
   const [inv, mov, alr, syn] = await Promise.all([
@@ -237,7 +237,7 @@ export async function getRetailerDependentsCount(id: string) {
       .from(inventoryByBatch)
       .innerJoin(locations, eq(inventoryByBatch.locationId, locations.id))
       .where(eq(locations.retailerId, id)),
-    db.select({ c: sql<number>`count(*)::int` }).from(stockMovements).where(eq(stockMovements.retailerId, id)),
+    db.select({ c: sql<number>`count(*)::int` }).from(stockMovements).where(and(eq(stockMovements.retailerId, id), eq(stockMovements.companyId, companyId))),
     db.select({ c: sql<number>`count(*)::int` }).from(alerts).where(eq(alerts.retailerId, id)),
     db.select({ c: sql<number>`count(*)::int` }).from(syncLogs).where(eq(syncLogs.retailerId, id)),
   ]);
@@ -1422,6 +1422,7 @@ export async function getWarehouseStockOverview(companyId?: string) {
  */
 export async function getStockMovementsByLocationId(
   locationId: string,
+  companyId: string,
   limit = 100,
 ) {
   const db = await getDb();
@@ -1464,12 +1465,13 @@ export async function getStockMovementsByLocationId(
       sql`${locations} AS to_loc`,
       sql`to_loc.id = ${stockMovements.toLocationId}`,
     )
-    .where(
+    .where(and(
+      eq(stockMovements.companyId, companyId),
       or(
         eq(stockMovements.fromLocationId, locationId),
         eq(stockMovements.toLocationId, locationId),
       ),
-    )
+    ))
     .orderBy(desc(stockMovements.timestamp))
     .limit(limit);
 }
@@ -1488,6 +1490,7 @@ export async function getStockMovementsByLocationId(
  * paginazione client-side.
  */
 export async function getStockMovementsAll(filters: {
+  companyId: string;
   type?:
     | "IN"
     | "OUT"
@@ -1508,7 +1511,7 @@ export async function getStockMovementsAll(filters: {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
 
-  const conditions: SQL[] = [];
+  const conditions: SQL[] = [eq(stockMovements.companyId, filters.companyId)];
   if (filters.type) conditions.push(eq(stockMovements.type, filters.type));
   if (filters.locationId) {
     const locOr = or(
@@ -1596,12 +1599,12 @@ export async function getStockMovementsAll(filters: {
  * Fallback per movements legacy con `retailerId` popolato e
  * `from/toLocationId` NULL: include anche quelli.
  */
-export async function getStockMovementsByRetailer(retailerId: string, limit = 100) {
+export async function getStockMovementsByRetailer(retailerId: string, companyId: string, limit = 100) {
   const db = await getDb();
   if (!db) return [];
 
   const retailerLoc = await getRetailerLocation(retailerId);
-  if (!retailerLoc) return [];
+  if (!retailerLoc || retailerLoc.companyId !== companyId) return [];
 
   return db
     .select({
@@ -1637,13 +1640,14 @@ export async function getStockMovementsByRetailer(retailerId: string, limit = 10
       sql`${locations} AS to_loc`,
       sql`to_loc.id = ${stockMovements.toLocationId}`,
     )
-    .where(
+    .where(and(
+      eq(stockMovements.companyId, companyId),
       or(
         eq(stockMovements.fromLocationId, retailerLoc.id),
         eq(stockMovements.toLocationId, retailerLoc.id),
         eq(stockMovements.retailerId, retailerId),
       ),
-    )
+    ))
     .orderBy(desc(stockMovements.timestamp))
     .limit(limit);
 }

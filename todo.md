@@ -89,6 +89,20 @@
 - [x] Eseguire M13 alert-only il giorno 10 con M13_CRON_ENABLED=true, senza chiamare il gateway email
 - [x] Verificare in database isolato run completed, emails_sent=0, notifiche/item persistiti e zero righe email_log
 
+## Travaso inter-company SoKeto → E-Keto
+- [x] Ottimizzare allocatore FEFO con una query batch per tutti i prodotti ordine
+- [x] Implementare preview staff e conferma atomica del travaso con due TRANSFER collegati
+- [x] Implementare UI ordine e report mensile travasi con export CSV
+- [x] Eseguire sette test isolati con evidenze giacenze, movimenti e annullamento senza contro-travaso
+- [x] Preparare migration 0035 di soli indici per report e ricerca travasi, senza applicarla
+- [x] Aggiungere test concorrente sulla stessa riga ordine: un solo travaso e due movimenti
+- [x] Auditare letture e viste per ambiguità da fromLocationId cross-company e proporre correzione senza applicarla
+- [x] Correggere le due righe ledger travaso affinché ciascuna referenzi solo la location della propria company
+- [x] Applicare activeCompanyId a tutte le procedure di lettura stockMovements, eccetto vista aggregata protetta
+- [x] Testare visibilità del ledger per company e isolamento di un utente mono-company
+- [ ] Preparare query read-only di impatto del filtro companyId sui movimenti cross-company
+- [ ] Committare e pushare feature/intercompany-transfer-soketo-to-eketo senza merge su main
+
 ## Test e Documentazione
 - [x] Scrivere test per procedure critiche
 - [ ] Creare documentazione tecnica
