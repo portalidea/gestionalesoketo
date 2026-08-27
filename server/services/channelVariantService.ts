@@ -22,6 +22,10 @@ export interface SyncVariantsResult {
   updated: number;
   unmapped: number;
   errors: string[];
+  duplicateSkus: string[];
+  failedSkus: string[];
+  errorDetails: VariantSyncErrorDetail[];
+  recoveredChunkCount: number;
   status: "completed" | "partial" | "timeout";
   totalProducts: number;
   totalVariants: number;
@@ -31,9 +35,118 @@ export interface SyncVariantsResult {
   invalidProducts: number;
 }
 
+export interface VariantSyncErrorDetail {
+  scope: "chunk" | "row";
+  message: string;
+  code?: string;
+  detail?: string;
+  constraint?: string;
+  sku?: string;
+  chunk?: number;
+  recoveredByRowRetry: boolean;
+}
+
+export type ShopifyVariantUpsertRow = {
+  storeId: string;
+  channelSku: string;
+  channelProductId: string;
+  channelVariantId: string;
+  displayName: string;
+  multiplier: number;
+  isActive: boolean;
+};
+
 // ─── Sync Variants from Shopify (bulk upsert) ───────────────────────────────
 
 const CHUNK_SIZE = 200;
+
+/**
+ * PostgreSQL non permette alla stessa chiave ON CONFLICT di essere aggiornata
+ * due volte nello stesso INSERT. Per una SKU duplicata su Shopify viene
+ * mantenuta intenzionalmente l’ultima occorrenza ricevuta.
+ */
+export function deduplicateShopifyVariantRows(rows: ShopifyVariantUpsertRow[]): {
+  rows: ShopifyVariantUpsertRow[];
+  duplicateSkus: string[];
+} {
+  const latestByKey = new Map<string, ShopifyVariantUpsertRow>();
+  const duplicateSkus = new Set<string>();
+  for (const row of rows) {
+    const key = `${row.storeId}:${row.channelSku}`;
+    if (latestByKey.has(key)) duplicateSkus.add(row.channelSku);
+    latestByKey.set(key, row);
+  }
+  return {
+    rows: Array.from(latestByKey.values()),
+    duplicateSkus: Array.from(duplicateSkus).sort(),
+  };
+}
+
+export function getVariantSyncErrorDetail(
+  error: unknown,
+  context: Pick<VariantSyncErrorDetail, "scope" | "sku" | "chunk" | "recoveredByRowRetry">,
+): VariantSyncErrorDetail {
+  const topLevel = error as Record<string, unknown> | undefined;
+  const cause = topLevel?.cause as Record<string, unknown> | undefined;
+  const source = cause && typeof cause === "object" ? cause : topLevel;
+  const readString = (key: string) => typeof source?.[key] === "string" ? source[key] : undefined;
+  return {
+    ...context,
+    message: readString("message") ?? (error instanceof Error ? error.message : String(error)),
+    code: readString("code"),
+    detail: readString("detail"),
+    constraint: readString("constraint"),
+  };
+}
+
+export interface VariantChunkUpsertResult {
+  upsertedCount: number;
+  failedSkus: string[];
+  errorDetails: VariantSyncErrorDetail[];
+  recoveredByRowRetry: boolean;
+}
+
+export async function upsertVariantChunkWithFallback(
+  chunk: ShopifyVariantUpsertRow[],
+  chunkNum: number,
+  totalChunks: number,
+  upsertRows: (rows: ShopifyVariantUpsertRow[]) => Promise<unknown>,
+): Promise<VariantChunkUpsertResult> {
+  try {
+    await upsertRows(chunk);
+    return { upsertedCount: chunk.length, failedSkus: [], errorDetails: [], recoveredByRowRetry: false };
+  } catch (chunkErr: unknown) {
+    const chunkDetail = getVariantSyncErrorDetail(chunkErr, {
+      scope: "chunk", chunk: chunkNum, recoveredByRowRetry: true,
+    });
+    console.error(
+      `[channelVariantService.sync] chunk ${chunkNum}/${totalChunks} failed; retrying ${chunk.length} rows individually`,
+      chunkDetail,
+    );
+    const failedSkus: string[] = [];
+    const errorDetails: VariantSyncErrorDetail[] = [chunkDetail];
+    let upsertedCount = 0;
+    for (const row of chunk) {
+      try {
+        await upsertRows([row]);
+        upsertedCount++;
+      } catch (rowErr: unknown) {
+        const rowDetail = getVariantSyncErrorDetail(rowErr, {
+          scope: "row", sku: row.channelSku, chunk: chunkNum, recoveredByRowRetry: false,
+        });
+        failedSkus.push(row.channelSku);
+        errorDetails.push(rowDetail);
+        console.error(`[channelVariantService.sync] SKU ${row.channelSku} failed in fallback`, rowDetail);
+      }
+    }
+    return {
+      upsertedCount,
+      failedSkus,
+      errorDetails,
+      recoveredByRowRetry: upsertedCount > 0,
+    };
+  }
+}
 
 export function resolveVariantSyncOutcome(errors: string[], paginationError?: string): {
   errors: string[];
@@ -84,6 +197,10 @@ export async function syncVariantsFromShopify(
       updated: 0,
       unmapped: 0,
       errors: [`Errore fetch prodotti da Shopify: ${fetchErr.message}`],
+      duplicateSkus: [],
+      failedSkus: [],
+      errorDetails: [],
+      recoveredChunkCount: 0,
       status: "partial",
       totalProducts: 0,
       totalVariants: 0,
@@ -101,15 +218,7 @@ export async function syncVariantsFromShopify(
   );
 
   // 3. Flatten all variants into upsert-ready rows
-  const allRows: Array<{
-    storeId: string;
-    channelSku: string;
-    channelProductId: string;
-    channelVariantId: string;
-    displayName: string;
-    multiplier: number;
-    isActive: boolean;
-  }> = [];
+  const allRows: ShopifyVariantUpsertRow[] = [];
 
   for (const product of products) {
     for (const variant of product.variants) {
@@ -131,17 +240,23 @@ export async function syncVariantsFromShopify(
     }
   }
 
+  const deduplicated = deduplicateShopifyVariantRows(allRows);
+  const uniqueRows = deduplicated.rows;
   console.log(
-    `[channelVariantService.sync] prepared ${allRows.length} variant rows for bulk upsert`,
+    `[channelVariantService.sync] prepared variants=${allRows.length} uniqueRows=${uniqueRows.length} duplicateSkus=${deduplicated.duplicateSkus.length}`,
   );
 
-  if (allRows.length === 0) {
+  if (uniqueRows.length === 0) {
     const outcome = resolveVariantSyncOutcome([], fetchedCatalog.paginationError);
     return {
       imported: 0,
       updated: 0,
       unmapped: 0,
       errors: outcome.errors,
+      duplicateSkus: deduplicated.duplicateSkus,
+      failedSkus: [],
+      errorDetails: [],
+      recoveredChunkCount: 0,
       status: outcome.status,
       totalProducts: products.length,
       totalVariants: 0,
@@ -158,41 +273,54 @@ export async function syncVariantsFromShopify(
     .from(channelVariants)
     .where(eq(channelVariants.storeId, storeId));
 
-  // 5. Bulk upsert in chunks
+  // 5. Bulk upsert in chunks. Se un chunk fallisce, ogni riga viene
+  // ritentata per non perdere tutte le SKU sane dello stesso blocco.
   const errors: string[] = [];
+  const failedSkus: string[] = [];
+  const errorDetails: VariantSyncErrorDetail[] = [];
+  let recoveredChunkCount = 0;
   let upsertedTotal = 0;
 
-  for (let i = 0; i < allRows.length; i += CHUNK_SIZE) {
-    const chunk = allRows.slice(i, i + CHUNK_SIZE);
+  const upsertRows = async (rows: ShopifyVariantUpsertRow[]) =>
+    db
+      .insert(channelVariants)
+      .values(rows)
+      .onConflictDoUpdate({
+        target: [channelVariants.storeId, channelVariants.channelSku],
+        set: {
+          channelProductId: sql`EXCLUDED."channelProductId"`,
+          channelVariantId: sql`EXCLUDED."channelVariantId"`,
+          displayName: sql`EXCLUDED."displayName"`,
+          updatedAt: new Date(),
+          // productId e multiplier restano gestiti dall'operatore.
+        },
+      });
+
+  for (let i = 0; i < uniqueRows.length; i += CHUNK_SIZE) {
+    const chunk = uniqueRows.slice(i, i + CHUNK_SIZE);
     const chunkNum = Math.floor(i / CHUNK_SIZE) + 1;
-    const totalChunks = Math.ceil(allRows.length / CHUNK_SIZE);
+    const totalChunks = Math.ceil(uniqueRows.length / CHUNK_SIZE);
 
-    try {
-      await db
-        .insert(channelVariants)
-        .values(chunk)
-        .onConflictDoUpdate({
-          target: [channelVariants.storeId, channelVariants.channelSku],
-          set: {
-            channelProductId: sql`EXCLUDED."channelProductId"`,
-            channelVariantId: sql`EXCLUDED."channelVariantId"`,
-            displayName: sql`EXCLUDED."displayName"`,
-            updatedAt: new Date(),
-            // DO NOT overwrite productId, multiplier (admin manages those)
-          },
-        });
-
-      upsertedTotal += chunk.length;
+    const result = await upsertVariantChunkWithFallback(
+      chunk,
+      chunkNum,
+      totalChunks,
+      upsertRows,
+    );
+    upsertedTotal += result.upsertedCount;
+    failedSkus.push(...result.failedSkus);
+    errorDetails.push(...result.errorDetails);
+    if (result.recoveredByRowRetry) recoveredChunkCount++;
+    if (result.errorDetails.length === 0) {
       console.log(
         `[channelVariantService.sync] chunk ${chunkNum}/${totalChunks} done (${chunk.length} rows, cumulative ${upsertedTotal})`,
       );
-    } catch (chunkErr: any) {
-      errors.push(
-        `Chunk ${chunkNum}/${totalChunks}: ${chunkErr.message}`,
-      );
-      console.error(
-        `[channelVariantService.sync] chunk ${chunkNum} failed: ${chunkErr.message}`,
-      );
+    } else {
+      for (const detail of result.errorDetails) {
+        if (detail.scope === "row") {
+          errors.push(`SKU ${detail.sku}: ${detail.message}`);
+        }
+      }
     }
   }
 
@@ -229,6 +357,10 @@ export async function syncVariantsFromShopify(
     updated,
     unmapped,
     errors: outcome.errors,
+    duplicateSkus: deduplicated.duplicateSkus,
+    failedSkus,
+    errorDetails,
+    recoveredChunkCount,
     status: outcome.status,
     totalProducts: products.length,
     totalVariants: allRows.length,
