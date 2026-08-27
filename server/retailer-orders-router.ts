@@ -25,6 +25,7 @@ import {
 import { createFicProformaForCompany, getRetailerFicClientId } from "./fic-integration";
 import { sendEmail } from "./email";
 import { uuidSchema } from "../shared/schemas";
+import { allocateBatchesSelectively } from "./services/selectiveFefoAllocation";
 
 export const retailerOrdersRouter = router({
   /**
@@ -219,66 +220,23 @@ export const retailerOrdersRouter = router({
         });
       }
 
-      // Auto-FEFO (M11.A: filtro companyId)
-      const [warehouse] = await db
-        .select({ id: locations.id })
-        .from(locations)
-        .where(and(eq(locations.type, "central_warehouse"), eq(locations.companyId, ctx.activeCompanyId)))
-        .limit(1);
-
-      type BatchAllocation = {
-        productId: string;
-        batchId: string;
-        quantity: number;
-        batchNumber: string;
-        expirationDate: string;
-      };
-      const allAllocations: (typeof pricing.items[0] & { allocations: BatchAllocation[] })[] = [];
-
-      for (const pi of pricing.items) {
-        const allocations: BatchAllocation[] = [];
-        let remaining = pi.quantity;
-
-        if (warehouse) {
-          const availableBatches = await db
-            .select({
-              batchId: productBatches.id,
-              batchNumber: productBatches.batchNumber,
-              expirationDate: productBatches.expirationDate,
-              centralStock: inventoryByBatch.quantity,
-            })
-            .from(productBatches)
-            .innerJoin(
-              inventoryByBatch,
-              and(
-                eq(inventoryByBatch.batchId, productBatches.id),
-                eq(inventoryByBatch.locationId, warehouse.id),
-              ),
-            )
-            .where(
-              and(
-                eq(productBatches.productId, pi.productId),
-                gt(inventoryByBatch.quantity, 0),
-              ),
-            )
-            .orderBy(asc(productBatches.expirationDate));
-
-          for (const batch of availableBatches) {
-            if (remaining <= 0) break;
-            const allocQty = Math.min(remaining, batch.centralStock);
-            allocations.push({
-              productId: pi.productId,
-              batchId: batch.batchId,
-              quantity: allocQty,
-              batchNumber: batch.batchNumber,
-              expirationDate: batch.expirationDate,
-            });
-            remaining -= allocQty;
-          }
-        }
-
-        allAllocations.push({ ...pi, allocations });
-      }
+      const existingAssignments = await db
+        .select({
+          productId: orderItems.productId,
+          batchId: orderItems.batchId,
+          quantity: orderItems.quantity,
+        })
+        .from(orderItems)
+        .where(eq(orderItems.orderId, input.id));
+      const selectiveAllocation = await allocateBatchesSelectively({
+        companyId: ctx.activeCompanyId,
+        items: pricing.items,
+        existingAssignments,
+      });
+      const allAllocations = pricing.items.map((item) => ({
+        ...item,
+        allocations: selectiveAllocation.allocationsByProduct.get(item.productId) ?? [],
+      }));
 
       // Transazione: delete old items + insert new + update totali
       await db.transaction(async (tx) => {

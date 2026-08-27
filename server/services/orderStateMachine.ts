@@ -15,6 +15,7 @@ import { getDb } from "../db";
 import { orders, orderItems, retailers, products, productBatches } from "../../drizzle/schema";
 import * as ficDocService from "./ficDocumentService";
 import { sendOrderStatusEmail } from "./orderEmailService";
+import { allocateBatchesSelectively } from "./selectiveFefoAllocation";
 
 // --- Types ---
 
@@ -586,45 +587,48 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
     pricing = await calculateOrderPricing({
       retailerId: order.retailerId!,
       items: input.items,
+      companyId: order.companyId,
       markupPercentageOverride: markupOverride,
     });
   }
 
-  // 3. Transaction: diff strategy — preserve batchId on existing items
+  const existingAssignments = await db
+    .select({
+      productId: orderItems.productId,
+      batchId: orderItems.batchId,
+      quantity: orderItems.quantity,
+    })
+    .from(orderItems)
+    .where(eq(orderItems.orderId, input.orderId));
+  const selectiveAllocation = await allocateBatchesSelectively({
+    companyId: order.companyId,
+    items: pricing.items,
+    existingAssignments,
+  });
+
+  // 3. Transaction: replace rows using the same selective FEFO allocation as backoffice.
   await db.transaction(async (tx) => {
-    const existingItems = await tx
-      .select({ id: orderItems.id, productId: orderItems.productId, batchId: orderItems.batchId })
-      .from(orderItems)
-      .where(eq(orderItems.orderId, input.orderId));
+    await tx.delete(orderItems).where(eq(orderItems.orderId, input.orderId));
 
-    const existingByProduct = new Map<string, typeof existingItems[0]>();
-    for (const ei of existingItems) {
-      existingByProduct.set(ei.productId, ei);
-    }
-
-    const matchedExistingIds = new Set<string>();
+    const itemValues: Array<{
+      orderId: string;
+      productId: string;
+      quantity: number;
+      unitPriceBase: string;
+      discountPercent: string;
+      unitPriceFinal: string;
+      vatRate: string;
+      lineTotalNet: string;
+      lineTotalGross: string;
+      productSku: string;
+      productName: string;
+      batchId: string | null;
+    }> = [];
 
     for (const pi of pricing.items) {
-      const existing = existingByProduct.get(pi.productId);
-
-      if (existing) {
-        matchedExistingIds.add(existing.id);
-        await tx
-          .update(orderItems)
-          .set({
-            quantity: pi.quantity,
-            unitPriceBase: pi.unitPriceBase,
-            discountPercent: pi.discountPercent,
-            unitPriceFinal: pi.unitPriceFinal,
-            vatRate: pi.vatRate,
-            lineTotalNet: pi.lineTotalNet,
-            lineTotalGross: pi.lineTotalGross,
-            productSku: pi.productSku,
-            productName: pi.productName,
-          })
-          .where(eq(orderItems.id, existing.id));
-      } else {
-        await tx.insert(orderItems).values({
+      const allocations = selectiveAllocation.allocationsByProduct.get(pi.productId) ?? [];
+      if (allocations.length === 0) {
+        itemValues.push({
           orderId: input.orderId,
           productId: pi.productId,
           quantity: pi.quantity,
@@ -638,13 +642,49 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
           productName: pi.productName,
           batchId: null,
         });
+        continue;
+      }
+
+      for (const allocation of allocations) {
+        const ratio = allocation.quantity / pi.quantity;
+        itemValues.push({
+          orderId: input.orderId,
+          productId: pi.productId,
+          quantity: allocation.quantity,
+          unitPriceBase: pi.unitPriceBase,
+          discountPercent: pi.discountPercent,
+          unitPriceFinal: pi.unitPriceFinal,
+          vatRate: pi.vatRate,
+          lineTotalNet: (parseFloat(pi.lineTotalNet) * ratio).toFixed(2),
+          lineTotalGross: (parseFloat(pi.lineTotalGross) * ratio).toFixed(2),
+          productSku: pi.productSku,
+          productName: pi.productName,
+          batchId: allocation.batchId,
+        });
+      }
+
+      const allocatedQuantity = allocations.reduce((sum, allocation) => sum + allocation.quantity, 0);
+      const unallocatedQuantity = pi.quantity - allocatedQuantity;
+      if (unallocatedQuantity > 0) {
+        const ratio = unallocatedQuantity / pi.quantity;
+        itemValues.push({
+          orderId: input.orderId,
+          productId: pi.productId,
+          quantity: unallocatedQuantity,
+          unitPriceBase: pi.unitPriceBase,
+          discountPercent: pi.discountPercent,
+          unitPriceFinal: pi.unitPriceFinal,
+          vatRate: pi.vatRate,
+          lineTotalNet: (parseFloat(pi.lineTotalNet) * ratio).toFixed(2),
+          lineTotalGross: (parseFloat(pi.lineTotalGross) * ratio).toFixed(2),
+          productSku: pi.productSku,
+          productName: pi.productName,
+          batchId: null,
+        });
       }
     }
 
-    const removedItems = existingItems.filter((ei) => !matchedExistingIds.has(ei.id));
-    for (const removed of removedItems) {
-      await tx.delete(orderItems).where(eq(orderItems.id, removed.id));
-    }
+    await tx.insert(orderItems).values(itemValues);
 
     await tx
       .update(orders)
@@ -727,7 +767,7 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
   return {
     success: true,
     totalGross: pricing.totalGross,
-    warnings: pricing.warnings,
+    warnings: [...pricing.warnings, ...selectiveAllocation.warnings],
     ficUpdated,
     commissionRecalculated,
   };
