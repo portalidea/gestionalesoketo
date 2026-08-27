@@ -399,7 +399,7 @@ function BatchSelector({
       {intercompanySources.data?.eligible && !item.batchId && (
         <AlertDialog open={!!sourceToConfirm} onOpenChange={(open) => !open && setSourceToConfirm(null)}>
           <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950">
-            <p className="font-medium">Nessun lotto E-Keto disponibile. Lotti nel centrale SoKeto:</p>
+            <p className="font-medium">Nessun lotto {intercompanySources.data.destinationCompanyName} disponibile. Lotti nel centrale {intercompanySources.data.sourceCompanyName}:</p>
             {intercompanySources.data.batches.filter((batch) => batch.canTransfer).map((batch) => (
               <Button key={batch.batchId} type="button" variant="outline" size="sm" className="mt-1 mr-1 h-7 text-xs" onClick={() => setSourceToConfirm(batch)}>
                 Travaso {batch.batchNumber} · scad. {batch.expirationDate} · {batch.availablePieces} pz
@@ -408,8 +408,8 @@ function BatchSelector({
           </div>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Confermi il travaso SoKeto → E-Keto?</AlertDialogTitle>
-              <AlertDialogDescription>{sourceToConfirm ? `Verranno trasferiti ${intercompanySources.data.requiredPieces} pezzi del lotto ${sourceToConfirm.batchNumber}, scadenza ${sourceToConfirm.expirationDate}, dal centrale SoKeto al centrale E-Keto. Saranno registrati due movimenti TRANSFER e il lotto sarà assegnato a questa riga.` : "Seleziona un lotto SoKeto disponibile."}</AlertDialogDescription>
+              <AlertDialogTitle>Confermi il travaso {intercompanySources.data.directionLabel}?</AlertDialogTitle>
+              <AlertDialogDescription>{sourceToConfirm ? `Verranno trasferiti ${intercompanySources.data.requiredPieces} pezzi del lotto ${sourceToConfirm.batchNumber}, scadenza ${sourceToConfirm.expirationDate}, dal centrale ${intercompanySources.data.sourceCompanyName} al centrale ${intercompanySources.data.destinationCompanyName}. Saranno registrati due movimenti TRANSFER e il lotto sarà assegnato a questa riga.` : `Seleziona un lotto ${intercompanySources.data.sourceCompanyName} disponibile.`}</AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Annulla</AlertDialogCancel>

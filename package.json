@@ -22,7 +22,10 @@
     "testdb:reversal": "tsx scripts/test-hotfix-reversal.ts",
     "testdb:m13-recovery": "tsx scripts/test-m13-run-recovery.ts",
     "testdb:m13-idempotency": "tsx scripts/test-m13-idempotency.ts",
-    "testdb:shopify": "tsx scripts/test-shopify-automatic-stock.ts"
+    "testdb:shopify": "tsx scripts/test-shopify-automatic-stock.ts",
+    "testdb:intercompany": "tsx scripts/test-intercompany-order-transfer.ts",
+    "testdb:intercompany:eketo-to-soketo": "tsx scripts/test-intercompany-eketo-to-soketo.ts",
+    "testdb:intercompany:report": "tsx scripts/test-intercompany-transfers-report.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.2",

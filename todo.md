@@ -136,3 +136,10 @@
 - [x] Recuperare esplicitamente i gap Shopify fino a sette giorni e bloccare senza import quelli superiori
 - [x] Aggiornare lastSyncAt Shopify solo se l'intera finestra è stata elaborata senza errori
 - [x] Testare recupero gap di tre giorni, blocco gap di dieci giorni e watermark invariato dopo errore di processamento
+
+## Travaso inter-company E-Keto → SoKeto
+- [x] Estendere preview e conferma ordine staff al travaso E-Keto verso SoKeto, con lotto speculare e ledger mono-company
+- [x] Rendere la UI ordine disponibile anche alle righe SoKeto senza lotto locale e con disponibilità E-Keto
+- [x] Estendere il report travasi con la direzione E-Keto → SoKeto
+- [x] Testare atomicità, lotto speculare, insufficienza, idempotenza e isolamento ledger per la nuova direzione
+- [x] Verificare con dati isolati che il report mensile restituisca una sola riga per direzione e non raddoppi il totale dei travasi

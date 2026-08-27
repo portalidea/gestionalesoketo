@@ -47,6 +47,7 @@ export async function seedHotfixM13() {
       // La suite inter-company crea un batch SoKeto con ID dinamico ma gli stessi productId:
       // rimuoviamo quindi tutti i batch fixture dei due prodotti dopo inventari e movimenti.
       await tx`DELETE FROM "productBatches" WHERE "productId" IN (${id.productBoxes}, ${id.productPieces})`;
+      await tx`DELETE FROM channel_variants WHERE "productId" IN (${id.productBoxes}, ${id.productPieces})`;
       await tx`DELETE FROM locations WHERE "companyId" IN (${id.originCompany}, ${id.soketoCompany})`;
       await tx`DELETE FROM retailers WHERE id IN (${id.normalRetailer}, ${id.interCompanyRetailer})`;
       await tx`DELETE FROM products WHERE id IN (${id.productBoxes}, ${id.productPieces})`;
