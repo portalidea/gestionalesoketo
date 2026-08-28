@@ -204,4 +204,5 @@
 - [x] Realizzare pagina tokenizzata e aggiornare le pagine admin prospetti senza esporre il listino senza invito
 - [x] Validare token, submit, conversione, P.IVA e package con test isolati e regressione
 - [x] Committare e pushare il simulatore prospect esclusivamente sul branch dedicato dopo autorizzazione esplicita
-- [ ] Verificare commit e stato di merge del fix UI del simulatore prima di qualunque intervento su main
+- [x] Verificare commit e stato di merge del fix UI del simulatore prima di qualunque intervento su main
+- [x] Correggere il margine prospect su listino netto, eliminare il consigliato dalla UI e pubblicare il fix autorizzato
