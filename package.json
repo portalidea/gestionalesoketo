@@ -22,12 +22,16 @@
     "testdb:reversal": "tsx scripts/test-hotfix-reversal.ts",
     "testdb:m13-recovery": "tsx scripts/test-m13-run-recovery.ts",
     "testdb:m13-idempotency": "tsx scripts/test-m13-idempotency.ts",
+    "testdb:fefo:selective": "tsx scripts/test-selective-fefo-order-updates.ts",
+    "testdb:fefo:update-items": "tsx scripts/test-orders-update-items-batches.ts",
+    "testdb:fefo": "pnpm run testdb:fefo:selective && pnpm run testdb:fefo:update-items",
     "testdb:shopify": "tsx scripts/test-shopify-automatic-stock.ts",
     "testdb:intercompany": "tsx scripts/test-intercompany-order-transfer.ts",
     "testdb:intercompany:eketo-to-soketo": "tsx scripts/test-intercompany-eketo-to-soketo.ts",
     "testdb:intercompany:report": "tsx scripts/test-intercompany-transfers-report.ts",
     "testdb:intercompany:manual": "tsx scripts/test-manual-intercompany-transfer.ts",
-    "testdb:prospect-simulator": "tsx scripts/test-prospect-pricing-simulator.ts"
+    "testdb:prospect-simulator": "tsx scripts/test-prospect-pricing-simulator.ts",
+    "testdb:regression": "bash scripts/test-db/run-regression.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.2",
