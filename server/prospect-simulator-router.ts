@@ -12,6 +12,18 @@ import {
   listProspectSimulations,
   requestIp,
 } from "./services/prospectSimulationService";
+import {
+  createProspectInvitation,
+  listProspectInvitations,
+  regenerateProspectInvitation,
+  resendProspectInvitation,
+  resolvePublicInvitation,
+  revokeProspectInvitation,
+  submitInvitedProspectOrder,
+} from "./services/prospectInvitationService";
+import { sendProspectInvitationNotification } from "./services/prospectNotificationService";
+import { convertProspectSimulation, previewProspectConversion } from "./services/prospectOrderConversionService";
+import { EKETO_COMPANY_ID } from "../shared/const";
 
 const cartItemsInput = z.array(z.object({
   productId: z.string().uuid(),
@@ -31,6 +43,22 @@ const contactInput = z.object({
   items: cartItemsInput,
 });
 
+const tokenInput = z.object({ token: z.string().trim().min(1).max(128) });
+const invitationInput = z.object({
+  legalName: z.string().trim().min(1).max(250),
+  contactName: z.string().trim().min(1).max(250),
+  email: z.string().trim().email().max(320),
+  phone: z.string().trim().min(1).max(50),
+  origin: z.string().url().max(500),
+});
+const invitedOrderInput = contactInput.extend({
+  token: z.string().trim().min(1).max(128),
+  address: z.string().trim().min(1).max(500),
+  postalCode: z.string().trim().min(1).max(10),
+  province: z.string().trim().length(2),
+  notes: z.string().trim().max(3000).optional(),
+});
+
 function clientIp(ctx: { req: { headers: Record<string, string | string[] | undefined>; socket?: { remoteAddress?: string } } }) {
   return requestIp(ctx.req.headers, ctx.req.socket?.remoteAddress);
 }
@@ -41,16 +69,28 @@ async function requireDatabase() {
   return database;
 }
 
+function requireEketoCompany(companyId: string) {
+  if (companyId !== EKETO_COMPANY_ID) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Il modulo ordini prospect è disponibile solo per E-Keto Food Srls." });
+  }
+}
+
 /** Modulo pubblico separato dal pricing e dai tier dei rivenditori attivi. */
 export const prospectSimulatorRouter = router({
-  getPublicData: publicProcedure.query(async ({ ctx }) => {
-    enforceProspectRateLimit(`prospect:catalog:${clientIp(ctx as never)}`, 60, 10 * 60_000);
+  /** Il catalogo viene esposto solo dopo risoluzione server-side dell'invito. */
+  getInvitationPublicData: publicProcedure.input(tokenInput).query(async ({ ctx, input }) => {
+    enforceProspectRateLimit(`prospect:invite-open:${clientIp(ctx as never)}`, 30, 10 * 60_000);
     const database = await requireDatabase();
+    const tokenState = await resolvePublicInvitation(database, input.token);
+    if (!tokenState.available) return { available: false as const };
+    if (tokenState.invitation.companyId !== EKETO_COMPANY_ID) return { available: false as const };
     const [config, catalog] = await Promise.all([
-      getProspectSimulatorConfig(database),
+      getProspectSimulatorConfig(database, tokenState.invitation.companyId),
       getPublicProspectCatalog(database),
     ]);
     return {
+      available: true as const,
+      invitation: tokenState.invitation,
       config: {
         minimumOrderNet: config.minimumOrderNet,
         shippingFeeNet: config.shippingFeeNet,
@@ -64,29 +104,85 @@ export const prospectSimulatorRouter = router({
     };
   }),
 
-  calculate: publicProcedure.input(z.object({ items: cartItemsInput })).query(async ({ ctx, input }) => {
-    enforceProspectRateLimit(`prospect:calculate:${clientIp(ctx as never)}`, 120, 10 * 60_000);
+  calculateInvitation: publicProcedure.input(z.object({ token: tokenInput.shape.token, items: cartItemsInput })).query(async ({ ctx, input }) => {
+    enforceProspectRateLimit(`prospect:invite-calculate:${clientIp(ctx as never)}`, 120, 10 * 60_000);
     const database = await requireDatabase();
+    const tokenState = await resolvePublicInvitation(database, input.token);
+    if (!tokenState.available) throw new TRPCError({ code: "NOT_FOUND", message: "Link non valido" });
+    if (tokenState.invitation.companyId !== EKETO_COMPANY_ID) throw new TRPCError({ code: "NOT_FOUND", message: "Link non valido" });
     const [config, catalog] = await Promise.all([
-      getProspectSimulatorConfig(database),
+      getProspectSimulatorConfig(database, tokenState.invitation.companyId),
       getPublicProspectCatalog(database),
     ]);
     return calculateProspectSimulation(config, catalog, input.items);
   }),
 
-  submit: publicProcedure.input(contactInput).mutation(async ({ ctx, input }) => {
-    enforceProspectRateLimit(`prospect:submit:${clientIp(ctx as never)}`, 5, 60 * 60_000);
-    const database = await requireDatabase();
-    return createProspectSimulation(database, input);
+  submitInvitationOrder: publicProcedure.input(invitedOrderInput).mutation(async ({ ctx, input }) => {
+    enforceProspectRateLimit(`prospect:invite-submit:${clientIp(ctx as never)}`, 5, 60 * 60_000);
+    return submitInvitedProspectOrder(await requireDatabase(), input);
   }),
 
+  /** Legacy public endpoints retained only for a neutral unavailable response. */
+  getPublicData: publicProcedure.query(() => { throw new TRPCError({ code: "NOT_FOUND", message: "Accesso disponibile solo tramite invito personale." }); }),
+  calculate: publicProcedure.input(z.object({ items: cartItemsInput })).query(() => { throw new TRPCError({ code: "NOT_FOUND", message: "Accesso disponibile solo tramite invito personale." }); }),
+  submit: publicProcedure.input(contactInput).mutation(() => { throw new TRPCError({ code: "NOT_FOUND", message: "Accesso disponibile solo tramite invito personale." }); }),
+
   adminList: adminProcedure.query(async ({ ctx }) => {
+    requireEketoCompany(ctx.activeCompanyId);
     const database = await requireDatabase();
     return listProspectSimulations(database, ctx.activeCompanyId);
   }),
 
   adminGetById: adminProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ ctx, input }) => {
+    requireEketoCompany(ctx.activeCompanyId);
     const database = await requireDatabase();
     return getProspectSimulationDetail(database, ctx.activeCompanyId, input.id);
+  }),
+
+  adminPreviewConversion: adminProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ ctx, input }) => {
+    requireEketoCompany(ctx.activeCompanyId);
+    return previewProspectConversion(await requireDatabase(), ctx.activeCompanyId, input.id);
+  }),
+
+  adminConvertToOrder: adminProcedure.input(z.object({
+    id: z.string().uuid(),
+    useExistingRetailer: z.boolean().default(false),
+  })).mutation(async ({ ctx, input }) => {
+    requireEketoCompany(ctx.activeCompanyId);
+    return convertProspectSimulation(await requireDatabase(), {
+      companyId: ctx.activeCompanyId,
+      simulationId: input.id,
+      actorId: ctx.user!.id,
+      useExistingRetailer: input.useExistingRetailer,
+    });
+  }),
+
+  adminInvitationList: adminProcedure.query(async ({ ctx }) => {
+    requireEketoCompany(ctx.activeCompanyId);
+    return listProspectInvitations(await requireDatabase(), ctx.activeCompanyId);
+  }),
+
+  adminCreateInvitation: adminProcedure.input(invitationInput).mutation(async ({ ctx, input }) => {
+    requireEketoCompany(ctx.activeCompanyId);
+    return createProspectInvitation(
+      await requireDatabase(),
+      { ...input, companyId: ctx.activeCompanyId, actorId: ctx.user!.id },
+      sendProspectInvitationNotification,
+    );
+  }),
+
+  adminResendInvitation: adminProcedure.input(z.object({ id: z.string().uuid(), origin: z.string().url().max(500) })).mutation(async ({ ctx, input }) => {
+    requireEketoCompany(ctx.activeCompanyId);
+    return resendProspectInvitation(await requireDatabase(), input.id, ctx.activeCompanyId, input.origin, sendProspectInvitationNotification);
+  }),
+
+  adminRegenerateInvitation: adminProcedure.input(z.object({ id: z.string().uuid(), origin: z.string().url().max(500) })).mutation(async ({ ctx, input }) => {
+    requireEketoCompany(ctx.activeCompanyId);
+    return regenerateProspectInvitation(await requireDatabase(), input.id, ctx.activeCompanyId, input.origin, sendProspectInvitationNotification);
+  }),
+
+  adminRevokeInvitation: adminProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ ctx, input }) => {
+    requireEketoCompany(ctx.activeCompanyId);
+    return revokeProspectInvitation(await requireDatabase(), input.id, ctx.activeCompanyId, ctx.user!.id);
   }),
 });

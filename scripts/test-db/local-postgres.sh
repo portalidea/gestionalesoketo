@@ -96,6 +96,7 @@ reset_database() {
     drizzle/migrations/0035_intercompany_transfer_report_indexes.sql
     drizzle/migrations/0036_shopify_import_cutoff.sql
     drizzle/migrations/0037_prospect_pricing_simulator.sql
+    drizzle/migrations/0038_prospect_order_invitations_and_conversion.sql
   )
 
   for file in "${files[@]}"; do

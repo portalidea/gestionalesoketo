@@ -36,6 +36,7 @@ import {
   Gift,
   Handshake,
   LayoutDashboard,
+  Mail,
   LogOut,
   Package,
   PanelLeft,
@@ -103,6 +104,7 @@ const adminMenuItems: MenuItem[] = [
   { icon: Building2, label: "Aziende", path: "/settings/companies" },
   { icon: Plug, label: "Integrazioni", path: "/settings/integrations" },
   { icon: Sparkles, label: "Promozioni", path: "/settings/promotions" },
+  { icon: Mail, label: "Inviti prospect", path: "/settings/prospect-invitations" },
   { icon: Users, label: "Richieste prospect", path: "/settings/prospect-simulations" },
 ];
 
