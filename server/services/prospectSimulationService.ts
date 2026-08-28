@@ -58,7 +58,6 @@ export type ProspectSimulationCalculation = {
   listSubtotalNet: string;
   reachedTier: ProspectTier;
   nextTier: (ProspectTier & { additionalListNet: string }) | null;
-  recommendedPublicDiscountPercent: string;
   currentTierMerchandiseNet: string;
   minimumOrderNet: string;
   meetsMinimumOrder: boolean;
@@ -74,8 +73,6 @@ export type ProspectSimulationCalculation = {
   items: Array<ProspectCatalogProduct & {
     quantity: number;
     lineListNet: string;
-    recommendedPublicNet: string;
-    recommendedPublicGross: string;
     tierPrices: Array<{ tierCode: string; tierName: string; unitNet: string; lineNet: string; potentialMarginNet: string; potentialMarginPercent: string }>;
   }>;
 };
@@ -123,21 +120,17 @@ export function calculateProspectSimulation(
   const listSubtotalCents = catalogItems.reduce((total, item) => total + item.lineListNetCents, 0);
   const reachedTier = [...tiers].reverse().find((tier) => listSubtotalCents >= toCents(tier.minimum_list_net))!;
   const nextTier = tiers.find((tier) => tier.minimum_list_net > listSubtotalCents / 10_000) ?? null;
-  const recommendedDiscountBasisPoints = percentToBasisPoints(config.recommendedPublicDiscountPercent);
-  const tierTotals = new Map<string, { merchandiseNetCents: number; marginNetCents: number; recommendedNetCents: number }>();
+  const tierTotals = new Map<string, { merchandiseNetCents: number; marginNetCents: number }>();
 
   const items = catalogItems.map(({ product, quantity, unitListNetCents, lineListNetCents }) => {
-    const recommendedPublicNetCents = applyPercent(unitListNetCents, 10_000 - recommendedDiscountBasisPoints);
-    const recommendedPublicGrossCents = applyPercent(recommendedPublicNetCents, 10_000 + percentToBasisPoints(product.vatRate));
     const tierPrices = tiers.map((tier) => {
       const unitNetCents = applyPercent(unitListNetCents, 10_000 - percentToBasisPoints(tier.discount_percent));
       const lineNetCents = unitNetCents * quantity;
-      const potentialMarginNetCents = (recommendedPublicNetCents - unitNetCents) * quantity;
-      const previous = tierTotals.get(tier.code) ?? { merchandiseNetCents: 0, marginNetCents: 0, recommendedNetCents: 0 };
+      const potentialMarginNetCents = lineListNetCents - lineNetCents;
+      const previous = tierTotals.get(tier.code) ?? { merchandiseNetCents: 0, marginNetCents: 0 };
       tierTotals.set(tier.code, {
         merchandiseNetCents: previous.merchandiseNetCents + lineNetCents,
         marginNetCents: previous.marginNetCents + potentialMarginNetCents,
-        recommendedNetCents: previous.recommendedNetCents + recommendedPublicNetCents * quantity,
       });
       return {
         tierCode: tier.code,
@@ -145,15 +138,13 @@ export function calculateProspectSimulation(
         unitNet: money(unitNetCents),
         lineNet: money(lineNetCents),
         potentialMarginNet: money(potentialMarginNetCents),
-        potentialMarginPercent: recommendedPublicNetCents > 0 ? ((potentialMarginNetCents / (recommendedPublicNetCents * quantity)) * 100).toFixed(2) : "0.00",
+        potentialMarginPercent: lineListNetCents > 0 ? ((potentialMarginNetCents / lineListNetCents) * 100).toFixed(2) : "0.00",
       };
     });
     return {
       ...product,
       quantity,
       lineListNet: money(lineListNetCents),
-      recommendedPublicNet: money(recommendedPublicNetCents),
-      recommendedPublicGross: money(recommendedPublicGrossCents),
       tierPrices,
     };
   });
@@ -168,7 +159,6 @@ export function calculateProspectSimulation(
     listSubtotalNet: money(listSubtotalCents),
     reachedTier,
     nextTier: nextTier ? { ...nextTier, additionalListNet: money(toCents(nextTier.minimum_list_net) - listSubtotalCents) } : null,
-    recommendedPublicDiscountPercent: Number(config.recommendedPublicDiscountPercent).toFixed(2),
     currentTierMerchandiseNet: money(currentMerchandiseCents),
     minimumOrderNet: money(minimumOrderCents),
     meetsMinimumOrder: currentMerchandiseCents >= minimumOrderCents,
@@ -182,7 +172,7 @@ export function calculateProspectSimulation(
         ...tier,
         merchandiseNet: money(totals.merchandiseNetCents),
         potentialMarginNet: money(totals.marginNetCents),
-        potentialMarginPercent: totals.recommendedNetCents > 0 ? ((totals.marginNetCents / totals.recommendedNetCents) * 100).toFixed(2) : "0.00",
+        potentialMarginPercent: listSubtotalCents > 0 ? ((totals.marginNetCents / listSubtotalCents) * 100).toFixed(2) : "0.00",
       };
     }),
     items,

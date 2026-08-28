@@ -26,7 +26,14 @@ async function main() {
   const existingCompany = await db.select().from(companies).where(eq(companies.id, SOKETO_COMPANY_ID)).limit(1);
   assert(existingCompany[0], "Company SoKeto assente nel seed locale");
   await db.delete(products).where(eq(products.sku, "PROSPECT-HIDDEN-TEST"));
-  const seedProducts = await db.select().from(products).limit(2);
+  let seedProducts = await db.select().from(products).limit(2);
+  if (seedProducts.length < 2) {
+    await db.insert(products).values([
+      { sku: "PROSPECT-FOOD-TEST", name: "Prodotto test IVA 10%", unitPrice: "1.00", vatRate: "10.00", showInSimulator: false },
+      { sku: "PROSPECT-BEER-TEST", name: "Prodotto test IVA 22%", unitPrice: "1.00", vatRate: "22.00", showInSimulator: false },
+    ]);
+    seedProducts = await db.select().from(products).limit(2);
+  }
   assert(seedProducts.length >= 2, "Servono due prodotti nel seed locale");
   const [food10, beer22] = seedProducts;
   const [hidden] = await db.insert(products).values({
@@ -69,12 +76,16 @@ async function main() {
   marker("T1B_COMMERCIAL_THRESHOLDS", { shippingAfterDiscountAt499_63: false, shippingAfterDiscountAt500_09: true, displayAt790: false, displayOver790: true });
 
   const mixed = calculateProspectSimulation(config, catalog, [{ productId: food10.id, quantity: 1 }, { productId: beer22.id, quantity: 1 }]);
-  assert.equal(mixed.items[0]?.recommendedPublicNet, "0.90");
-  assert.equal(mixed.items[0]?.recommendedPublicGross, "0.99");
-  assert.equal(mixed.items[1]?.recommendedPublicNet, "0.90");
-  assert.equal(mixed.items[1]?.recommendedPublicGross, "1.10");
-  assert.equal(mixed.tiers.find((tier) => tier.code === "starter")?.potentialMarginNet, "0.57");
-  marker("T2_NET_MARGIN_MIXED_VAT", { foodRecommendedNet: "0.90", foodRecommendedGross10: "0.99", beerRecommendedNet: "0.90", beerRecommendedGross22: "1.10", starterMarginNet: "0.57" });
+  const expectedDiscounts = { starter: "38.50", partner: "41.40", premium: "44.05", elite: "46.50" };
+  for (const tier of mixed.tiers) {
+    assert.equal(tier.potentialMarginPercent, expectedDiscounts[tier.code as keyof typeof expectedDiscounts]);
+  }
+  for (const item of mixed.items) {
+    for (const tierPrice of item.tierPrices) {
+      assert.equal(tierPrice.potentialMarginPercent, expectedDiscounts[tierPrice.tierCode as keyof typeof expectedDiscounts]);
+    }
+  }
+  marker("T2_MARGIN_EQUALS_TIER_DISCOUNT", { starter: "38.50", partner: "41.40", premium: "44.05", elite: "46.50", base: "listino netto" });
 
   for (const quantity of [0, -1]) assert.throws(() => calculateProspectSimulation(config, catalog, [{ productId: food10.id, quantity }]), /quantità/);
   marker("T3_INVALID_QUANTITIES", { rejected: "0,-1" });

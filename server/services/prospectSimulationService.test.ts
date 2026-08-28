@@ -36,15 +36,22 @@ describe("calculateProspectSimulation", () => {
     expect(overDisplayThreshold.displayStandUnlocked).toBe(true);
   });
 
-  it("calcola margine su netti e consigliato lordo con IVA prodotto", () => {
+  it("calcola il margine sul listino netto e lo rende identico allo sconto di ogni fascia", () => {
     const result = calculateProspectSimulation(config, [food, beer], [{ productId: food.id, quantity: 1 }, { productId: beer.id, quantity: 1 }]);
-    const starter = result.tiers.find((tier) => tier.code === "starter")!;
-    expect(result.items[0]?.recommendedPublicNet).toBe("0.90");
-    expect(result.items[0]?.recommendedPublicGross).toBe("0.99");
-    expect(result.items[1]?.recommendedPublicNet).toBe("0.90");
-    expect(result.items[1]?.recommendedPublicGross).toBe("1.10");
-    expect(starter.potentialMarginNet).toBe("0.57");
-    expect(starter.potentialMarginPercent).toBe("31.67");
+    const expectedDiscounts = { starter: "38.50", partner: "41.40", premium: "44.05", elite: "46.50" };
+    for (const tier of result.tiers) {
+      expect(tier.potentialMarginPercent).toBe(expectedDiscounts[tier.code as keyof typeof expectedDiscounts]);
+    }
+    for (const item of result.items) {
+      for (const tierPrice of item.tierPrices) {
+        expect(tierPrice.potentialMarginPercent).toBe(expectedDiscounts[tierPrice.tierCode as keyof typeof expectedDiscounts]);
+      }
+    }
+  });
+
+  it("non usa recommended_public_discount_percent nel calcolo del margine", () => {
+    const result = calculateProspectSimulation({ ...config, recommendedPublicDiscountPercent: "99.00" }, [food], [{ productId: food.id, quantity: 1 }]);
+    expect(result.tiers.map((tier) => tier.potentialMarginPercent)).toEqual(["38.50", "41.40", "44.05", "46.50"]);
   });
 
   it.each([0, -1, 1.5])("rifiuta quantità %s", (quantity) => {
