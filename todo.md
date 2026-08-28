@@ -219,5 +219,7 @@
 - [x] Ripristinare la tabella prezzi per fasce nell’ordine prospect tokenizzato e correggere quantità/prezzi del catalogo
 - [x] Correggere contrasto e testi esterni del modulo ordine prospect, eliminando riferimenti a simulazioni
 - [x] Ampliare il dettaglio admin dell’ordine prospect su desktop, mantenendo il comportamento mobile
+- [x] Aggiungere e pubblicare isolatamente lo scope OAuth FiC per DDT senza rimuovere i permessi esistenti
+- [ ] Predisporre una verifica non emissiva della connessione FiC e degli scope concessi dopo la ri-autorizzazione
 - [ ] Aggiungere deroga tracciata al minimo d’ordine nella conversione prospect con motivazione obbligatoria
 - [ ] Verificare scope OAuth FiC per DDT, ri-autorizzazione e impatto sulle proforma
