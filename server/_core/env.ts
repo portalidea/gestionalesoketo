@@ -30,6 +30,7 @@ export const ENV = {
   ownerEmail: optional("OWNER_EMAIL"),
   anthropicApiKey: optional("ANTHROPIC_API_KEY"),
   resendApiKey: optional("RESEND_API_KEY"),
+  prospectNotificationTo: optional("PROSPECT_NOTIFICATION_TO"),
   /** M6.1.4: URL pubblico dell'app (dominio custom, no vercel/supabase) */
   publicAppUrl: optional("PUBLIC_APP_URL") ?? "https://gestionale.soketo.it",
   cronSecret: optional("CRON_SECRET"),

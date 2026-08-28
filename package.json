@@ -26,7 +26,8 @@
     "testdb:intercompany": "tsx scripts/test-intercompany-order-transfer.ts",
     "testdb:intercompany:eketo-to-soketo": "tsx scripts/test-intercompany-eketo-to-soketo.ts",
     "testdb:intercompany:report": "tsx scripts/test-intercompany-transfers-report.ts",
-    "testdb:intercompany:manual": "tsx scripts/test-manual-intercompany-transfer.ts"
+    "testdb:intercompany:manual": "tsx scripts/test-manual-intercompany-transfer.ts",
+    "testdb:prospect-simulator": "tsx scripts/test-prospect-pricing-simulator.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.2",

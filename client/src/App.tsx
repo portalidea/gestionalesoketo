@@ -53,6 +53,8 @@ import MarketplaceShopify from "./pages/MarketplaceShopify";
 import MarketplaceShopifyVariants from "./pages/MarketplaceShopifyVariants";
 import MarketplaceShopifyOrders from "./pages/MarketplaceShopifyOrders";
 import MarketplaceShopifyOrderDetail from "./pages/MarketplaceShopifyOrderDetail";
+import ProspectSimulator from "./pages/ProspectSimulator";
+import ProspectSimulations from "./pages/ProspectSimulations";
 import ReportsHub from "./pages/reports/ReportsHub";
 import WarehouseReport from "./pages/reports/WarehouseReport";
 import SalesReport from "./pages/reports/SalesReport";
@@ -107,6 +109,7 @@ function Router() {
       <Route path="/auth/callback" component={AuthCallback} />
       <Route path="/auth/verify" component={AuthVerify} />
       <Route path="/scadenze/:token" component={ExpiryResponse} />
+      <Route path="/simulatore-rivenditori" component={ProspectSimulator} />
 
       {/* ═══════════════════════════════════════════════════════════
           Partner Portal routes — only retailer_admin / retailer_user
@@ -263,6 +266,9 @@ function Router() {
       </Route>
       <Route path="/settings/promotions">
         <RequireRole allowedRoles={["admin"]}><Promotions /></RequireRole>
+      </Route>
+      <Route path="/settings/prospect-simulations">
+        <RequireRole allowedRoles={["admin"]}><ProspectSimulations /></RequireRole>
       </Route>
       {/* ═══════════════════════════════════════════════════════════
           Marketplace Shopify routes (M8.1)

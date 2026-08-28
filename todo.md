@@ -178,3 +178,19 @@
 - [x] Ritentare per-riga un chunk bulk fallito e riportare le SKU non scrivibili
 - [x] Testare un chunk con SKU duplicate senza fallimento delle altre varianti
 - [ ] Committare, pushare e fondere su main la correzione delle SKU duplicate Shopify dopo autorizzazione esplicita
+
+## Simulatore prezzi prospect rivenditori — proposta
+- [x] Censire catalogo, configurazioni commerciali, stagionalità e notifiche esistenti per proporre il simulatore pubblico senza modificare codice o database
+- [x] Proporre storage configurazione fasce, modello richiesta contatto, catalogo prospect e gestione stagionalità
+
+## Simulatore prospect — migration in revisione
+- [x] Preparare migration append-only per configurazione JSONB, flag prodotti, richieste e righe snapshot senza applicarla
+
+## Simulatore prospect — implementazione
+- [x] Allineare lo schema Drizzle ai nuovi oggetti prospect della migration 0037
+- [x] Implementare calcolo prospect server-side isolato dal pricing dei rivenditori attivi
+- [x] Esporre catalogo e submit pubblici con rate limit, honeypot e ricalcolo autorevole
+- [x] Salvare richiesta, righe e snapshot, quindi notificare direttamente il destinatario configurato
+- [x] Realizzare pagina pubblica simulatore e pagina admin con lista/dettaglio richieste
+- [x] Validare soglie, margini netti, IVA mista, input invalidi, catalogo e configurazione assente sul database isolato
+- [ ] Committare e pushare il simulatore prospect esclusivamente sul branch dedicato dopo autorizzazione esplicita
