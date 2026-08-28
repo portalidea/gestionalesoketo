@@ -62,10 +62,14 @@ export interface PricingResult {
 }
 
 export interface CalculateOrderPricingOptions {
-  retailerId: string;
+  retailerId?: string;
   items: PricingItemInput[];
   companyId?: string;
   markupPercentageOverride?: number | null; // override per singolo ordine
+  /** Usato dalla preview/conversione prospect prima della creazione del retailer. */
+  pricingPackageIdOverride?: string;
+  /** Client Drizzle transazionale: evita query fuori dalla conversione atomica. */
+  database?: NonNullable<Awaited<ReturnType<typeof getDb>>>;
 }
 
 /**
@@ -82,33 +86,47 @@ export async function calculateOrderPricing(
   let items: PricingItemInput[];
   let companyId: string | undefined;
   let markupPercentageOverride: number | null | undefined;
+  let pricingPackageIdOverride: string | undefined;
+  let suppliedDatabase: NonNullable<Awaited<ReturnType<typeof getDb>>> | undefined;
 
   if (typeof retailerIdOrOpts === "string") {
     retailerId = retailerIdOrOpts;
     items = itemsArg!;
     companyId = companyIdArg;
   } else {
-    retailerId = retailerIdOrOpts.retailerId;
+    retailerId = retailerIdOrOpts.retailerId ?? "";
     items = retailerIdOrOpts.items;
     companyId = retailerIdOrOpts.companyId;
     markupPercentageOverride = retailerIdOrOpts.markupPercentageOverride;
+    pricingPackageIdOverride = retailerIdOrOpts.pricingPackageIdOverride;
+    suppliedDatabase = retailerIdOrOpts.database;
   }
 
-  const db = await getDb();
+  const db = suppliedDatabase ?? await getDb();
   if (!db) throw new Error("Database non disponibile");
 
   // 1. Ottieni retailer + pacchetto pricing + pricing model
-  const [retailer] = await db
-    .select({
-      id: retailers.id,
-      name: retailers.name,
-      pricingPackageId: retailers.pricingPackageId,
-      pricingModel: retailers.pricingModel,
-      markupPercentage: retailers.markupPercentage,
-    })
-    .from(retailers)
-    .where(eq(retailers.id, retailerId))
-    .limit(1);
+  const retailer = retailerId
+    ? (await db
+      .select({
+        id: retailers.id,
+        name: retailers.name,
+        pricingPackageId: retailers.pricingPackageId,
+        pricingModel: retailers.pricingModel,
+        markupPercentage: retailers.markupPercentage,
+      })
+      .from(retailers)
+      .where(eq(retailers.id, retailerId))
+      .limit(1))[0]
+    : pricingPackageIdOverride
+      ? {
+        id: "prospect-preview",
+        name: "Prospect preview",
+        pricingPackageId: pricingPackageIdOverride,
+        pricingModel: "tier_discount" as const,
+        markupPercentage: null,
+      }
+      : undefined;
 
   if (!retailer) throw new Error("Retailer non trovato");
 

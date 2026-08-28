@@ -164,6 +164,8 @@ export const retailers = pgTable("retailers", {
   phone: varchar("phone", { length: 50 }),
   email: varchar("email", { length: 320 }),
   contactPerson: varchar("contactPerson", { length: 255 }),
+  /** P.IVA normalizzata (sole cifre), nullable per retailer storici. */
+  vatNumber: varchar("vatNumber", { length: 20 }),
 
   lastSyncAt: timestamp("lastSyncAt", { withTimezone: true }),
   syncEnabled: integer("syncEnabled").default(0).notNull(),
@@ -259,6 +261,32 @@ export const prospectSimulatorConfig = pgTable("prospect_simulator_config", {
 
 export type ProspectSimulatorConfig = typeof prospectSimulatorConfig.$inferSelect;
 
+/** Invito individuale e revocabile al modulo ordine prospect. */
+export const prospectInvitations = pgTable("prospect_invitations", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: uuid("company_id").notNull().references(() => companies.id),
+  legalName: text("legal_name").notNull(),
+  contactName: text("contact_name").notNull(),
+  email: varchar("email", { length: 320 }).notNull(),
+  phone: varchar("phone", { length: 50 }).notNull(),
+  token: varchar("token", { length: 32 }).notNull().unique(),
+  status: varchar("status", { length: 20 }).default("pending").notNull(),
+  tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }).notNull(),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  lastOpenedAt: timestamp("last_opened_at", { withTimezone: true }),
+  notificationStatus: varchar("notification_status", { length: 20 }).default("pending").notNull(),
+  notificationSentAt: timestamp("notification_sent_at", { withTimezone: true }),
+  notificationError: text("notification_error"),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  revokedBy: uuid("revoked_by").references(() => users.id, { onDelete: "set null" }),
+}, (t) => [
+  index("idx_prospect_invitations_company_status_created").on(t.companyId, t.status, t.createdAt),
+  index("idx_prospect_invitations_company_email_created").on(t.companyId, t.email, t.createdAt),
+]);
+
+export type ProspectInvitation = typeof prospectInvitations.$inferSelect;
+
 /** Richiesta prospect e snapshot immutabile della simulazione server-side. */
 export const prospectSimulations = pgTable("prospect_simulations", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -279,12 +307,24 @@ export const prospectSimulations = pgTable("prospect_simulations", {
   notificationStatus: varchar("notification_status", { length: 20 }).default("pending").notNull(),
   notificationSentAt: timestamp("notification_sent_at", { withTimezone: true }),
   notificationError: text("notification_error"),
+  address: text("address"),
+  postalCode: varchar("postalCode", { length: 10 }),
+  province: varchar("province", { length: 2 }),
+  notes: text("notes"),
+  invitationId: uuid("invitation_id").references(() => prospectInvitations.id),
+  convertedRetailerId: uuid("convertedRetailerId").references(() => retailers.id),
+  convertedOrderId: uuid("convertedOrderId").references(() => orders.id),
+  convertedAt: timestamp("convertedAt", { withTimezone: true }),
+  convertedBy: uuid("convertedBy").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   index("idx_prospect_simulations_company_created").on(t.companyId, t.createdAt),
   index("idx_prospect_simulations_status_created").on(t.status, t.createdAt),
   index("idx_prospect_simulations_email_created").on(t.email, t.createdAt),
+  unique("uq_prospect_simulations_invitation").on(t.invitationId),
+  unique("uq_prospect_simulations_converted_order").on(t.convertedOrderId),
+  index("idx_prospect_simulations_converted_retailer").on(t.convertedRetailerId),
 ]);
 
 export type ProspectSimulation = typeof prospectSimulations.$inferSelect;

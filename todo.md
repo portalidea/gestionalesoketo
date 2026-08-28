@@ -193,4 +193,15 @@
 - [x] Salvare richiesta, righe e snapshot, quindi notificare direttamente il destinatario configurato
 - [x] Realizzare pagina pubblica simulatore e pagina admin con lista/dettaglio richieste
 - [x] Validare soglie, margini netti, IVA mista, input invalidi, catalogo e configurazione assente sul database isolato
-- [ ] Committare e pushare il simulatore prospect esclusivamente sul branch dedicato dopo autorizzazione esplicita
+
+## Inviti prospect al modulo ordine
+- [x] Preparare migration append-only per inviti tokenizzati, scadenza 15 giorni, stati e collegamento richiesta senza applicarla
+- [x] Preparare migration append-only combinata per P.IVA retailer, campi consegna, conversione idempotente e matching package rigoroso senza applicarla
+- [x] Allineare lo schema Drizzle agli inviti e ai riferimenti di conversione applicati con 0038
+- [x] Implementare risoluzione token server-side, confronto timing-safe, rate limit e submit pubblico idempotente
+- [x] Realizzare gestione admin inviti con invio, reinvio, link, rigenerazione e revoca
+- [x] Implementare preview e conversione atomica in retailer, location e ordine pending con rilevazione P.IVA esistente
+- [x] Realizzare pagina tokenizzata e aggiornare le pagine admin prospetti senza esporre il listino senza invito
+- [x] Validare token, submit, conversione, P.IVA e package con test isolati e regressione
+- [x] Committare e pushare il simulatore prospect esclusivamente sul branch dedicato dopo autorizzazione esplicita
+- [ ] Verificare commit e stato di merge del fix UI del simulatore prima di qualunque intervento su main
