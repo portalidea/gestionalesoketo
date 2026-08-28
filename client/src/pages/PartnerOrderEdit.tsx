@@ -166,9 +166,9 @@ export default function PartnerOrderEdit() {
 
   return (
     <PartnerLayout>
-      <div className="space-y-6 max-w-4xl">
+      <div className="space-y-6 max-w-4xl pb-28 md:pb-0">
         {/* Header */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
           <Button
             variant="ghost"
             size="sm"
@@ -186,8 +186,71 @@ export default function PartnerOrderEdit() {
           </div>
         </div>
 
-        {/* Tabella items editabile */}
-        <Card>
+        {/* Schede mobile */}
+        <div className="space-y-3 md:hidden">
+          {editItems.map((item) => (
+            <Card key={item.productId} className={item.quantity === 0 ? "opacity-50" : ""}>
+              <CardContent className="p-4 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-sm leading-snug">{item.productName}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{item.productSku}</p>
+                  </div>
+                  <button
+                    aria-label={`Rimuovi ${item.productName} dall’ordine`}
+                    className="h-11 w-11 inline-flex items-center justify-center rounded-md hover:bg-destructive/10 text-destructive transition-colors shrink-0"
+                    onClick={() => handleRemove(item.productId)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 rounded-lg bg-muted/25 p-3">
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Prezzo unitario</p>
+                    <p className="mt-1 font-semibold text-[#2D5A27] dark:text-[#7AB648] whitespace-nowrap">€{item.unitPriceFinal}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Totale riga</p>
+                    <p className="mt-1 font-bold text-base whitespace-nowrap">€{(parseFloat(item.unitPriceFinal) * item.quantity).toFixed(2)}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm font-medium">Quantità</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      aria-label={`Diminuisci quantità ${item.productName}`}
+                      className="h-12 w-12 inline-flex items-center justify-center rounded-md border bg-background hover:bg-accent transition-colors"
+                      onClick={() => handleUpdateQty(item.productId, item.quantity - 1)}
+                    >
+                      <Minus className="h-4 w-4" />
+                    </button>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={0}
+                      aria-label={`Quantità per ${item.productName}`}
+                      value={item.quantity}
+                      onChange={(e) => handleUpdateQty(item.productId, parseInt(e.target.value) || 0)}
+                      className="h-12 w-16 rounded-md border bg-background text-center text-base font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
+                    <button
+                      aria-label={`Aumenta quantità ${item.productName}`}
+                      className="h-12 w-12 inline-flex items-center justify-center rounded-md border bg-background hover:bg-accent transition-colors"
+                      onClick={() => handleUpdateQty(item.productId, item.quantity + 1)}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        {/* Tabella desktop */}
+        <Card className="hidden md:block">
           <CardHeader>
             <CardTitle className="text-base">Prodotti</CardTitle>
           </CardHeader>
@@ -337,6 +400,25 @@ export default function PartnerOrderEdit() {
             </p>
           </CardContent>
         </Card>
+
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 p-3 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur md:hidden">
+          <div className="mx-auto flex max-w-md items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs text-muted-foreground">Totale aggiornato</p>
+              <p className="font-bold text-lg text-[#2D5A27] dark:text-[#7AB648] whitespace-nowrap">
+                {pricing ? `€${parseFloat(pricing.totalGross).toFixed(2)}` : "—"}
+              </p>
+            </div>
+            <Button
+              className="h-12 shrink-0 bg-[#2D5A27] px-4 text-white hover:bg-[#2D5A27]/90"
+              onClick={handleSave}
+              disabled={modifyMutation.isPending || editItems.filter((i) => i.quantity > 0).length === 0}
+            >
+              {modifyMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              <span className="ml-2">Salva</span>
+            </Button>
+          </div>
+        </div>
       </div>
     </PartnerLayout>
   );

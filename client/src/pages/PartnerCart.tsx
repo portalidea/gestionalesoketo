@@ -83,7 +83,7 @@ export default function PartnerCart() {
 
   return (
     <PartnerLayout>
-      <div className="space-y-6 max-w-4xl">
+      <div className="space-y-6 max-w-4xl pb-28 md:pb-0">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -103,8 +103,110 @@ export default function PartnerCart() {
           </Button>
         </div>
 
-        {/* Tabella items */}
-        <Card>
+        {/* Schede mobile */}
+        <div className="space-y-3 md:hidden">
+          {items.map((item) => {
+            const serverItem = preview?.items.find(
+              (si) => si.productId === item.productId,
+            );
+            const unitPrice = serverItem
+              ? parseFloat(serverItem.unitPriceFinal).toFixed(2)
+              : item.unitPriceFinal;
+            const hasPromotion = Boolean(serverItem?.promotionId);
+            const publicListPrice = serverItem?.publicListPrice
+              ? parseFloat(serverItem.publicListPrice).toFixed(2)
+              : null;
+            const tierPrice = serverItem?.unitPriceTier
+              ? parseFloat(serverItem.unitPriceTier).toFixed(2)
+              : null;
+            const promotionSavings = serverItem?.promotionSavingsPerUnit
+              ? parseFloat(serverItem.promotionSavingsPerUnit).toFixed(2)
+              : null;
+            const lineTotal = serverItem
+              ? parseFloat(serverItem.lineTotalNet).toFixed(2)
+              : (parseFloat(item.unitPriceFinal) * item.quantity).toFixed(2);
+
+            return (
+              <Card key={item.productId} className="overflow-hidden">
+                <CardContent className="p-4 space-y-4">
+                  <div className="flex items-start gap-3">
+                    <div className="h-12 w-12 rounded bg-muted/30 flex items-center justify-center shrink-0 overflow-hidden">
+                      {item.imageUrl ? (
+                        <img src={item.imageUrl} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <Package className="h-5 w-5 text-muted-foreground/40" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-sm leading-snug">{item.name}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{item.sku}</p>
+                    </div>
+                    <button
+                      aria-label={`Rimuovi ${item.name} dal carrello`}
+                      className="h-11 w-11 inline-flex items-center justify-center rounded-md hover:bg-destructive/10 text-destructive transition-colors shrink-0"
+                      onClick={() => removeItem(item.productId)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 rounded-lg bg-muted/25 p-3">
+                    <div className="min-w-0">
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Prezzo unitario</p>
+                      {hasPromotion ? (
+                        <div className="mt-1 space-y-0.5">
+                          <p className="text-xs text-muted-foreground line-through">Listino €{publicListPrice}</p>
+                          <p className="text-xs text-muted-foreground">Tuo prezzo €{tierPrice}</p>
+                          <p className="font-semibold text-[#2D5A27] dark:text-[#7AB648] whitespace-nowrap">€{unitPrice}</p>
+                          <p className="text-[11px] text-[#5d932f] font-medium">Risparmi €{promotionSavings}</p>
+                        </div>
+                      ) : (
+                        <p className="mt-1 font-semibold text-[#2D5A27] dark:text-[#7AB648] whitespace-nowrap">€{unitPrice}</p>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Totale riga</p>
+                      <p className="mt-1 font-bold text-base whitespace-nowrap">€{lineTotal}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-medium">Quantità</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        aria-label={`Diminuisci quantità ${item.name}`}
+                        className="h-12 w-12 inline-flex items-center justify-center rounded-md border bg-background hover:bg-accent transition-colors"
+                        onClick={() => updateQuantity(item.productId, item.quantity - 1)}
+                      >
+                        <Minus className="h-4 w-4" />
+                      </button>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={item.stockAvailable}
+                        aria-label={`Quantità per ${item.name}`}
+                        value={item.quantity}
+                        onChange={(e) => updateQuantity(item.productId, parseInt(e.target.value) || 1)}
+                        className="h-12 w-16 rounded-md border bg-background text-center text-base font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                      <button
+                        aria-label={`Aumenta quantità ${item.name}`}
+                        className="h-12 w-12 inline-flex items-center justify-center rounded-md border bg-background hover:bg-accent transition-colors"
+                        onClick={() => updateQuantity(item.productId, item.quantity + 1)}
+                      >
+                        <Plus className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+
+        {/* Tabella desktop */}
+        <Card className="hidden md:block">
           <CardContent className="p-0">
             <Table>
               <TableHeader>
@@ -301,6 +403,24 @@ export default function PartnerCart() {
               </Button>
             </CardContent>
           </Card>
+        </div>
+
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 p-3 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur md:hidden">
+          <div className="mx-auto flex max-w-md items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs text-muted-foreground">Totale ordine</p>
+              <p className="font-bold text-lg text-[#2D5A27] dark:text-[#7AB648] whitespace-nowrap">
+                €{preview ? parseFloat(preview.totalGross).toFixed(2) : localSubtotal.toFixed(2)}
+              </p>
+            </div>
+            <Button
+              className="h-12 shrink-0 bg-[#2D5A27] px-5 text-white hover:bg-[#2D5A27]/90"
+              onClick={() => setLocation("/partner-portal/checkout")}
+              disabled={previewMutation.isPending}
+            >
+              Checkout
+            </Button>
+          </div>
         </div>
       </div>
     </PartnerLayout>
