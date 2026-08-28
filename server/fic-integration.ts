@@ -271,6 +271,7 @@ const OAUTH_SCOPES = [
   "entity.clients:r",
   "entity.clients:a",
   "issued_documents.proformas:a",
+  "issued_documents.delivery_notes:a",
   "settings:r",
 ].join(" ");
 
