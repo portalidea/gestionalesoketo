@@ -206,3 +206,7 @@
 - [x] Committare e pushare il simulatore prospect esclusivamente sul branch dedicato dopo autorizzazione esplicita
 - [x] Verificare commit e stato di merge del fix UI del simulatore prima di qualunque intervento su main
 - [x] Correggere il margine prospect su listino netto, eliminare il consigliato dalla UI e pubblicare il fix autorizzato
+- [x] Rimuovere il vincolo E-Keto dal modulo prospect e propagare la company attiva dell’invito a richiesta, retailer e ordine
+- [x] Verificare con test isolati inviti e conversioni sia SoKeto sia E-Keto, incluso il divieto di scelta company client-side
+- [x] Audit read-only su affiliati cross-company, autorizzazioni e provvigioni manuali
+- [ ] Committare, pushare e integrare su main il perimetro multi-company del modulo prospect dopo autorizzazione esplicita

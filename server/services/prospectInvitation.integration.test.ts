@@ -1,8 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { companies, orders, prospectInvitations, retailers } from "../../drizzle/schema";
-import { EKETO_COMPANY_ID } from "../../shared/const";
+import { companies, orders, prospectInvitations, prospectSimulations, retailers } from "../../drizzle/schema";
+import { EKETO_COMPANY_ID, SOKETO_COMPANY_ID } from "../../shared/const";
+import { prospectInvitationInput, prospectSimulatorRouter } from "../prospect-simulator-router";
+import type { TrpcContext } from "../_core/context";
 import {
   createProspectInvitation,
   normalizeVatNumber,
@@ -39,20 +41,20 @@ function contact(suffix: string, vatNumber = `IT 123.45${suffix}`, quantity = 5)
   };
 }
 
-async function invite(database: any, suffix: string) {
+async function invite(database: any, suffix: string, companyId = EKETO_COMPANY_ID) {
   return createProspectInvitation(database, {
     legalName: `Prospect ${suffix}`,
     contactName: `Referente ${suffix}`,
     email: `prospect-${suffix}@example.test`,
     phone: "3331234567",
-    companyId: EKETO_COMPANY_ID,
+    companyId,
     actorId: ACTOR_ID,
     origin: "https://gestionale.example.test",
   }, fakeEmail);
 }
 
-async function submit(database: any, suffix: string, vatNumber?: string) {
-  const invitation = await invite(database, suffix);
+async function submit(database: any, suffix: string, vatNumber?: string, companyId = EKETO_COMPANY_ID) {
+  const invitation = await invite(database, suffix, companyId);
   const result = await submitInvitedProspectOrder(database, { token: invitation.token, ...contact(suffix, vatNumber) });
   return { invitation, simulationId: result.id };
 }
@@ -67,13 +69,16 @@ beforeAll(async () => {
   await database.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS "paymentStatus" payment_status_enum NOT NULL DEFAULT 'unpaid'::payment_status_enum`);
   await database.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS "paymentMethod" varchar(50)`);
   await database.execute(sql`DELETE FROM auth.users`);
-  await database.execute(sql`INSERT INTO companies (id, name) VALUES (${EKETO_COMPANY_ID}::uuid, 'E-Keto Food Srls')`);
+  await database.execute(sql`INSERT INTO companies (id, name) VALUES (${EKETO_COMPANY_ID}::uuid, 'E-Keto Food Srls'), (${SOKETO_COMPANY_ID}::uuid, 'SoKeto Srl')`);
   await database.execute(sql`INSERT INTO auth.users (id, email) VALUES (${ACTOR_ID}::uuid, 'admin@example.test')`);
   await database.execute(sql`INSERT INTO products (id, sku, name, "unitPrice", "vatRate", "piecesPerUnit", "showInSimulator", "simulatorOrder", "costPrice") VALUES (${PRODUCT_ID}::uuid, 'TEST-PROSPECT', 'Prodotto prospect test', 100.00, 10.00, 1, true, 1, 25.00)`);
   await database.execute(sql`
     INSERT INTO prospect_simulator_config (company_id, minimum_order_net, shipping_fee_net, free_shipping_threshold_net, recommended_public_discount_percent, display_stand_threshold, privacy_policy_url, tiers)
-    VALUES (${EKETO_COMPANY_ID}::uuid, 290.00, 18.00, 500.00, 10.00, 790.00, 'https://example.test/privacy',
-      '[{"code":"starter","name":"Starter","discount_percent":38.50,"minimum_list_net":0},{"code":"partner","name":"Partner","discount_percent":41.40,"minimum_list_net":500},{"code":"premium","name":"Premium","discount_percent":44.05,"minimum_list_net":790},{"code":"elite","name":"Elite","discount_percent":46.50,"minimum_list_net":1005}]'::jsonb)
+    VALUES
+      (${EKETO_COMPANY_ID}::uuid, 290.00, 18.00, 500.00, 10.00, 790.00, 'https://example.test/privacy',
+        '[{"code":"starter","name":"Starter","discount_percent":38.50,"minimum_list_net":0},{"code":"partner","name":"Partner","discount_percent":41.40,"minimum_list_net":500},{"code":"premium","name":"Premium","discount_percent":44.05,"minimum_list_net":790},{"code":"elite","name":"Elite","discount_percent":46.50,"minimum_list_net":1005}]'::jsonb),
+      (${SOKETO_COMPANY_ID}::uuid, 290.00, 18.00, 500.00, 10.00, 790.00, 'https://example.test/privacy',
+        '[{"code":"starter","name":"Starter","discount_percent":38.50,"minimum_list_net":0},{"code":"partner","name":"Partner","discount_percent":41.40,"minimum_list_net":500},{"code":"premium","name":"Premium","discount_percent":44.05,"minimum_list_net":790},{"code":"elite","name":"Elite","discount_percent":46.50,"minimum_list_net":1005}]'::jsonb)
   `);
   await database.execute(sql`INSERT INTO "pricingPackages" (id, name, "discountPercent", "sortOrder") VALUES (${STARTER_ID}::uuid, 'Starter', 38.50, 1), (${PARTNER_ID}::uuid, 'Partner', 41.40, 2), (${PREMIUM_ID}::uuid, 'Premium', 44.05, 3), (${ELITE_ID}::uuid, 'Elite', 46.50, 4)`);
 });
@@ -165,5 +170,43 @@ describe("prospect invitations and conversion — PostgreSQL isolato", () => {
     expect(preview.simulationTierNet).toBe("293.00");
     expect(preview.pricing.subtotalNet).toBe("351.60");
     expect(preview.pricingDifferenceNet).toBe("58.60");
+  });
+
+  it.each([
+    ["E-Keto", EKETO_COMPANY_ID, "eketo-multicompany", "11122233344"],
+    ["SoKeto", SOKETO_COMPANY_ID, "soketo-multicompany", "55566677788"],
+  ])("T9: invito %s propaga la company a richiesta, retailer e ordine", async (_companyName, companyId, suffix, vatNumber) => {
+    const database = await getDb();
+    const invitation = await invite(database, suffix, companyId);
+    const opened = await resolvePublicInvitation(database, invitation.token);
+    expect(opened).toMatchObject({ available: true, invitation: { companyId } });
+    const submitted = await submitInvitedProspectOrder(database, { token: invitation.token, ...contact(suffix, `IT ${vatNumber}`) });
+    const [simulation] = await database.select({ companyId: prospectSimulations.companyId }).from(prospectSimulations).where(eq(prospectSimulations.id, submitted.id));
+    expect(simulation.companyId).toBe(companyId);
+    const converted = await convertProspectSimulation(database, { companyId, simulationId: submitted.id, actorId: ACTOR_ID, useExistingRetailer: false });
+    const [retailer] = await database.select({ companyId: retailers.companyId }).from(retailers).where(eq(retailers.id, converted.retailerId));
+    const [order] = await database.select({ companyId: orders.companyId }).from(orders).where(eq(orders.id, converted.orderId));
+    expect(retailer.companyId).toBe(companyId);
+    expect(order.companyId).toBe(companyId);
+  });
+
+  it("T10: il payload admin non ammette la scelta o l'iniezione di una company", () => {
+    const result = prospectInvitationInput.safeParse({
+      legalName: "Prospect", contactName: "Referente", email: "prospect@example.test", phone: "3331234567",
+      origin: "https://gestionale.example.test", companyId: SOKETO_COMPANY_ID,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("T11: invito di una company senza configurazione risponde in modo neutro", async () => {
+    const database = await getDb();
+    const invitation = await invite(database, "missing-soketo-config", SOKETO_COMPANY_ID);
+    await database.execute(sql`DELETE FROM prospect_simulator_config WHERE company_id = ${SOKETO_COMPANY_ID}::uuid`);
+    const caller = prospectSimulatorRouter.createCaller({
+      req: { headers: {}, socket: { remoteAddress: "127.0.0.1" } } as TrpcContext["req"],
+      res: {} as TrpcContext["res"],
+      user: null,
+    });
+    await expect(caller.getInvitationPublicData({ token: invitation.token })).resolves.toEqual({ available: false });
   });
 });
