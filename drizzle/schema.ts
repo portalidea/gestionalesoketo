@@ -986,18 +986,24 @@ export const affiliateCommissions = pgTable(
   "affiliate_commissions",
   {
     id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    origin: varchar("origin", { length: 20 }).default("automatic_order").notNull(),
     affiliateId: uuid("affiliateId")
       .notNull()
       .references(() => affiliates.id, { onDelete: "restrict" }),
     orderId: uuid("orderId")
-      .notNull()
       .references(() => orders.id, { onDelete: "restrict" }),
     retailerId: uuid("retailerId")
-      .notNull()
       .references(() => retailers.id, { onDelete: "restrict" }),
     orderTotal: numeric("orderTotal", { precision: 10, scale: 2 }).notNull(),
+    activityName: text("activityName"),
+    commissionDate: date("commissionDate"),
+    baseAmount: numeric("baseAmount", { precision: 10, scale: 2 }),
     commissionRate: numeric("commissionRate", { precision: 5, scale: 2 }).notNull(),
     commissionAmount: numeric("commissionAmount", { precision: 10, scale: 2 }).notNull(),
+    commissionType: varchar("commissionType", { length: 50 }),
+    notes: text("notes"),
+    companyId: uuid("companyId").references(() => companies.id, { onDelete: "restrict" }),
+    createdBy: uuid("createdBy").references(() => users.id, { onDelete: "restrict" }),
     isFirstOrder: boolean("isFirstOrder").default(false).notNull(),
     status: commissionStatusEnum("status").default("pending").notNull(),
     pendingAt: timestamp("pendingAt", { withTimezone: true }).defaultNow().notNull(),
@@ -1013,6 +1019,8 @@ export const affiliateCommissions = pgTable(
     index("idx_commissions_order").on(t.orderId),
     index("idx_commissions_retailer").on(t.retailerId),
     index("idx_commissions_status").on(t.status),
+    index("idx_commissions_company").on(t.companyId),
+    index("idx_commissions_origin").on(t.origin, t.commissionDate),
   ],
 );
 

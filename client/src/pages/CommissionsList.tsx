@@ -152,9 +152,9 @@ export default function CommissionsList() {
                 <TableRow>
                   <TableHead>Data</TableHead>
                   <TableHead>Affiliato</TableHead>
-                  <TableHead>Ordine</TableHead>
+                  <TableHead>Riferimento</TableHead>
                   <TableHead>Rivenditore</TableHead>
-                  <TableHead className="text-right">Totale Ordine</TableHead>
+                  <TableHead className="text-right">Importo base</TableHead>
                   <TableHead className="text-right">%</TableHead>
                   <TableHead className="text-right">Commissione</TableHead>
                   <TableHead>Tipo</TableHead>
@@ -174,16 +174,23 @@ export default function CommissionsList() {
                         </span>
                       </Link>
                     </TableCell>
-                    <TableCell>
-                      <Link href={`/orders/${c.orderId}`}>
-                        <span className="text-primary hover:underline cursor-pointer text-sm">
-                          #{c.orderNumber || c.orderId?.slice(0, 8)}
-                        </span>
-                      </Link>
+                    <TableCell className="min-w-[180px]">
+                      {c.origin === "manual" ? (
+                        <div>
+                          <p className="font-medium text-sm">{c.activityName || "Attività manuale"}</p>
+                          <p className="text-xs text-muted-foreground">{c.commissionType || "Causale non specificata"}</p>
+                        </div>
+                      ) : (
+                        <Link href={`/orders/${c.orderId}`}>
+                          <span className="text-primary hover:underline cursor-pointer text-sm">
+                            #{c.orderNumber || c.orderId?.slice(0, 8)}
+                          </span>
+                        </Link>
+                      )}
                     </TableCell>
                     <TableCell className="text-sm">{c.retailerName || "-"}</TableCell>
                     <TableCell className="text-right text-sm">
-                      €{Number(c.orderTotal).toFixed(2)}
+                      €{Number(c.baseAmount ?? c.orderTotal).toFixed(2)}
                     </TableCell>
                     <TableCell className="text-right text-sm">
                       {c.commissionRate}%
@@ -193,10 +200,10 @@ export default function CommissionsList() {
                     </TableCell>
                     <TableCell>
                       <Badge
-                        variant={c.isFirstOrder ? "default" : "secondary"}
+                        variant={c.origin === "manual" || c.isFirstOrder ? "default" : "secondary"}
                         className="text-xs"
                       >
-                        {c.isFirstOrder ? "Primo" : "Ricorrente"}
+                        {c.origin === "manual" ? "Manuale" : c.isFirstOrder ? "Primo" : "Ricorrente"}
                       </Badge>
                     </TableCell>
                     <TableCell>{statusBadge(c.status)}</TableCell>

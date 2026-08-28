@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import {
   ArrowLeft,
@@ -49,6 +50,15 @@ export default function AffiliateDetail() {
   const [inviteDialog, setInviteDialog] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
+  const [manualDialog, setManualDialog] = useState(false);
+  const [manualForm, setManualForm] = useState({
+    activityName: "",
+    commissionDate: new Date().toISOString().slice(0, 10),
+    baseAmount: "",
+    commissionRate: "",
+    commissionType: "",
+    notes: "",
+  });
 
   const { data: affiliate, isLoading } = trpc.affiliates.getById.useQuery(
     { id: params.id! },
@@ -94,6 +104,17 @@ export default function AffiliateDetail() {
     },
   });
 
+  const createManualCommissionMutation = trpc.affiliates.createManualCommission.useMutation({
+    onSuccess: () => {
+      toast.success("Provvigione manuale aggiunta");
+      utils.affiliates.getById.invalidate({ id: params.id! });
+      utils.affiliates.commissionsList.invalidate();
+      setManualDialog(false);
+      setManualForm({ activityName: "", commissionDate: new Date().toISOString().slice(0, 10), baseAmount: "", commissionRate: "", commissionType: "", notes: "" });
+    },
+    onError: (err) => toast.error("Errore: " + err.message),
+  });
+
   if (isLoading) {
     return <div className="text-center py-8 text-muted-foreground">Caricamento...</div>;
   }
@@ -121,6 +142,23 @@ export default function AffiliateDetail() {
     markPaidMutation.mutate({
       commissionIds: payDialog.ids,
       paymentReference: paymentRef || "Pagamento manuale",
+    });
+  };
+
+  const manualBaseAmount = Number(manualForm.baseAmount);
+  const manualCommissionRate = Number(manualForm.commissionRate);
+  const manualCommissionAmount = Number.isFinite(manualBaseAmount) && Number.isFinite(manualCommissionRate)
+    ? manualBaseAmount * manualCommissionRate / 100
+    : null;
+  const submitManualCommission = () => {
+    createManualCommissionMutation.mutate({
+      affiliateId: params.id!,
+      activityName: manualForm.activityName,
+      commissionDate: manualForm.commissionDate,
+      baseAmount: manualBaseAmount,
+      commissionRate: manualCommissionRate,
+      commissionType: manualForm.commissionType,
+      notes: manualForm.notes || undefined,
     });
   };
 
@@ -280,12 +318,18 @@ export default function AffiliateDetail() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle>Commissioni Pendenti</CardTitle>
-            {pendingCommissions.length > 0 && (
-              <Button size="sm" onClick={handlePayAll}>
-                <CheckCircle className="mr-2 h-4 w-4" />
-                Paga Tutte (€{totalPending.toFixed(2)})
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => setManualDialog(true)}>
+                <Euro className="mr-2 h-4 w-4" />
+                Aggiungi manuale
               </Button>
-            )}
+              {pendingCommissions.length > 0 && (
+                <Button size="sm" onClick={handlePayAll}>
+                  <CheckCircle className="mr-2 h-4 w-4" />
+                  Paga Tutte (€{totalPending.toFixed(2)})
+                </Button>
+              )}
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -298,9 +342,10 @@ export default function AffiliateDetail() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Data</TableHead>
+                  <TableHead>Origine</TableHead>
                   <TableHead>Ordine</TableHead>
-                  <TableHead>Rivenditore</TableHead>
-                  <TableHead className="text-right">Totale Ordine</TableHead>
+                  <TableHead>Attività / Rivenditore</TableHead>
+                  <TableHead className="text-right">Importo base</TableHead>
                   <TableHead className="text-right">%</TableHead>
                   <TableHead className="text-right">Commissione</TableHead>
                   <TableHead>Tipo</TableHead>
@@ -310,18 +355,17 @@ export default function AffiliateDetail() {
                 {pendingCommissions.map((c: any) => (
                   <TableRow key={c.id}>
                     <TableCell className="text-sm">
-                      {new Date(c.pendingAt).toLocaleDateString("it-IT")}
+                      {new Date(c.commissionDate || c.pendingAt).toLocaleDateString("it-IT")}
                     </TableCell>
                     <TableCell>
-                      <Link href={`/orders/${c.orderId}`}>
-                        <span className="text-primary hover:underline cursor-pointer text-sm">
-                          #{c.orderNumber || c.orderId?.slice(0, 8)}
-                        </span>
-                      </Link>
+                      <Badge variant={c.origin === "manual" ? "secondary" : "outline"}>{c.origin === "manual" ? "Manuale" : "Da ordine"}</Badge>
                     </TableCell>
-                    <TableCell className="text-sm">{c.retailerName || "-"}</TableCell>
+                    <TableCell>
+                      {c.orderId ? <Link href={`/orders/${c.orderId}`}><span className="text-primary hover:underline cursor-pointer text-sm">#{c.orderNumber || c.orderId.slice(0, 8)}</span></Link> : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-sm">{c.activityName || c.retailerName || "—"}<span className="block text-xs text-muted-foreground">{c.origin === "manual" ? c.commissionType : ""}</span></TableCell>
                     <TableCell className="text-right text-sm">
-                      €{Number(c.orderTotal).toFixed(2)}
+                      €{Number(c.baseAmount ?? c.orderTotal).toFixed(2)}
                     </TableCell>
                     <TableCell className="text-right text-sm">
                       {c.commissionRate}%
@@ -341,6 +385,28 @@ export default function AffiliateDetail() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={manualDialog} onOpenChange={setManualDialog}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Aggiungi provvigione manuale</DialogTitle>
+            <DialogDescription>La company di riferimento è quella attiva nel gestionale. L’importo della provvigione viene calcolato dal sistema.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-3 sm:grid-cols-2">
+            <div className="space-y-2 sm:col-span-2"><Label htmlFor="manualActivity">Nome attività</Label><Input id="manualActivity" value={manualForm.activityName} onChange={(e) => setManualForm({ ...manualForm, activityName: e.target.value })} placeholder="Es. segnalazione commerciale" /></div>
+            <div className="space-y-2"><Label htmlFor="manualDate">Data</Label><Input id="manualDate" type="date" value={manualForm.commissionDate} onChange={(e) => setManualForm({ ...manualForm, commissionDate: e.target.value })} /></div>
+            <div className="space-y-2"><Label htmlFor="manualType">Causale / tipo</Label><Input id="manualType" value={manualForm.commissionType} onChange={(e) => setManualForm({ ...manualForm, commissionType: e.target.value })} placeholder="Es. segnalazione" /></div>
+            <div className="space-y-2"><Label htmlFor="manualBase">Importo base (€)</Label><Input id="manualBase" type="number" min="0.01" step="0.01" value={manualForm.baseAmount} onChange={(e) => setManualForm({ ...manualForm, baseAmount: e.target.value })} /></div>
+            <div className="space-y-2"><Label htmlFor="manualRate">Percentuale (%)</Label><Input id="manualRate" type="number" min="0" max="100" step="0.01" value={manualForm.commissionRate} onChange={(e) => setManualForm({ ...manualForm, commissionRate: e.target.value })} /></div>
+            <div className="rounded-md border bg-muted/40 p-3 text-sm sm:col-span-2"><span className="text-muted-foreground">Provvigione calcolata</span><p className="mt-1 text-lg font-bold">{manualCommissionAmount === null ? "—" : `€${manualCommissionAmount.toFixed(2)}`}</p></div>
+            <div className="space-y-2 sm:col-span-2"><Label htmlFor="manualNotes">Note</Label><Textarea id="manualNotes" value={manualForm.notes} onChange={(e) => setManualForm({ ...manualForm, notes: e.target.value })} placeholder="Note interne opzionali" /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setManualDialog(false)}>Annulla</Button>
+            <Button onClick={submitManualCommission} disabled={!manualForm.activityName || !manualForm.commissionDate || !manualForm.commissionType || !Number.isFinite(manualBaseAmount) || manualBaseAmount <= 0 || !Number.isFinite(manualCommissionRate) || manualCommissionRate < 0 || manualCommissionRate > 100 || createManualCommissionMutation.isPending}>{createManualCommissionMutation.isPending ? "Salvataggio…" : "Aggiungi provvigione"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Rivenditori associati */}
       <Card>
