@@ -107,7 +107,7 @@ export function calculateProspectSimulation(
   }
   const productById = new Map(catalog.map((product) => [product.id, product]));
   if (Array.from(quantities.keys()).some((id) => !productById.has(id))) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Uno o più prodotti non sono disponibili nel simulatore" });
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Uno o più prodotti non sono disponibili per questo ordine" });
   }
 
   const tiers = normalizeProspectTiers(config.tiers);
@@ -183,7 +183,7 @@ type Database = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
 export async function getProspectSimulatorConfig(database: Database, companyId = SOKETO_COMPANY_ID): Promise<ProspectConfig> {
   const [config] = await database.select().from(prospectSimulatorConfig).where(eq(prospectSimulatorConfig.companyId, companyId)).limit(1);
-  if (!config) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Il simulatore non è ancora disponibile" });
+  if (!config) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Il modulo ordine non è ancora disponibile" });
   return config;
 }
 
