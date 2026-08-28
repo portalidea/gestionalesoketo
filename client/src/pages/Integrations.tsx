@@ -28,6 +28,7 @@ import {
   Loader2,
   Plug,
   RefreshCw,
+  ShieldCheck,
   Unplug,
   Users,
 } from "lucide-react";
@@ -46,6 +47,11 @@ export default function Integrations() {
   // M11.C: list all company connections
   const { data: connections, isLoading: connectionsLoading } =
     trpc.ficIntegration.listConnections.useQuery();
+  const { data: activeCompany } = trpc.companies.getActive.useQuery();
+  const permissionCheck = trpc.ficIntegration.verifyDocumentPermissions.useQuery(
+    undefined,
+    { enabled: false, retry: false },
+  );
 
   const [disconnectTarget, setDisconnectTarget] = useState<{
     companyId: string;
@@ -120,6 +126,13 @@ export default function Integrations() {
     syncMappingsMut.mutate({ companyId });
   }
 
+  async function handleVerifyPermissions() {
+    const result = await permissionCheck.refetch();
+    if (result.error) {
+      toast.error(result.error.message);
+    }
+  }
+
   return (
     <DashboardLayout>
       <div className="space-y-8">
@@ -151,6 +164,9 @@ export default function Integrations() {
                 expired={conn.expired}
                 oauthLoading={oauthLoading === conn.companyId}
                 syncLoading={syncLoading === conn.companyId}
+                isActiveCompany={conn.companyId === activeCompany?.id}
+                permissionCheck={conn.companyId === activeCompany?.id ? permissionCheck.data : undefined}
+                permissionChecking={conn.companyId === activeCompany?.id && permissionCheck.isFetching}
                 onConnect={(force) => handleConnect(conn.companyId, force)}
                 onDisconnect={() =>
                   setDisconnectTarget({
@@ -159,6 +175,7 @@ export default function Integrations() {
                   })
                 }
                 onSyncMappings={() => handleSyncMappings(conn.companyId)}
+                onVerifyPermissions={handleVerifyPermissions}
               />
             ))}
           </div>
@@ -249,9 +266,18 @@ interface CompanyFicCardProps {
   expired?: boolean;
   oauthLoading: boolean;
   syncLoading: boolean;
+  isActiveCompany: boolean;
+  permissionCheck?: {
+    ficCompanyId: string | null;
+    tokenExpiresAt: string | null;
+    proforma: { status: "ok" | "denied" | "error" | "not_checked"; message: string };
+    deliveryNote: { status: "ok" | "denied" | "error" | "not_checked"; message: string };
+  };
+  permissionChecking: boolean;
   onConnect: (forceLogin?: boolean) => void;
   onDisconnect: () => void;
   onSyncMappings: () => void;
+  onVerifyPermissions: () => void;
 }
 
 function CompanyFicCard({
@@ -262,10 +288,20 @@ function CompanyFicCard({
   expired,
   oauthLoading,
   syncLoading,
+  isActiveCompany,
+  permissionCheck,
+  permissionChecking,
   onConnect,
   onDisconnect,
   onSyncMappings,
+  onVerifyPermissions,
 }: CompanyFicCardProps) {
+  const permissionLabel = (status: "ok" | "denied" | "error" | "not_checked") => {
+    if (status === "ok") return "OK";
+    if (status === "denied") return "Negato";
+    if (status === "error") return "Errore";
+    return "Non verificato";
+  };
   return (
     <Card className="border-border bg-card">
       <CardHeader>
@@ -368,11 +404,49 @@ function CompanyFicCard({
                 )}
                 Riconnetti (cambia azienda FiC)
               </Button>
+              {isActiveCompany && (
+                <Button
+                  variant="outline"
+                  onClick={onVerifyPermissions}
+                  disabled={permissionChecking}
+                >
+                  {permissionChecking ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <ShieldCheck className="h-4 w-4 mr-2" />
+                  )}
+                  Verifica permessi
+                </Button>
+              )}
               <Button variant="destructive" onClick={onDisconnect}>
                 <Unplug className="h-4 w-4 mr-2" />
                 Disconnetti
               </Button>
             </div>
+            {isActiveCompany && permissionCheck && (
+              <div className="rounded-md border border-border bg-muted/40 px-4 py-3 text-sm space-y-2">
+                <div className="font-medium text-foreground">Esito verifica permessi</div>
+                <div className="grid gap-1 text-muted-foreground sm:grid-cols-2">
+                  <span>Azienda FiC: {permissionCheck.ficCompanyId ? `ID ${permissionCheck.ficCompanyId}` : "non disponibile"}</span>
+                  <span>
+                    Scadenza token: {permissionCheck.tokenExpiresAt
+                      ? new Date(permissionCheck.tokenExpiresAt).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" })
+                      : "non disponibile"}
+                  </span>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded border border-border bg-background px-3 py-2">
+                    <span className="font-medium text-foreground">Proforma: {permissionLabel(permissionCheck.proforma.status)}</span>
+                    <p className="text-xs text-muted-foreground mt-1">{permissionCheck.proforma.message}</p>
+                  </div>
+                  <div className="rounded border border-border bg-background px-3 py-2">
+                    <span className="font-medium text-foreground">DDT: {permissionLabel(permissionCheck.deliveryNote.status)}</span>
+                    <p className="text-xs text-muted-foreground mt-1">{permissionCheck.deliveryNote.message}</p>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">Controllo in sola lettura: non crea né modifica documenti.</p>
+              </div>
+            )}
           </div>
         )}
       </CardContent>

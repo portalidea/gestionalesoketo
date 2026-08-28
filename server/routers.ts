@@ -26,6 +26,7 @@ import {
   syncRetailerFicMappings,
   getActiveFicConnection,
   getFicConnection,
+  verifyFicDocumentPermissionsForCompany,
 } from "./fic-integration";
 import { ddtImportsRouter } from "./ddt-imports-router";
 import { retailerPortalRouter } from "./retailer-portal-router";
@@ -1879,6 +1880,12 @@ export const appRouter = router({
       .query(async ({ input }) => {
         return await getFicStatusForCompany(input.companyId);
       }),
+
+    // Read-only: usa esclusivamente ctx.activeCompanyId, senza input client.
+    // Esegue due GET FiC per proforma e DDT, senza creare documenti né refreshare token.
+    verifyDocumentPermissions: staffProcedure.query(async ({ ctx }) => {
+      return await verifyFicDocumentPermissionsForCompany(ctx.activeCompanyId);
+    }),
 
     // M11.C: lista status per tutte le company accessibili
     listConnections: staffProcedure.query(async ({ ctx }) => {
