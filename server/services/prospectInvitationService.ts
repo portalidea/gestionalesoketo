@@ -10,7 +10,6 @@ import {
 } from "../../drizzle/schema";
 import { calculateProspectSimulation, getPublicProspectCatalog, normalizeProspectTiers, type ProspectCartItemInput } from "./prospectSimulationService";
 import { sendProspectSimulationNotification } from "./prospectNotificationService";
-import { EKETO_COMPANY_ID } from "../../shared/const";
 
 type Database = any;
 
@@ -235,7 +234,6 @@ export async function submitInvitedProspectOrder(
     const [lockedInvitation] = await tx.select().from(prospectInvitations).where(eq(prospectInvitations.id, tokenCandidate.id)).limit(1);
     const lockedTokenMatches = timingSafeTokenEquals(input.token, lockedInvitation?.token ?? TOKEN_COMPARE_PLACEHOLDER);
     if (!lockedInvitation || !lockedTokenMatches || isUnavailable(lockedInvitation, new Date())) throw new TRPCError({ code: "NOT_FOUND", message: "Link non valido" });
-    if (lockedInvitation.companyId !== EKETO_COMPANY_ID) throw new TRPCError({ code: "NOT_FOUND", message: "Link non valido" });
     if (
       input.legalName.trim() !== lockedInvitation.legalName ||
       input.contactName.trim() !== lockedInvitation.contactName ||
