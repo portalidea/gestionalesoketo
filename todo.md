@@ -218,3 +218,6 @@
 - [ ] Committare, pushare e integrare su main il perimetro multi-company del modulo prospect dopo autorizzazione esplicita
 - [x] Ripristinare la tabella prezzi per fasce nell’ordine prospect tokenizzato e correggere quantità/prezzi del catalogo
 - [x] Correggere contrasto e testi esterni del modulo ordine prospect, eliminando riferimenti a simulazioni
+- [x] Ampliare il dettaglio admin dell’ordine prospect su desktop, mantenendo il comportamento mobile
+- [ ] Aggiungere deroga tracciata al minimo d’ordine nella conversione prospect con motivazione obbligatoria
+- [ ] Verificare scope OAuth FiC per DDT, ri-autorizzazione e impatto sulle proforma
