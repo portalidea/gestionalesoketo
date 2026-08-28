@@ -103,6 +103,7 @@ const adminMenuItems: MenuItem[] = [
   { icon: Building2, label: "Aziende", path: "/settings/companies" },
   { icon: Plug, label: "Integrazioni", path: "/settings/integrations" },
   { icon: Sparkles, label: "Promozioni", path: "/settings/promotions" },
+  { icon: Users, label: "Richieste prospect", path: "/settings/prospect-simulations" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";

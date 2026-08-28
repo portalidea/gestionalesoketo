@@ -231,6 +231,9 @@ export const products = pgTable("products", {
   costPrice: numeric("costPrice", { precision: 10, scale: 4 }).default("0").notNull(),
   // M8.4: backorder support — if true, product can be ordered even when stock=0
   isBackorderable: boolean("isBackorderable").default(true).notNull(),
+  // Simulatore prospect: il catalogo pubblico è opt-in, non influenza il portale retailer.
+  showInSimulator: boolean("showInSimulator").default(false).notNull(),
+  simulatorOrder: integer("simulatorOrder"),
   // M12: gestione inventario etichette (pool unico cross-company)
   labelStock: integer("labelStock").default(0).notNull(),
   labelReorderThreshold: integer("labelReorderThreshold").default(100).notNull(),
@@ -240,6 +243,72 @@ export const products = pgTable("products", {
 
 export type Product = typeof products.$inferSelect;
 export type InsertProduct = typeof products.$inferInsert;
+
+/** Configurazione commerciale per il simulatore prospect pubblico, separata dal tier engine retailer. */
+export const prospectSimulatorConfig = pgTable("prospect_simulator_config", {
+  companyId: uuid("company_id").primaryKey().references(() => companies.id, { onDelete: "cascade" }),
+  minimumOrderNet: numeric("minimum_order_net", { precision: 10, scale: 2 }).notNull(),
+  shippingFeeNet: numeric("shipping_fee_net", { precision: 10, scale: 2 }).notNull(),
+  freeShippingThresholdNet: numeric("free_shipping_threshold_net", { precision: 10, scale: 2 }).notNull(),
+  recommendedPublicDiscountPercent: numeric("recommended_public_discount_percent", { precision: 5, scale: 2 }).notNull(),
+  displayStandThreshold: numeric("display_stand_threshold", { precision: 10, scale: 2 }).notNull(),
+  privacyPolicyUrl: text("privacy_policy_url").notNull(),
+  tiers: jsonb("tiers").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type ProspectSimulatorConfig = typeof prospectSimulatorConfig.$inferSelect;
+
+/** Richiesta prospect e snapshot immutabile della simulazione server-side. */
+export const prospectSimulations = pgTable("prospect_simulations", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: uuid("company_id").notNull().references(() => companies.id),
+  legalName: text("legal_name").notNull(),
+  contactName: text("contact_name").notNull(),
+  email: varchar("email", { length: 320 }).notNull(),
+  phone: varchar("phone", { length: 50 }).notNull(),
+  businessType: varchar("business_type", { length: 100 }).notNull(),
+  city: varchar("city", { length: 100 }).notNull(),
+  vatNumber: varchar("vat_number", { length: 20 }).notNull(),
+  privacyAcceptedAt: timestamp("privacy_accepted_at", { withTimezone: true }).notNull(),
+  privacyPolicyUrl: text("privacy_policy_url").notNull(),
+  listSubtotalNet: numeric("list_subtotal_net", { precision: 10, scale: 2 }).notNull(),
+  reachedTierCode: varchar("reached_tier_code", { length: 50 }).notNull(),
+  calculationSnapshot: jsonb("calculation_snapshot").notNull(),
+  status: varchar("status", { length: 20 }).default("new").notNull(),
+  notificationStatus: varchar("notification_status", { length: 20 }).default("pending").notNull(),
+  notificationSentAt: timestamp("notification_sent_at", { withTimezone: true }),
+  notificationError: text("notification_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("idx_prospect_simulations_company_created").on(t.companyId, t.createdAt),
+  index("idx_prospect_simulations_status_created").on(t.status, t.createdAt),
+  index("idx_prospect_simulations_email_created").on(t.email, t.createdAt),
+]);
+
+export type ProspectSimulation = typeof prospectSimulations.$inferSelect;
+
+/** Righe snapshot del carrello prospect. */
+export const prospectSimulationItems = pgTable("prospect_simulation_items", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  simulationId: uuid("simulation_id").notNull().references(() => prospectSimulations.id, { onDelete: "cascade" }),
+  productId: uuid("product_id").references(() => products.id, { onDelete: "set null" }),
+  productSkuSnapshot: varchar("product_sku_snapshot", { length: 100 }).notNull(),
+  productNameSnapshot: text("product_name_snapshot").notNull(),
+  quantity: integer("quantity").notNull(),
+  piecesPerUnitSnapshot: integer("pieces_per_unit_snapshot").notNull(),
+  unitListNetSnapshot: numeric("unit_list_net_snapshot", { precision: 10, scale: 2 }).notNull(),
+  vatRateSnapshot: numeric("vat_rate_snapshot", { precision: 5, scale: 2 }).notNull(),
+  lineListNet: numeric("line_list_net", { precision: 10, scale: 2 }).notNull(),
+  sortOrder: integer("sort_order").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  unique("prospect_simulation_items_simulation_sort_unique").on(t.simulationId, t.sortOrder),
+  index("idx_prospect_simulation_items_simulation").on(t.simulationId, t.sortOrder),
+]);
+
+export type ProspectSimulationItem = typeof prospectSimulationItems.$inferSelect;
 
 /**
  * M12: Label movements — audit trail per movimenti etichette.

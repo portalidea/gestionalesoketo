@@ -44,6 +44,7 @@ import { tierRulesRouter } from "./tier-rules-router";
 import { paymentReconciliationRouter } from "./payment-reconciliation-router";
 import { promotionsRouter } from "./promotions-router";
 import { expiryAlertsRouter } from "./expiry-alert-router";
+import { prospectSimulatorRouter } from "./prospect-simulator-router";
 import { uuidSchema } from "../shared/schemas";
 
 const uuid = uuidSchema;
@@ -59,6 +60,7 @@ const dateString = z
 
 export const appRouter = router({
   system: systemRouter,
+  prospectSimulator: prospectSimulatorRouter,
 
   // ============= AUTH =============
   // Il logout vero (revoca della sessione, clear localStorage) è gestito
