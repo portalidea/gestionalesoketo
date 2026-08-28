@@ -47,6 +47,13 @@ async function main() {
   const sql = postgres(localDatabaseUrl, { prepare: false, max: 1 });
   try {
     await sql`
+      INSERT INTO expiry_alert_settings (company_id, min_pieces_threshold, reorder_tolerance_days)
+      VALUES (${TEST_IDS.originCompany}, 5, 7)
+      ON CONFLICT (company_id) DO UPDATE
+      SET min_pieces_threshold = EXCLUDED.min_pieces_threshold,
+          reorder_tolerance_days = EXCLUDED.reorder_tolerance_days
+    `;
+    await sql`
       INSERT INTO retailers (id, name, email, "companyId", tier_engine_enabled)
       VALUES (${OTHER_RETAILER}, 'TEST Secondo Rivenditore', 'second@test.invalid', ${TEST_IDS.originCompany}, false)
     `;
