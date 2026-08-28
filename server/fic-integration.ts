@@ -80,6 +80,32 @@ export interface FicIntegrationStatus {
   configured: boolean;
 }
 
+export type FicDocumentPermissionStatus = "ok" | "denied" | "error" | "not_checked";
+
+export interface FicDocumentPermissionResult {
+  status: FicDocumentPermissionStatus;
+  httpStatus: number | null;
+  message: string;
+}
+
+export interface FicDocumentPermissionsCheck {
+  connected: boolean;
+  expired: boolean;
+  ficCompanyId: string | null;
+  tokenExpiresAt: string | null;
+  proforma: FicDocumentPermissionResult;
+  deliveryNote: FicDocumentPermissionResult;
+}
+
+type FicIssuedDocumentsGet = (
+  url: string,
+  config: {
+    headers: { Authorization: string };
+    params: { type: "proforma" | "delivery_note"; per_page: number; page: number };
+    validateStatus: () => boolean;
+  },
+) => Promise<{ status: number; data?: unknown }>;
+
 // ─── DB helper (internal) ──────────────────────────────────────────────────
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -224,6 +250,78 @@ export async function getFicStatusForCompany(companyId: string): Promise<FicInte
     tokenExpiresAt: conn.tokenExpiresAt?.toISOString() ?? null,
     configured: !!creds,
   };
+}
+
+/**
+ * Esegue una sola GET non emissiva della lista documenti per verificare il
+ * permesso sul tipo richiesto. Il token non viene esposto né aggiornato.
+ */
+export async function checkFicIssuedDocumentsPermission(
+  accessToken: string,
+  ficCompanyId: string,
+  documentType: "proforma" | "delivery_note",
+  request: FicIssuedDocumentsGet = axios.get,
+): Promise<FicDocumentPermissionResult> {
+  try {
+    const response = await request(
+      `${FIC_API_BASE}/c/${ficCompanyId}/issued_documents`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        params: { type: documentType, per_page: 1, page: 1 },
+        validateStatus: () => true,
+      },
+    );
+    if (response.status >= 200 && response.status < 300) {
+      return { status: "ok", httpStatus: response.status, message: "Accesso consentito" };
+    }
+    if (response.status === 401 || response.status === 403) {
+      return {
+        status: "denied",
+        httpStatus: response.status,
+        message: response.status === 401 ? "Token non autorizzato o scaduto" : "Permesso negato da Fatture in Cloud",
+      };
+    }
+    return { status: "error", httpStatus: response.status, message: `Risposta FiC non prevista (${response.status})` };
+  } catch (error: any) {
+    return {
+      status: "error",
+      httpStatus: error?.response?.status ?? null,
+      message: error?.response?.data?.error?.message ?? error?.message ?? "Errore di connessione a Fatture in Cloud",
+    };
+  }
+}
+
+/**
+ * Verifica staff per la company attiva. Effettua soltanto GET FiC: niente
+ * refresh, insert, update, delete o creazione di documenti.
+ */
+export async function verifyFicDocumentPermissionsForCompany(
+  companyId: string,
+): Promise<FicDocumentPermissionsCheck> {
+  const connection = await getFicConnection(companyId);
+  const ficCompanyId = connection?.ficCompanyId ?? null;
+  const tokenExpiresAt = connection?.tokenExpiresAt?.toISOString() ?? null;
+  const unavailable = (message: string): FicDocumentPermissionsCheck => ({
+    connected: Boolean(connection?.accessToken),
+    expired: Boolean(connection?.tokenExpiresAt && isTokenExpired(connection.tokenExpiresAt)),
+    ficCompanyId,
+    tokenExpiresAt,
+    proforma: { status: "not_checked", httpStatus: null, message },
+    deliveryNote: { status: "not_checked", httpStatus: null, message },
+  });
+
+  if (!connection?.accessToken || !ficCompanyId) {
+    return unavailable("Connessione FiC non disponibile");
+  }
+  if (connection.tokenExpiresAt && isTokenExpired(connection.tokenExpiresAt)) {
+    return unavailable("Token scaduto: riconnetti prima di verificare i permessi");
+  }
+
+  const [proforma, deliveryNote] = await Promise.all([
+    checkFicIssuedDocumentsPermission(connection.accessToken, ficCompanyId, "proforma"),
+    checkFicIssuedDocumentsPermission(connection.accessToken, ficCompanyId, "delivery_note"),
+  ]);
+  return { connected: true, expired: false, ficCompanyId, tokenExpiresAt, proforma, deliveryNote };
 }
 
 /**
