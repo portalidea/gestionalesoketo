@@ -217,3 +217,4 @@
 - [x] Audit read-only su affiliati cross-company, autorizzazioni e provvigioni manuali
 - [ ] Committare, pushare e integrare su main il perimetro multi-company del modulo prospect dopo autorizzazione esplicita
 - [x] Ripristinare la tabella prezzi per fasce nell’ordine prospect tokenizzato e correggere quantità/prezzi del catalogo
+- [x] Correggere contrasto e testi esterni del modulo ordine prospect, eliminando riferimenti a simulazioni
