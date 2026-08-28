@@ -58,6 +58,7 @@ export async function calculateCommissionForOrder(orderId: string): Promise<void
       and(
         eq(affiliateCommissions.orderId, orderId),
         ne(affiliateCommissions.status, "voided"),
+        eq(affiliateCommissions.origin, "automatic_order"),
       ),
     )
     .limit(1);
@@ -76,6 +77,7 @@ export async function calculateCommissionForOrder(orderId: string): Promise<void
       and(
         eq(affiliateCommissions.retailerId, order.retailerId!),
         ne(affiliateCommissions.status, "voided"),
+        eq(affiliateCommissions.origin, "automatic_order"),
       ),
     );
 
@@ -128,6 +130,7 @@ export async function voidCommissionForOrder(orderId: string, reason: string): P
       and(
         eq(affiliateCommissions.orderId, orderId),
         ne(affiliateCommissions.status, "voided"),
+        eq(affiliateCommissions.origin, "automatic_order"),
       ),
     );
 

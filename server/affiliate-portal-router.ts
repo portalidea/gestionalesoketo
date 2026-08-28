@@ -226,13 +226,20 @@ export const affiliatePortalRouter = router({
         db
           .select({
             id: affiliateCommissions.id,
+            origin: affiliateCommissions.origin,
             retailerName: retailers.name,
             retailerId: affiliateCommissions.retailerId,
             orderNumber: orders.orderNumber,
             orderDate: orders.createdAt,
             orderTotal: affiliateCommissions.orderTotal,
+            activityName: affiliateCommissions.activityName,
+            commissionDate: affiliateCommissions.commissionDate,
+            baseAmount: affiliateCommissions.baseAmount,
             commissionRate: affiliateCommissions.commissionRate,
             commissionAmount: affiliateCommissions.commissionAmount,
+            commissionType: affiliateCommissions.commissionType,
+            notes: affiliateCommissions.notes,
+            companyId: affiliateCommissions.companyId,
             isFirstOrder: affiliateCommissions.isFirstOrder,
             status: affiliateCommissions.status,
             pendingAt: affiliateCommissions.pendingAt,
@@ -242,8 +249,8 @@ export const affiliatePortalRouter = router({
             voidedReason: affiliateCommissions.voidedReason,
           })
           .from(affiliateCommissions)
-          .innerJoin(retailers, eq(affiliateCommissions.retailerId, retailers.id))
-          .innerJoin(orders, eq(affiliateCommissions.orderId, orders.id))
+          .leftJoin(retailers, eq(affiliateCommissions.retailerId, retailers.id))
+          .leftJoin(orders, eq(affiliateCommissions.orderId, orders.id))
           .where(whereClause)
           .orderBy(orderByDir)
           .limit(limit)
@@ -277,14 +284,21 @@ export const affiliatePortalRouter = router({
         .select({
           id: affiliateCommissions.id,
           affiliateId: affiliateCommissions.affiliateId,
+          origin: affiliateCommissions.origin,
           retailerId: affiliateCommissions.retailerId,
           retailerName: retailers.name,
           orderId: affiliateCommissions.orderId,
           orderNumber: orders.orderNumber,
           orderDate: orders.createdAt,
           orderTotal: affiliateCommissions.orderTotal,
+          activityName: affiliateCommissions.activityName,
+          commissionDate: affiliateCommissions.commissionDate,
+          baseAmount: affiliateCommissions.baseAmount,
           commissionRate: affiliateCommissions.commissionRate,
           commissionAmount: affiliateCommissions.commissionAmount,
+          commissionType: affiliateCommissions.commissionType,
+          notes: affiliateCommissions.notes,
+          companyId: affiliateCommissions.companyId,
           isFirstOrder: affiliateCommissions.isFirstOrder,
           status: affiliateCommissions.status,
           pendingAt: affiliateCommissions.pendingAt,
@@ -294,8 +308,8 @@ export const affiliatePortalRouter = router({
           voidedReason: affiliateCommissions.voidedReason,
         })
         .from(affiliateCommissions)
-        .innerJoin(retailers, eq(affiliateCommissions.retailerId, retailers.id))
-        .innerJoin(orders, eq(affiliateCommissions.orderId, orders.id))
+        .leftJoin(retailers, eq(affiliateCommissions.retailerId, retailers.id))
+        .leftJoin(orders, eq(affiliateCommissions.orderId, orders.id))
         .where(
           and(
             eq(affiliateCommissions.id, input.commissionId),
@@ -309,31 +323,32 @@ export const affiliatePortalRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Commissione non trovata" });
       }
 
-      // Get order items
-      const items = await db
-        .select({
-          productName: products.name,
-          quantity: orderItems.quantity,
-          unitPrice: orderItems.unitPriceFinal,
-          totalPrice: orderItems.lineTotalNet,
-        })
-        .from(orderItems)
-        .innerJoin(products, eq(orderItems.productId, products.id))
-        .where(eq(orderItems.orderId, commission.orderId));
+      const items = commission.orderId
+        ? await db
+            .select({
+              productName: products.name,
+              quantity: orderItems.quantity,
+              unitPrice: orderItems.unitPriceFinal,
+              totalPrice: orderItems.lineTotalNet,
+            })
+            .from(orderItems)
+            .innerJoin(products, eq(orderItems.productId, products.id))
+            .where(eq(orderItems.orderId, commission.orderId))
+        : [];
 
       return {
         ...commission,
-        order: {
+        order: commission.orderId ? {
           id: commission.orderId,
           number: commission.orderNumber,
           date: commission.orderDate,
           totalNet: commission.orderTotal,
           items,
-        },
-        retailer: {
+        } : null,
+        retailer: commission.retailerId ? {
           id: commission.retailerId,
           name: commission.retailerName,
-        },
+        } : null,
       };
     }),
 
@@ -369,17 +384,22 @@ export const affiliatePortalRouter = router({
       const items = await db
         .select({
           pendingAt: affiliateCommissions.pendingAt,
+          origin: affiliateCommissions.origin,
           orderNumber: orders.orderNumber,
           retailerName: retailers.name,
           orderTotal: affiliateCommissions.orderTotal,
+          activityName: affiliateCommissions.activityName,
+          commissionDate: affiliateCommissions.commissionDate,
+          baseAmount: affiliateCommissions.baseAmount,
           commissionRate: affiliateCommissions.commissionRate,
           commissionAmount: affiliateCommissions.commissionAmount,
+          commissionType: affiliateCommissions.commissionType,
           status: affiliateCommissions.status,
           paymentReference: affiliateCommissions.paymentReference,
         })
         .from(affiliateCommissions)
-        .innerJoin(retailers, eq(affiliateCommissions.retailerId, retailers.id))
-        .innerJoin(orders, eq(affiliateCommissions.orderId, orders.id))
+        .leftJoin(retailers, eq(affiliateCommissions.retailerId, retailers.id))
+        .leftJoin(orders, eq(affiliateCommissions.orderId, orders.id))
         .where(and(...conditions))
         .orderBy(desc(affiliateCommissions.pendingAt));
 
@@ -392,13 +412,16 @@ export const affiliatePortalRouter = router({
         }
       };
 
-      const header = "Data,Ordine,Rivenditore,Totale Ordine,Tasso %,Importo,Stato,Riferimento Pagamento";
+      const header = "Data,Origine,Causale,Attività,Ordine,Rivenditore,Importo base,Tasso %,Importo,Stato,Riferimento Pagamento";
       const rows = items.map((i) =>
         [
-          i.pendingAt ? new Date(i.pendingAt).toLocaleDateString("it-IT") : "",
+          i.commissionDate ? new Date(i.commissionDate).toLocaleDateString("it-IT") : i.pendingAt ? new Date(i.pendingAt).toLocaleDateString("it-IT") : "",
+          i.origin === "manual" ? "Manuale" : "Da ordine",
+          `"${(i.commissionType || "").replace(/"/g, '""')}"`,
+          `"${(i.activityName || "").replace(/"/g, '""')}"`,
           i.orderNumber || "",
           `"${(i.retailerName || "").replace(/"/g, '""')}"`,
-          Number(i.orderTotal).toFixed(2),
+          Number(i.baseAmount ?? i.orderTotal).toFixed(2),
           i.commissionRate,
           Number(i.commissionAmount).toFixed(2),
           statusLabel(i.status),

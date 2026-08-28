@@ -88,8 +88,7 @@ export default function AffiliateCommissions() {
       const result = await exportMutation.mutateAsync({
         status: statusFilter === "all" ? undefined : [statusFilter],
       });
-      // result is the CSV content object with { csv } or string
-      const csvContent = typeof result === "string" ? result : (result as any).csv || JSON.stringify(result);
+      const csvContent = typeof result === "string" ? result : result.csvContent;
       const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -166,9 +165,10 @@ export default function AffiliateCommissions() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Data</TableHead>
+                      <TableHead>Origine</TableHead>
                       <TableHead>Retailer</TableHead>
                       <TableHead>Ordine</TableHead>
-                      <TableHead className="text-right">Importo ordine</TableHead>
+                      <TableHead className="text-right">Importo base</TableHead>
                       <TableHead className="text-right">Commissione</TableHead>
                       <TableHead>Stato</TableHead>
                       <TableHead className="w-10"></TableHead>
@@ -178,14 +178,15 @@ export default function AffiliateCommissions() {
                     {data.items.map((c) => (
                       <TableRow key={c.id}>
                         <TableCell className="text-sm">
-                          {formatDate(c.pendingAt)}
+                          {formatDate(c.commissionDate ?? c.pendingAt)}
                         </TableCell>
-                        <TableCell className="font-medium">{c.retailerName}</TableCell>
+                        <TableCell><Badge variant={c.origin === "manual" ? "secondary" : "outline"}>{c.origin === "manual" ? "Manuale" : "Da ordine"}</Badge></TableCell>
+                        <TableCell className="font-medium">{c.retailerName || c.activityName || "—"}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">
-                          #{c.orderNumber}
+                          {c.orderNumber ? `#${c.orderNumber}` : c.commissionType || "—"}
                         </TableCell>
                         <TableCell className="text-right text-sm">
-                          {formatCurrency(c.orderTotal)}
+                          {formatCurrency(c.baseAmount ?? c.orderTotal)}
                         </TableCell>
                         <TableCell className="text-right font-medium">
                           {formatCurrency(c.commissionAmount)}
@@ -249,24 +250,25 @@ export default function AffiliateCommissions() {
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
-                    <p className="text-muted-foreground">Retailer</p>
-                    <p className="font-medium">{detail.retailer.name}</p>
+                    <p className="text-muted-foreground">Origine</p>
+                    <p className="font-medium">{detail.origin === "manual" ? "Provvigione manuale" : "Ordine gestionale"}</p>
                   </div>
                   <div>
                     <p className="text-muted-foreground">Stato</p>
                     <div>{statusBadge(detail.status as CommissionStatus)}</div>
                   </div>
+                  {detail.origin === "manual" ? <>
+                    <div><p className="text-muted-foreground">Attività</p><p className="font-medium">{detail.activityName}</p></div>
+                    <div><p className="text-muted-foreground">Causale</p><p>{detail.commissionType}</p></div>
+                    <div><p className="text-muted-foreground">Data</p><p>{formatDate(detail.commissionDate)}</p></div>
+                  </> : <>
+                    <div><p className="text-muted-foreground">Retailer</p><p className="font-medium">{detail.retailer?.name || "—"}</p></div>
+                    <div><p className="text-muted-foreground">Ordine</p><p className="font-medium">#{detail.order?.number || "—"}</p></div>
+                    <div><p className="text-muted-foreground">Data ordine</p><p>{formatDate(detail.order?.date || null)}</p></div>
+                  </>}
                   <div>
-                    <p className="text-muted-foreground">Ordine</p>
-                    <p className="font-medium">#{detail.order.number}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Data ordine</p>
-                    <p>{formatDate(detail.order.date)}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Importo ordine</p>
-                    <p className="font-medium">{formatCurrency(detail.order.totalNet)}</p>
+                    <p className="text-muted-foreground">Importo base</p>
+                    <p className="font-medium">{formatCurrency(detail.baseAmount ?? detail.orderTotal)}</p>
                   </div>
                   <div>
                     <p className="text-muted-foreground">Commissione</p>
@@ -286,10 +288,13 @@ export default function AffiliateCommissions() {
                       <Badge variant="secondary">Primo ordine</Badge>
                     </div>
                   )}
+                  {detail.origin === "manual" && detail.notes && (
+                    <div className="col-span-2"><p className="text-muted-foreground">Note</p><p>{detail.notes}</p></div>
+                  )}
                 </div>
 
                 {/* Order items */}
-                {detail.order.items && detail.order.items.length > 0 && (
+                {detail.order?.items && detail.order.items.length > 0 && (
                   <div>
                     <p className="text-sm font-medium mb-2">Prodotti nell'ordine:</p>
                     <Table>

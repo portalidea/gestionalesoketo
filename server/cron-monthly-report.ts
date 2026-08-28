@@ -80,9 +80,9 @@ cronRoutes.get("/cron/affiliate-monthly-report", async (req: Request, res: Respo
         if (commissionsCount === 0) continue; // Skip affiliates with no activity
 
         // Count unique retailers
-        const [retailerStats] = await db
-          .select({
-            retailersCount: sql<number>`COUNT(DISTINCT ${affiliateCommissions.retailerId})::int`,
+          const [retailerStats] = await db
+            .select({
+            retailersCount: sql<number>`COUNT(DISTINCT ${affiliateCommissions.retailerId}) FILTER (WHERE ${affiliateCommissions.retailerId} IS NOT NULL)::int`,
           })
           .from(affiliateCommissions)
           .where(

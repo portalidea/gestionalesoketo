@@ -208,6 +208,12 @@
 - [x] Correggere il margine prospect su listino netto, eliminare il consigliato dalla UI e pubblicare il fix autorizzato
 - [x] Rimuovere il vincolo E-Keto dal modulo prospect e propagare la company attiva dell’invito a richiesta, retailer e ordine
 - [x] Verificare con test isolati inviti e conversioni sia SoKeto sia E-Keto, incluso il divieto di scelta company client-side
+- [x] Aggiungere provvigioni manuali affiliate con origine, company, audit e protezione del flusso automatico
+- [x] Estendere portale, CSV, report mensile e test per la visibilità delle provvigioni manuali
+- [x] Verificare che orderTotal delle provvigioni manuali non venga usato come fatturato in report, dashboard, export o cron
+- [x] Correggere CommissionsList: importo base e riferimento attività/causale per righe manuali
+- [ ] Audit read-only su DDT Fatture in Cloud e modello saldo prepagato
+- [ ] Ripristinare la tabella prezzi per fasce nell’ordine prospect tokenizzato e correggere quantità/prezzi del catalogo
 - [x] Audit read-only su affiliati cross-company, autorizzazioni e provvigioni manuali
 - [ ] Committare, pushare e integrare su main il perimetro multi-company del modulo prospect dopo autorizzazione esplicita
 - [x] Ripristinare la tabella prezzi per fasce nell’ordine prospect tokenizzato e correggere quantità/prezzi del catalogo

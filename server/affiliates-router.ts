@@ -20,6 +20,7 @@ import {
   users,
 } from "../drizzle/schema";
 import { uuidSchema } from "../shared/schemas";
+import { createManualAffiliateCommission } from "./services/manualAffiliateCommissionService";
 
 export const affiliatesRouter = router({
   // --- CRUD Affiliates ---
@@ -295,13 +296,20 @@ export const affiliatesRouter = router({
             id: affiliateCommissions.id,
             affiliateId: affiliateCommissions.affiliateId,
             affiliateName: affiliates.name,
+            origin: affiliateCommissions.origin,
             orderId: affiliateCommissions.orderId,
             orderNumber: orders.orderNumber,
             retailerId: affiliateCommissions.retailerId,
             retailerName: retailers.name,
             orderTotal: affiliateCommissions.orderTotal,
+            activityName: affiliateCommissions.activityName,
+            commissionDate: affiliateCommissions.commissionDate,
+            baseAmount: affiliateCommissions.baseAmount,
             commissionRate: affiliateCommissions.commissionRate,
             commissionAmount: affiliateCommissions.commissionAmount,
+            commissionType: affiliateCommissions.commissionType,
+            notes: affiliateCommissions.notes,
+            companyId: affiliateCommissions.companyId,
             isFirstOrder: affiliateCommissions.isFirstOrder,
             status: affiliateCommissions.status,
             pendingAt: affiliateCommissions.pendingAt,
@@ -312,8 +320,8 @@ export const affiliatesRouter = router({
           })
           .from(affiliateCommissions)
           .innerJoin(affiliates, eq(affiliateCommissions.affiliateId, affiliates.id))
-          .innerJoin(orders, eq(affiliateCommissions.orderId, orders.id))
-          .innerJoin(retailers, eq(affiliateCommissions.retailerId, retailers.id))
+          .leftJoin(orders, eq(affiliateCommissions.orderId, orders.id))
+          .leftJoin(retailers, eq(affiliateCommissions.retailerId, retailers.id))
           .where(whereClause)
           .orderBy(desc(affiliateCommissions.pendingAt))
           .limit(limit)
@@ -322,6 +330,25 @@ export const affiliatesRouter = router({
       ]);
 
       return { items, total, page, limit };
+    }),
+
+  createManualCommission: adminProcedure
+    .input(z.object({
+      affiliateId: uuidSchema,
+      activityName: z.string().trim().min(1).max(500),
+      commissionDate: z.string().date(),
+      baseAmount: z.number().positive().max(99_999_999),
+      commissionRate: z.number().min(0).max(100),
+      commissionType: z.string().trim().min(1).max(50),
+      notes: z.string().trim().max(5_000).optional(),
+    }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const database = (await getDb())!;
+      return createManualAffiliateCommission(database, {
+        ...input,
+        companyId: ctx.activeCompanyId,
+        createdBy: ctx.user!.id,
+      });
     }),
 
   markPaid: adminProcedure
