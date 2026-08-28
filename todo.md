@@ -210,3 +210,4 @@
 - [x] Verificare con test isolati inviti e conversioni sia SoKeto sia E-Keto, incluso il divieto di scelta company client-side
 - [x] Audit read-only su affiliati cross-company, autorizzazioni e provvigioni manuali
 - [ ] Committare, pushare e integrare su main il perimetro multi-company del modulo prospect dopo autorizzazione esplicita
+- [x] Ripristinare la tabella prezzi per fasce nell’ordine prospect tokenizzato e correggere quantità/prezzi del catalogo

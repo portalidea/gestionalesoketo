@@ -54,6 +54,17 @@ describe("calculateProspectSimulation", () => {
     expect(result.tiers.map((tier) => tier.potentialMarginPercent)).toEqual(["38.50", "41.40", "44.05", "46.50"]);
   });
 
+  it("restituisce per ogni prodotto i quattro prezzi unitari usati dalla tabella a fasce", () => {
+    const listPrice100 = { ...food, unitListNet: "100.00" };
+    const result = calculateProspectSimulation(config, [listPrice100], [{ productId: listPrice100.id, quantity: 2 }]);
+    expect(result.items[0]?.tierPrices.map((price) => ({ code: price.tierCode, unitNet: price.unitNet }))).toEqual([
+      { code: "starter", unitNet: "61.50" },
+      { code: "partner", unitNet: "58.60" },
+      { code: "premium", unitNet: "55.95" },
+      { code: "elite", unitNet: "53.50" },
+    ]);
+  });
+
   it.each([0, -1, 1.5])("rifiuta quantità %s", (quantity) => {
     expect(() => calculateProspectSimulation(config, [food], [{ productId: food.id, quantity }])).toThrow("quantità");
   });
