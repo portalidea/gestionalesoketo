@@ -14,13 +14,18 @@ describe("FiC document permission probe", () => {
       },
     );
 
-    expect(result).toEqual({ status: "ok", httpStatus: 200, message: "Accesso consentito" });
+    expect(result).toEqual({
+      status: "ok",
+      httpStatus: 200,
+      message: "Accesso consentito",
+      requestUrl: "https://api-v2.fattureincloud.it/c/12345/issued_documents?q=type+%3D+%27proforma%27&per_page=1&page=1",
+      responsePayload: null,
+    });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
-      url: "https://api-v2.fattureincloud.it/c/12345/issued_documents",
+      url: "https://api-v2.fattureincloud.it/c/12345/issued_documents?q=type+%3D+%27proforma%27&per_page=1&page=1",
       config: {
         headers: { Authorization: "Bearer secret-token" },
-        params: { q: "type = 'proforma'", per_page: 1, page: 1 },
       },
     });
   });
@@ -30,13 +35,15 @@ describe("FiC document permission probe", () => {
       "secret-token",
       "12345",
       "delivery_note",
-      async () => ({ status: 403, data: { error: { message: "Forbidden" } } }),
+      async () => ({ status: 422, data: { error: { message: "Filtro non valido", field: "q" } } }),
     );
 
     expect(result).toEqual({
-      status: "denied",
-      httpStatus: 403,
-      message: "Permesso negato da Fatture in Cloud",
+      status: "error",
+      httpStatus: 422,
+      message: "Risposta FiC non prevista (422)",
+      requestUrl: "https://api-v2.fattureincloud.it/c/12345/issued_documents?q=type+%3D+%27delivery_note%27&per_page=1&page=1",
+      responsePayload: { error: { message: "Filtro non valido", field: "q" } },
     });
   });
 });

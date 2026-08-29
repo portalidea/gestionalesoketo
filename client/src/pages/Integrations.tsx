@@ -270,8 +270,8 @@ interface CompanyFicCardProps {
   permissionCheck?: {
     ficCompanyId: string | null;
     tokenExpiresAt: string | null;
-    proforma: { status: "ok" | "denied" | "error" | "not_checked"; message: string };
-    deliveryNote: { status: "ok" | "denied" | "error" | "not_checked"; message: string };
+    proforma: { status: "ok" | "denied" | "error" | "not_checked"; message: string; httpStatus: number | null; requestUrl: string | null; responsePayload: unknown | null };
+    deliveryNote: { status: "ok" | "denied" | "error" | "not_checked"; message: string; httpStatus: number | null; requestUrl: string | null; responsePayload: unknown | null };
   };
   permissionChecking: boolean;
   onConnect: (forceLogin?: boolean) => void;
@@ -302,6 +302,20 @@ function CompanyFicCard({
     if (status === "error") return "Errore";
     return "Non verificato";
   };
+  const renderDiagnostic = (result: NonNullable<CompanyFicCardProps["permissionCheck"]>["proforma"]) => (
+    <details className="mt-2 rounded border border-border bg-muted/40 px-2 py-1 text-xs text-muted-foreground">
+      <summary className="cursor-pointer font-medium text-foreground">Dettaglio tecnico FiC</summary>
+      <div className="mt-2 space-y-2">
+        <div><span className="font-medium">HTTP:</span> {result.httpStatus ?? "nessuna risposta"}</div>
+        <div className="break-all"><span className="font-medium">GET:</span> {result.requestUrl ?? "non eseguita"}</div>
+        {result.responsePayload !== null && (
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-background p-2 text-[11px] text-foreground">
+            {JSON.stringify(result.responsePayload, null, 2)}
+          </pre>
+        )}
+      </div>
+    </details>
+  );
   return (
     <Card className="border-border bg-card">
       <CardHeader>
@@ -438,10 +452,12 @@ function CompanyFicCard({
                   <div className="rounded border border-border bg-background px-3 py-2">
                     <span className="font-medium text-foreground">Proforma: {permissionLabel(permissionCheck.proforma.status)}</span>
                     <p className="text-xs text-muted-foreground mt-1">{permissionCheck.proforma.message}</p>
+                    {renderDiagnostic(permissionCheck.proforma)}
                   </div>
                   <div className="rounded border border-border bg-background px-3 py-2">
                     <span className="font-medium text-foreground">DDT: {permissionLabel(permissionCheck.deliveryNote.status)}</span>
                     <p className="text-xs text-muted-foreground mt-1">{permissionCheck.deliveryNote.message}</p>
+                    {renderDiagnostic(permissionCheck.deliveryNote)}
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground">Controllo in sola lettura: non crea né modifica documenti.</p>
