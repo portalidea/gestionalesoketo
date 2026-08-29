@@ -101,7 +101,7 @@ type FicIssuedDocumentsGet = (
   url: string,
   config: {
     headers: { Authorization: string };
-    params: { type: "proforma" | "delivery_note"; per_page: number; page: number };
+    params: { q: string; per_page: number; page: number };
     validateStatus: () => boolean;
   },
 ) => Promise<{ status: number; data?: unknown }>;
@@ -267,7 +267,9 @@ export async function checkFicIssuedDocumentsPermission(
       `${FIC_API_BASE}/c/${ficCompanyId}/issued_documents`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
-        params: { type: documentType, per_page: 1, page: 1 },
+        // listIssuedDocuments filtra esclusivamente con il parametro SQL-like
+        // `q`; `type` è un campo filtrabile, non un query parameter diretto.
+        params: { q: `type = '${documentType}'`, per_page: 1, page: 1 },
         validateStatus: () => true,
       },
     );

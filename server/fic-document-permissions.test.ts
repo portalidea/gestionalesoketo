@@ -20,7 +20,7 @@ describe("FiC document permission probe", () => {
       url: "https://api-v2.fattureincloud.it/c/12345/issued_documents",
       config: {
         headers: { Authorization: "Bearer secret-token" },
-        params: { type: "proforma", per_page: 1, page: 1 },
+        params: { q: "type = 'proforma'", per_page: 1, page: 1 },
       },
     });
   });
