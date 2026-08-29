@@ -86,6 +86,8 @@ export interface FicDocumentPermissionResult {
   status: FicDocumentPermissionStatus;
   httpStatus: number | null;
   message: string;
+  requestUrl: string | null;
+  responsePayload: unknown | null;
 }
 
 export interface FicDocumentPermissionsCheck {
@@ -101,7 +103,6 @@ type FicIssuedDocumentsGet = (
   url: string,
   config: {
     headers: { Authorization: string };
-    params: { q: string; per_page: number; page: number };
     validateStatus: () => boolean;
   },
 ) => Promise<{ status: number; data?: unknown }>;
@@ -262,33 +263,50 @@ export async function checkFicIssuedDocumentsPermission(
   documentType: "proforma" | "delivery_note",
   request: FicIssuedDocumentsGet = axios.get,
 ): Promise<FicDocumentPermissionResult> {
+  const query = new URLSearchParams({
+    q: `type = '${documentType}'`,
+    per_page: "1",
+    page: "1",
+  });
+  const requestUrl = `${FIC_API_BASE}/c/${ficCompanyId}/issued_documents?${query.toString()}`;
+
   try {
-    const response = await request(
-      `${FIC_API_BASE}/c/${ficCompanyId}/issued_documents`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        // listIssuedDocuments filtra esclusivamente con il parametro SQL-like
-        // `q`; `type` è un campo filtrabile, non un query parameter diretto.
-        params: { q: `type = '${documentType}'`, per_page: 1, page: 1 },
-        validateStatus: () => true,
-      },
-    );
+    const response = await request(requestUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      validateStatus: () => true,
+    });
     if (response.status >= 200 && response.status < 300) {
-      return { status: "ok", httpStatus: response.status, message: "Accesso consentito" };
+      return {
+        status: "ok",
+        httpStatus: response.status,
+        message: "Accesso consentito",
+        requestUrl,
+        responsePayload: null,
+      };
     }
     if (response.status === 401 || response.status === 403) {
       return {
         status: "denied",
         httpStatus: response.status,
         message: response.status === 401 ? "Token non autorizzato o scaduto" : "Permesso negato da Fatture in Cloud",
+        requestUrl,
+        responsePayload: response.data ?? null,
       };
     }
-    return { status: "error", httpStatus: response.status, message: `Risposta FiC non prevista (${response.status})` };
+    return {
+      status: "error",
+      httpStatus: response.status,
+      message: `Risposta FiC non prevista (${response.status})`,
+      requestUrl,
+      responsePayload: response.data ?? null,
+    };
   } catch (error: any) {
     return {
       status: "error",
       httpStatus: error?.response?.status ?? null,
       message: error?.response?.data?.error?.message ?? error?.message ?? "Errore di connessione a Fatture in Cloud",
+      requestUrl,
+      responsePayload: error?.response?.data ?? null,
     };
   }
 }
@@ -308,8 +326,8 @@ export async function verifyFicDocumentPermissionsForCompany(
     expired: Boolean(connection?.tokenExpiresAt && isTokenExpired(connection.tokenExpiresAt)),
     ficCompanyId,
     tokenExpiresAt,
-    proforma: { status: "not_checked", httpStatus: null, message },
-    deliveryNote: { status: "not_checked", httpStatus: null, message },
+    proforma: { status: "not_checked", httpStatus: null, message, requestUrl: null, responsePayload: null },
+    deliveryNote: { status: "not_checked", httpStatus: null, message, requestUrl: null, responsePayload: null },
   });
 
   if (!connection?.accessToken || !ficCompanyId) {

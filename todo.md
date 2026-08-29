@@ -221,6 +221,7 @@
 - [x] Ampliare il dettaglio admin dell’ordine prospect su desktop, mantenendo il comportamento mobile
 - [x] Aggiungere verifica staff read-only dei permessi FiC proforma e DDT per la company attiva
 - [x] Correggere il filtro GET della verifica permessi FiC che restituisce 422, senza richieste POST
+- [x] Esporre payload FiC e URL serializzato della verifica permessi per diagnosticare il 422 senza POST
 - [x] Committare, pushare e integrare su main il controllo read-only dei permessi FiC dopo autorizzazione esplicita
 - [x] Rendere mobile-first la sola pagina ordine prospect tokenizzata senza introdurre componenti condivisi
 - [x] Rendere mobile-first solo PartnerCart e PartnerOrderEdit senza modificare logica o componenti condivisi
