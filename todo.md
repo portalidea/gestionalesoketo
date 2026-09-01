@@ -218,6 +218,7 @@
 - [ ] Committare, pushare e integrare su main il perimetro multi-company del modulo prospect dopo autorizzazione esplicita
 - [x] Ripristinare la tabella prezzi per fasce nell’ordine prospect tokenizzato e correggere quantità/prezzi del catalogo
 - [x] Correggere contrasto e testi esterni del modulo ordine prospect, eliminando riferimenti a simulazioni
+- [x] Determinare le fasce prospect in modo discendente sul netto scontato, aggiornando soglie, spedizione, espositore, etichette e test ai bordi
 - [x] Ampliare il dettaglio admin dell’ordine prospect su desktop, mantenendo il comportamento mobile
 - [x] Aggiungere verifica staff read-only dei permessi FiC proforma e DDT per la company attiva
 - [x] Correggere il filtro GET della verifica permessi FiC che restituisce 422, senza richieste POST

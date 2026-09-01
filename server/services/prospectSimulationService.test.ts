@@ -20,18 +20,51 @@ const food = { id: "11111111-1111-1111-1111-111111111111", sku: "FOOD", name: "P
 const beer = { id: "22222222-2222-2222-2222-222222222222", sku: "BEER", name: "Birra 22%", category: null, unitListNet: "1.00", vatRate: "22.00", piecesPerUnit: 1, unitLabel: "PZ", simulatorOrder: 2 };
 
 describe("calculateProspectSimulation", () => {
-  it.each([[499, "starter"], [500, "partner"], [789, "partner"], [790, "premium"], [1004, "premium"], [1005, "elite"]])("assegna %s EUR alla fascia %s", (quantity, tierCode) => {
-    const result = calculateProspectSimulation(config, [food], [{ productId: food.id, quantity }]);
-    expect(result.reachedTier.code).toBe(tierCode);
+  it("resta Partner quando il Partner netto è 550 EUR e il Premium netto sarebbe 525 EUR", () => {
+    const product = { ...food, unitListNet: "938.57" };
+    const result = calculateProspectSimulation(config, [product], [{ productId: product.id, quantity: 1 }]);
+    expect(result.reachedTier.code).toBe("partner");
+    expect(result.currentTierMerchandiseNet).toBe("550.00");
+    expect(result.tiers.find((tier) => tier.code === "premium")?.merchandiseNet).toBe("525.13");
+    expect(result.nextTier?.additionalMerchandiseNet).toBe("264.87");
   });
 
-  it("applica spedizione gratuita ed espositore solo oltre le rispettive soglie", () => {
-    const belowShippingThreshold = calculateProspectSimulation(config, [food], [{ productId: food.id, quantity: 893 }]);
-    const overShippingThreshold = calculateProspectSimulation(config, [food], [{ productId: food.id, quantity: 894 }]);
-    const atDisplayThreshold = calculateProspectSimulation(config, [food], [{ productId: food.id, quantity: 790 }]);
-    const overDisplayThreshold = calculateProspectSimulation(config, [food], [{ productId: food.id, quantity: 791 }]);
-    expect(belowShippingThreshold.freeShippingApplied).toBe(false);
+  it("assegna Elite a 1.005 EUR netti Elite esatti", () => {
+    const product = { ...food, unitListNet: "1878.5047" };
+    const result = calculateProspectSimulation(config, [product], [{ productId: product.id, quantity: 1 }]);
+    expect(result.tiers.find((tier) => tier.code === "elite")?.merchandiseNet).toBe("1005.00");
+    expect(result.reachedTier.code).toBe("elite");
+  });
+
+  it("assegna Premium quando Elite è 1.004 EUR ma Premium è 1.050 EUR", () => {
+    const product = { ...food, unitListNet: "1877.13" };
+    const result = calculateProspectSimulation(config, [product], [{ productId: product.id, quantity: 1 }]);
+    expect(result.tiers.find((tier) => tier.code === "elite")?.merchandiseNet).toBe("1004.26");
+    expect(result.tiers.find((tier) => tier.code === "premium")?.merchandiseNet).toBe("1050.25");
+    expect(result.reachedTier.code).toBe("premium");
+  });
+
+  it("rispetta i bordi esatti di Partner, Premium ed Elite sul netto pagato", () => {
+    const partner = calculateProspectSimulation(config, [{ ...food, unitListNet: "853.2423" }], [{ productId: food.id, quantity: 1 }]);
+    const premium = calculateProspectSimulation(config, [{ ...food, unitListNet: "1411.9750" }], [{ productId: food.id, quantity: 1 }]);
+    const elite = calculateProspectSimulation(config, [{ ...food, unitListNet: "1878.5047" }], [{ productId: food.id, quantity: 1 }]);
+    expect(partner.reachedTier.code).toBe("partner");
+    expect(partner.currentTierMerchandiseNet).toBe("500.00");
+    expect(premium.reachedTier.code).toBe("premium");
+    expect(premium.currentTierMerchandiseNet).toBe("790.00");
+    expect(elite.reachedTier.code).toBe("elite");
+    expect(elite.currentTierMerchandiseNet).toBe("1005.00");
+  });
+
+  it("applica spedizione ed espositore sul netto scontato della fascia raggiunta", () => {
+    const atShippingThreshold = calculateProspectSimulation(config, [{ ...food, unitListNet: "853.2423" }], [{ productId: food.id, quantity: 1 }]);
+    const overShippingThreshold = calculateProspectSimulation(config, [{ ...food, unitListNet: "853.25" }], [{ productId: food.id, quantity: 1 }]);
+    const atDisplayThreshold = calculateProspectSimulation(config, [{ ...food, unitListNet: "1411.9750" }], [{ productId: food.id, quantity: 1 }]);
+    const overDisplayThreshold = calculateProspectSimulation(config, [{ ...food, unitListNet: "1411.99" }], [{ productId: food.id, quantity: 1 }]);
+    expect(atShippingThreshold.currentTierMerchandiseNet).toBe("500.00");
+    expect(atShippingThreshold.freeShippingApplied).toBe(false);
     expect(overShippingThreshold.freeShippingApplied).toBe(true);
+    expect(atDisplayThreshold.currentTierMerchandiseNet).toBe("790.00");
     expect(atDisplayThreshold.displayStandUnlocked).toBe(false);
     expect(overDisplayThreshold.displayStandUnlocked).toBe(true);
   });

@@ -23,7 +23,7 @@ const PREMIUM_ID = "30000000-0000-0000-0000-000000000003";
 const ELITE_ID = "30000000-0000-0000-0000-000000000004";
 const fakeEmail = async () => ({ sent: false as const, errorMessage: "email test disabilitata" });
 
-function contact(suffix: string, vatNumber = `IT 123.45${suffix}`, quantity = 5) {
+function contact(suffix: string, vatNumber = `IT 123.45${suffix}`, quantity = 9) {
   return {
     legalName: `Prospect ${suffix}`,
     contactName: `Referente ${suffix}`,
@@ -167,9 +167,9 @@ describe("prospect invitations and conversion — PostgreSQL isolato", () => {
     const { simulationId } = await submit(database, "price-change", "IT 55566677788");
     await database.execute(sql`UPDATE products SET "unitPrice" = 120.00 WHERE id = ${PRODUCT_ID}::uuid`);
     const preview = await previewProspectConversion(database, EKETO_COMPANY_ID, simulationId);
-    expect(preview.simulationTierNet).toBe("293.00");
-    expect(preview.pricing.subtotalNet).toBe("351.60");
-    expect(preview.pricingDifferenceNet).toBe("58.60");
+    expect(preview.simulationTierNet).toBe("527.40");
+    expect(preview.pricing.subtotalNet).toBe("632.88");
+    expect(preview.pricingDifferenceNet).toBe("105.48");
   });
 
   it.each([
