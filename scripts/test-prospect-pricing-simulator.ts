@@ -24,7 +24,9 @@ async function main() {
   await db.delete(prospectSimulations);
   await db.delete(prospectSimulatorConfig);
   const existingCompany = await db.select().from(companies).where(eq(companies.id, SOKETO_COMPANY_ID)).limit(1);
-  assert(existingCompany[0], "Company SoKeto assente nel seed locale");
+  if (!existingCompany[0]) {
+    await db.insert(companies).values({ id: SOKETO_COMPANY_ID, name: "SoKeto fixture test" });
+  }
   await db.delete(products).where(eq(products.sku, "PROSPECT-HIDDEN-TEST"));
   let seedProducts = await db.select().from(products).limit(2);
   if (seedProducts.length < 2) {
@@ -59,21 +61,21 @@ async function main() {
   const catalog = await getPublicProspectCatalog(db);
   assert.equal(catalog.length, 2, "Catalogo pubblico deve escludere prodotto hidden");
 
-  for (const [qty, expected] of [[499, "starter"], [500, "partner"], [789, "partner"], [790, "premium"], [1004, "premium"], [1005, "elite"]] as const) {
+  for (const [qty, expected] of [[853, "starter"], [854, "partner"], [1411, "partner"], [1412, "premium"], [1878, "premium"], [1879, "elite"]] as const) {
     const calculated = calculateProspectSimulation(config, catalog, [{ productId: food10.id, quantity: qty }]);
     assert.equal(calculated.reachedTier.code, expected);
   }
-  marker("T1_THRESHOLDS", { points: "499,500,789,790,1004,1005", outcomes: "starter,partner,partner,premium,premium,elite" });
+  marker("T1_DISCOUNTED_NET_THRESHOLDS", { listinoPoints: "853,854,1411,1412,1878,1879", outcomes: "starter,partner,partner,premium,premium,elite", basis: "netto scontato IVA esclusa" });
 
-  const belowShippingThreshold = calculateProspectSimulation(config, catalog, [{ productId: food10.id, quantity: 893 }]);
-  const overShippingThreshold = calculateProspectSimulation(config, catalog, [{ productId: food10.id, quantity: 894 }]);
-  const atDisplayThreshold = calculateProspectSimulation(config, catalog, [{ productId: food10.id, quantity: 790 }]);
-  const overDisplayThreshold = calculateProspectSimulation(config, catalog, [{ productId: food10.id, quantity: 791 }]);
+  const belowShippingThreshold = calculateProspectSimulation(config, catalog, [{ productId: food10.id, quantity: 813 }]);
+  const overShippingThreshold = calculateProspectSimulation(config, catalog, [{ productId: food10.id, quantity: 814 }]);
+  const atDisplayThreshold = calculateProspectSimulation(config, catalog, [{ productId: food10.id, quantity: 1348 }]);
+  const overDisplayThreshold = calculateProspectSimulation(config, catalog, [{ productId: food10.id, quantity: 1349 }]);
   assert.equal(belowShippingThreshold.freeShippingApplied, false);
   assert.equal(overShippingThreshold.freeShippingApplied, true);
   assert.equal(atDisplayThreshold.displayStandUnlocked, false);
   assert.equal(overDisplayThreshold.displayStandUnlocked, true);
-  marker("T1B_COMMERCIAL_THRESHOLDS", { shippingAfterDiscountAt499_63: false, shippingAfterDiscountAt500_09: true, displayAt790: false, displayOver790: true });
+  marker("T1B_COMMERCIAL_THRESHOLDS", { basis: "netto scontato fascia raggiunta", shippingAtOrBelow500: false, shippingOver500: true, displayAtOrBelow790: false, displayOver790: true });
 
   const mixed = calculateProspectSimulation(config, catalog, [{ productId: food10.id, quantity: 1 }, { productId: beer22.id, quantity: 1 }]);
   const expectedDiscounts = { starter: "38.50", partner: "41.40", premium: "44.05", elite: "46.50" };
@@ -98,7 +100,7 @@ async function main() {
   await db.insert(prospectSimulatorConfig).values({ companyId: SOKETO_COMPANY_ID, minimumOrderNet: "290", shippingFeeNet: "18", freeShippingThresholdNet: "500", recommendedPublicDiscountPercent: "10", displayStandThreshold: "790", privacyPolicyUrl: "https://www.soketo.it/privacy", tiers });
 
   const created = await createProspectSimulation(db, {
-    legalName: "Prospect Test Srl", contactName: "Giulia Bianchi", email: "giulia@example.test", phone: "3331234567", businessType: "Negozio specializzato", city: "Milano", vatNumber: "IT12345678901", privacyAccepted: true, items: [{ productId: food10.id, quantity: 500 }, { productId: beer22.id, quantity: 1 }],
+    legalName: "Prospect Test Srl", contactName: "Giulia Bianchi", email: "giulia@example.test", phone: "3331234567", businessType: "Negozio specializzato", city: "Milano", vatNumber: "IT12345678901", privacyAccepted: true, items: [{ productId: food10.id, quantity: 939 }, { productId: beer22.id, quantity: 1 }],
   }, async () => ({ sent: false, errorMessage: "notifica test deliberatamente non inviata" }));
   const savedItems = await db.select().from(prospectSimulationItems).where(eq(prospectSimulationItems.simulationId, created.id));
   const [saved] = await db.select().from(prospectSimulations).where(eq(prospectSimulations.id, created.id));

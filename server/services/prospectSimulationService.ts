@@ -57,7 +57,7 @@ export type ProspectCartItemInput = { productId: string; quantity: number };
 export type ProspectSimulationCalculation = {
   listSubtotalNet: string;
   reachedTier: ProspectTier;
-  nextTier: (ProspectTier & { additionalListNet: string }) | null;
+  nextTier: (ProspectTier & { additionalMerchandiseNet: string }) | null;
   currentTierMerchandiseNet: string;
   minimumOrderNet: string;
   meetsMinimumOrder: boolean;
@@ -118,8 +118,6 @@ export function calculateProspectSimulation(
     return { product, quantity, unitListNetCents, lineListNetCents: unitListNetCents * quantity };
   });
   const listSubtotalCents = catalogItems.reduce((total, item) => total + item.lineListNetCents, 0);
-  const reachedTier = [...tiers].reverse().find((tier) => listSubtotalCents >= toCents(tier.minimum_list_net))!;
-  const nextTier = tiers.find((tier) => tier.minimum_list_net > listSubtotalCents / 10_000) ?? null;
   const tierTotals = new Map<string, { merchandiseNetCents: number; marginNetCents: number }>();
 
   const items = catalogItems.map(({ product, quantity, unitListNetCents, lineListNetCents }) => {
@@ -149,6 +147,15 @@ export function calculateProspectSimulation(
     };
   });
 
+  // La fascia dipende dal netto che il rivenditore pagherebbe con quella
+  // stessa fascia. Valutiamo quindi dalla più scontata alla meno scontata:
+  // Elite → Premium → Partner → Starter.
+  const reachedTier = [...tiers].reverse().find((tier) => {
+    const merchandiseNetCents = tierTotals.get(tier.code)!.merchandiseNetCents;
+    return merchandiseNetCents >= toCents(tier.minimum_list_net);
+  })!;
+  const reachedTierIndex = tiers.findIndex((tier) => tier.code === reachedTier.code);
+  const nextTier = tiers[reachedTierIndex + 1] ?? null;
   const currentMerchandiseCents = tierTotals.get(reachedTier.code)!.merchandiseNetCents;
   const minimumOrderCents = toCents(config.minimumOrderNet);
   const freeShippingThresholdCents = toCents(config.freeShippingThresholdNet);
@@ -158,13 +165,21 @@ export function calculateProspectSimulation(
   return {
     listSubtotalNet: money(listSubtotalCents),
     reachedTier,
-    nextTier: nextTier ? { ...nextTier, additionalListNet: money(toCents(nextTier.minimum_list_net) - listSubtotalCents) } : null,
+    nextTier: nextTier
+      ? {
+        ...nextTier,
+        additionalMerchandiseNet: money(Math.max(
+          0,
+          toCents(nextTier.minimum_list_net) - tierTotals.get(nextTier.code)!.merchandiseNetCents,
+        )),
+      }
+      : null,
     currentTierMerchandiseNet: money(currentMerchandiseCents),
     minimumOrderNet: money(minimumOrderCents),
     meetsMinimumOrder: currentMerchandiseCents >= minimumOrderCents,
     shippingNet: money(shippingCents),
     freeShippingApplied,
-    displayStandUnlocked: listSubtotalCents > toCents(config.displayStandThreshold),
+    displayStandUnlocked: currentMerchandiseCents > toCents(config.displayStandThreshold),
     displayStandThreshold: money(toCents(config.displayStandThreshold)),
     tiers: tiers.map((tier) => {
       const totals = tierTotals.get(tier.code)!;
