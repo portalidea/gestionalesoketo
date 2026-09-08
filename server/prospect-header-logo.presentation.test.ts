@@ -8,6 +8,9 @@ describe("InvitedRetailerOrder header", () => {
   it("mostra il logo SoKeto tramite il CDN verificato e con dimensioni responsive", () => {
     expect(source).toContain('src="https://files.manuscdn.com/user_upload_by_module/session_file/310519663080651282/NuGrzBuQvxAhrWjh.png"');
     expect(source).toContain('alt="Logo SoKeto"');
-    expect(source).toContain("sm:h-14");
+    expect(source).toContain("h-[88px]");
+    expect(source).toContain("sm:h-28");
+    expect(source).toContain("flex-col");
+    expect(source).toContain("sm:flex-row");
   });
 });
