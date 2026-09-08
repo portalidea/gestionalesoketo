@@ -230,6 +230,7 @@
 - [x] Evidenziare con contrasto accessibile e legenda i prodotti Senza Glutine nel catalogo e nei riepiloghi dell’ordine prospect
 - [x] Aggiornare il testo dell’espositore prospect con la dicitura di comodato d’uso gratuito
 - [x] Correggere il fondo Senza Glutine del modulo prospect a #bbd4bb
+- [x] Allineare le etichette IVA del listino pubblico e delle fasce rivenditore nel modulo prospect senza modificare i calcoli
 - [x] Includere gli script FEFO selettivo nel comando di regressione isolata e verificarne l’esecuzione
 - [x] Committare, pushare e integrare su main il runner di regressione isolata con FEFO dopo autorizzazione esplicita
 - [x] Aggiungere e pubblicare isolatamente lo scope OAuth FiC per DDT senza rimuovere i permessi esistenti
