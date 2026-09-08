@@ -240,3 +240,4 @@
 - [ ] Predisporre una verifica non emissiva della connessione FiC e degli scope concessi dopo la ri-autorizzazione
 - [ ] Aggiungere deroga tracciata al minimo d’ordine nella conversione prospect con motivazione obbligatoria
 - [ ] Verificare scope OAuth FiC per DDT, ri-autorizzazione e impatto sulle proforma
+- [x] Raddoppiare proporzionalmente il logo SoKeto nell’header dell’ordine prospect, preservando leggibilità responsive
