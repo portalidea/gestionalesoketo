@@ -228,6 +228,8 @@
 - [x] Rendere mobile-first solo PartnerCart e PartnerOrderEdit senza modificare logica o componenti condivisi
 - [x] Allineare la terminologia del listino e mostrare sempre percentuale di sconto accanto alle fasce del modulo prospect
 - [x] Evidenziare con contrasto accessibile e legenda i prodotti Senza Glutine nel catalogo e nei riepiloghi dell’ordine prospect
+- [x] Aggiornare il testo dell’espositore prospect con la dicitura di comodato d’uso gratuito
+- [x] Correggere il fondo Senza Glutine del modulo prospect a #bbd4bb
 - [x] Includere gli script FEFO selettivo nel comando di regressione isolata e verificarne l’esecuzione
 - [x] Committare, pushare e integrare su main il runner di regressione isolata con FEFO dopo autorizzazione esplicita
 - [x] Aggiungere e pubblicare isolatamente lo scope OAuth FiC per DDT senza rimuovere i permessi esistenti
