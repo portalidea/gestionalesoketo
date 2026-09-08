@@ -23,6 +23,7 @@ describe("buildProspectOrderNotification", () => {
     expect(message.html).toContain("È stato salvato un nuovo ordine.");
     expect(message.html).toContain("Fascia sconto");
     expect(message.html).toContain("Totale listino al pubblico");
+    expect(message.html).toContain("IVA inclusa");
     expect(message.html).toContain("Premium · −44,05%");
     expect(message.html).not.toMatch(/simulazione|simulatore|nuova richiesta|fascia simulata/i);
   });
