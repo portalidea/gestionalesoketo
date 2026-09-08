@@ -226,6 +226,8 @@
 - [x] Committare, pushare e integrare su main il controllo read-only dei permessi FiC dopo autorizzazione esplicita
 - [x] Rendere mobile-first la sola pagina ordine prospect tokenizzata senza introdurre componenti condivisi
 - [x] Rendere mobile-first solo PartnerCart e PartnerOrderEdit senza modificare logica o componenti condivisi
+- [x] Allineare la terminologia del listino e mostrare sempre percentuale di sconto accanto alle fasce del modulo prospect
+- [x] Evidenziare con contrasto accessibile e legenda i prodotti Senza Glutine nel catalogo e nei riepiloghi dell’ordine prospect
 - [x] Includere gli script FEFO selettivo nel comando di regressione isolata e verificarne l’esecuzione
 - [x] Committare, pushare e integrare su main il runner di regressione isolata con FEFO dopo autorizzazione esplicita
 - [x] Aggiungere e pubblicare isolatamente lo scope OAuth FiC per DDT senza rimuovere i permessi esistenti

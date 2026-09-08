@@ -14,6 +14,7 @@ describe("buildProspectOrderNotification", () => {
       vatNumber: "12345678901",
       listSubtotalNet: "790.00",
       reachedTierName: "Premium",
+      reachedTierDiscountPercent: "44.05",
       itemCount: 3,
     });
 
@@ -21,6 +22,8 @@ describe("buildProspectOrderNotification", () => {
     expect(message.html).toContain("<h1 style=\"margin:0 0 18px;font-size:22px\">Nuovo ordine</h1>");
     expect(message.html).toContain("È stato salvato un nuovo ordine.");
     expect(message.html).toContain("Fascia sconto");
+    expect(message.html).toContain("Totale listino al pubblico");
+    expect(message.html).toContain("Premium · −44,05%");
     expect(message.html).not.toMatch(/simulazione|simulatore|nuova richiesta|fascia simulata/i);
   });
 });

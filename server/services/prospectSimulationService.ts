@@ -284,6 +284,7 @@ export async function createProspectSimulation(
     vatNumber: simulation.vatNumber,
     listSubtotalNet: calculation.listSubtotalNet,
     reachedTierName: calculation.reachedTier.name,
+    reachedTierDiscountPercent: String(calculation.reachedTier.discount_percent),
     itemCount: calculation.items.length,
   });
   await database.update(prospectSimulations).set(
@@ -304,6 +305,7 @@ export async function listProspectSimulations(database: Database, companyId: str
     city: prospectSimulations.city,
     listSubtotalNet: prospectSimulations.listSubtotalNet,
     reachedTierCode: prospectSimulations.reachedTierCode,
+    calculationSnapshot: prospectSimulations.calculationSnapshot,
     status: prospectSimulations.status,
     notificationStatus: prospectSimulations.notificationStatus,
     notificationError: prospectSimulations.notificationError,

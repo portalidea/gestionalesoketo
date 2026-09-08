@@ -267,7 +267,8 @@ export async function submitInvitedProspectOrder(
   const notification = await sendProspectSimulationNotification({
     simulationId: simulation.created.id, legalName: simulation.created.legalName, contactName: simulation.created.contactName, email: simulation.created.email,
     phone: simulation.created.phone, businessType: simulation.created.businessType, city: simulation.created.city, vatNumber: simulation.created.vatNumber,
-    listSubtotalNet: simulation.calculation.listSubtotalNet, reachedTierName: simulation.calculation.reachedTier.name, itemCount: simulation.calculation.items.length,
+    listSubtotalNet: simulation.calculation.listSubtotalNet, reachedTierName: simulation.calculation.reachedTier.name,
+    reachedTierDiscountPercent: String(simulation.calculation.reachedTier.discount_percent), itemCount: simulation.calculation.items.length,
   });
   await database.update(prospectSimulations).set(notification.sent
     ? { notificationStatus: "sent", notificationSentAt: new Date(), notificationError: null }
