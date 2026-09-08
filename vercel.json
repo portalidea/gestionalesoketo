@@ -19,7 +19,6 @@
   ],
   "rewrites": [
     { "source": "/api/ddt-extract", "destination": "/api/ddt-extract/index" },
-    { "source": "/manus-storage/:path*", "destination": "/api" },
     { "source": "/api/:path*", "destination": "/api" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]

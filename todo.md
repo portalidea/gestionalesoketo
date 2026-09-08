@@ -233,6 +233,7 @@
 - [x] Allineare le etichette IVA del listino pubblico e delle fasce rivenditore nel modulo prospect senza modificare i calcoli
 - [x] Inserire il logo trasparente SoKeto nell’header responsive dell’ordine prospect
 - [x] Correggere il caricamento del logo trasparente SoKeto nell’header dell’ordine prospect
+- [x] Rendere operativo in produzione il proxy storage del logo prospect quando le variabili Forge non sono esposte alla function
 - [x] Includere gli script FEFO selettivo nel comando di regressione isolata e verificarne l’esecuzione
 - [x] Committare, pushare e integrare su main il runner di regressione isolata con FEFO dopo autorizzazione esplicita
 - [x] Aggiungere e pubblicare isolatamente lo scope OAuth FiC per DDT senza rimuovere i permessi esistenti
