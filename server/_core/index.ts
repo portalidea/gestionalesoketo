@@ -10,6 +10,7 @@ import fattureInCloudRoutes from "../fattureincloud-routes";
 import { cronRoutes } from "../cron-monthly-report";
 import { cronAlertRoutes } from "../cron-alerts";
 import { resendWebhookHandler } from "../resend-webhook-routes";
+import { registerStorageProxy } from "./storageProxy";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -33,6 +34,7 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+  registerStorageProxy(app);
   // Deve precedere express.json(): Svix firma il body raw byte-per-byte.
   // È intenzionalmente limitato alla route Resend per non intercettare tRPC.
   app.post("/api/webhooks/resend", express.raw({ type: "application/json" }), resendWebhookHandler);
