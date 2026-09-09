@@ -264,3 +264,7 @@
 - [x] Allineare Drizzle alle tabelle 0042 e alle colonne di lock/audit sugli ordini
 - [x] Rinominare nel modulo prospect “Completa il tuo ordine SoKeto” in “Configura il tuo ordine SoKeto” e allineare titolo browser, email e testo introduttivo
 - [ ] Committare, pushare, integrare su main e verificare il deploy del micro-fix testuale “Configura il tuo ordine SoKeto” autorizzato
+- [x] Rimuovere SKU, aliquota IVA e pezzi per confezione sotto il nome prodotto in catalogo, riepilogo e schede mobile prospect
+- [x] Spostare “Prezzi del tuo assortimento” sopra il catalogo e mostrarlo soltanto con almeno un prodotto selezionato
+- [x] Verificare la permanenza della dicitura “Configura il tuo ordine SoKeto” nel modulo prospect
+- [ ] Committare, pushare, integrare su main e verificare il deploy del micro-fix sottotitoli prodotto e riepilogo condizionale autorizzato
