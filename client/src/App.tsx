@@ -57,6 +57,7 @@ import ProspectSimulator from "./pages/ProspectSimulator";
 import InvitedRetailerOrder from "./pages/InvitedRetailerOrder";
 import ProspectSimulations from "./pages/ProspectSimulations";
 import ProspectInvitations from "./pages/ProspectInvitations";
+import ProspectPromotions from "./pages/ProspectPromotions";
 import ReportsHub from "./pages/reports/ReportsHub";
 import WarehouseReport from "./pages/reports/WarehouseReport";
 import SalesReport from "./pages/reports/SalesReport";
@@ -275,6 +276,9 @@ function Router() {
       </Route>
       <Route path="/settings/prospect-invitations">
         <RequireRole allowedRoles={["admin"]}><ProspectInvitations /></RequireRole>
+      </Route>
+      <Route path="/settings/prospect-promotions">
+        <RequireRole allowedRoles={["admin"]}><ProspectPromotions /></RequireRole>
       </Route>
       {/* ═══════════════════════════════════════════════════════════
           Marketplace Shopify routes (M8.1)

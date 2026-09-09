@@ -253,3 +253,12 @@
 - [x] Implementare la deroga minimo con i campi 0040 confermati: Applied, Reason, OverriddenBy e OverriddenAt
 - [x] Coprire storico sessioni e override minimo con test PostgreSQL isolati e verifiche di build
 - [ ] Committare e pubblicare il branch feature/prospect-composition-session-history, poi integrare su main e verificare il deploy autorizzato
+- [x] Allineare Drizzle ai quattro campi spedizione introdotti dalla migration 0031 già applicata
+- [x] Allineare Drizzle a shippingNet numeric(10,2), shippingVatRate numeric(5,2) nullable, shippingVatAmount numeric(10,2) e freeShippingApplied boolean con i default confermati
+- [x] Preparare la migration append-only promozioni prospect con tre tipi benefit e vincoli completi
+- [x] Preparare la migration append-only promozioni prospect con tre tipi benefit e vincoli completi
+- [x] Implementare, dopo l’approvazione della migration, soltanto il benefit prospect tier_upgrade con prezzi congelati e lock auditato
+- [x] Implementare il solo tier_upgrade prospect dopo l’applicazione della 0042, senza attivare free_shipping o gift_product
+- [x] Coprire tier upgrade, snapshot, conversione, sovrapposizioni, lock/rinuncia auditata e isolamento company con test PostgreSQL isolati
+- [ ] Committare, pushare, integrare su main e verificare il deploy delle promozioni prospect tier upgrade autorizzate
+- [x] Allineare Drizzle alle tabelle 0042 e alle colonne di lock/audit sugli ordini

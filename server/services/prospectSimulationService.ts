@@ -54,9 +54,25 @@ export type ProspectCatalogProduct = {
 
 export type ProspectCartItemInput = { productId: string; quantity: number };
 
+/** Campagna tier upgrade già risolta server-side per company e finestra temporale. */
+export type ProspectTierUpgradePromotion = {
+  promotionId: string;
+  title: string;
+  publicDescription: string;
+  validFrom: Date;
+  validTo: Date;
+  qualifyingTierCode: string;
+  grantedTierCode: string;
+};
+
 export type ProspectSimulationCalculation = {
   listSubtotalNet: string;
+  /** Fascia realmente raggiunta con le soglie standard: è il tier futuro del retailer. */
   reachedTier: ProspectTier;
+  /** Fascia usata solo per prezzare il primo ordine quando un upgrade è applicabile. */
+  pricingTier: ProspectTier;
+  realTierMerchandiseNet: string;
+  appliedTierUpgrade: ProspectTierUpgradePromotion | null;
   nextTier: (ProspectTier & { additionalMerchandiseNet: string }) | null;
   currentTierMerchandiseNet: string;
   minimumOrderNet: string;
@@ -96,6 +112,7 @@ export function calculateProspectSimulation(
   config: ProspectConfig,
   catalog: ProspectCatalogProduct[],
   requestedItems: ProspectCartItemInput[],
+  tierUpgrade?: ProspectTierUpgradePromotion | null,
 ): ProspectSimulationCalculation {
   if (requestedItems.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Inserisci almeno un prodotto" });
   const quantities = new Map<string, number>();
@@ -155,8 +172,24 @@ export function calculateProspectSimulation(
     return merchandiseNetCents >= toCents(tier.minimum_list_net);
   })!;
   const reachedTierIndex = tiers.findIndex((tier) => tier.code === reachedTier.code);
+  let pricingTier = reachedTier;
+  let appliedTierUpgrade: ProspectTierUpgradePromotion | null = null;
+  if (tierUpgrade) {
+    const qualifyingTierIndex = tiers.findIndex((tier) => tier.code === tierUpgrade.qualifyingTierCode);
+    const grantedTierIndex = tiers.findIndex((tier) => tier.code === tierUpgrade.grantedTierCode);
+    if (qualifyingTierIndex < 0 || grantedTierIndex < 0 || grantedTierIndex <= qualifyingTierIndex) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Configurazione promozione prospect non valida" });
+    }
+    // Il beneficio vale da una fascia qualificante in su, senza mai degradare
+    // chi ha già raggiunto una fascia più favorevole di quella concessa.
+    if (reachedTierIndex >= qualifyingTierIndex && reachedTierIndex < grantedTierIndex) {
+      pricingTier = tiers[grantedTierIndex]!;
+      appliedTierUpgrade = tierUpgrade;
+    }
+  }
   const nextTier = tiers[reachedTierIndex + 1] ?? null;
-  const currentMerchandiseCents = tierTotals.get(reachedTier.code)!.merchandiseNetCents;
+  const realTierMerchandiseCents = tierTotals.get(reachedTier.code)!.merchandiseNetCents;
+  const currentMerchandiseCents = tierTotals.get(pricingTier.code)!.merchandiseNetCents;
   const minimumOrderCents = toCents(config.minimumOrderNet);
   const freeShippingThresholdCents = toCents(config.freeShippingThresholdNet);
   const freeShippingApplied = currentMerchandiseCents > freeShippingThresholdCents;
@@ -165,6 +198,9 @@ export function calculateProspectSimulation(
   return {
     listSubtotalNet: money(listSubtotalCents),
     reachedTier,
+    pricingTier,
+    realTierMerchandiseNet: money(realTierMerchandiseCents),
+    appliedTierUpgrade,
     nextTier: nextTier
       ? {
         ...nextTier,

@@ -173,6 +173,10 @@ export const ordersRouter = router({
           vatAmount: orders.vatAmount,
           totalGross: orders.totalGross,
           discountPercent: orders.discountPercent,
+          prospectCommercialTermsId: orders.prospectCommercialTermsId,
+          prospectCommercialTermsReleasedAt: orders.prospectCommercialTermsReleasedAt,
+          prospectCommercialTermsReleasedBy: orders.prospectCommercialTermsReleasedBy,
+          prospectCommercialTermsReleaseReason: orders.prospectCommercialTermsReleaseReason,
           notes: orders.notes,
           notesInternal: orders.notesInternal,
           ficProformaId: orders.ficProformaId,
@@ -499,7 +503,13 @@ export const ordersRouter = router({
 
       // Verifica ordine pending (M11.A: company filter)
       const [order] = await db
-        .select({ id: orders.id, status: orders.status, retailerId: orders.retailerId })
+        .select({
+          id: orders.id,
+          status: orders.status,
+          retailerId: orders.retailerId,
+          prospectCommercialTermsId: orders.prospectCommercialTermsId,
+          prospectCommercialTermsReleasedAt: orders.prospectCommercialTermsReleasedAt,
+        })
         .from(orders)
         .where(and(eq(orders.id, input.orderId), eq(orders.companyId, ctx.activeCompanyId)))
         .limit(1);
@@ -509,6 +519,13 @@ export const ordersRouter = router({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Solo ordini in stato 'pending' possono essere modificati",
+        });
+      }
+
+      if (order.prospectCommercialTermsId && !order.prospectCommercialTermsReleasedAt) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Questo ordine conserva condizioni promozionali prospect congelate. Registra prima una rinuncia esplicita con motivazione per ricalcolare i prezzi.",
         });
       }
 
@@ -643,6 +660,33 @@ export const ordersRouter = router({
         totalGross: pricing.totalGross,
         warnings: [...pricing.warnings, ...selectiveAllocation.warnings],
       };
+    }),
+
+  /** Rinuncia esplicita e auditata al contratto promo prima di un ricalcolo manuale. */
+  releaseProspectCommercialTerms: staffProcedure
+    .input(z.object({ orderId: uuidSchema, reason: z.string().trim().min(1).max(2000) }))
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+      const [order] = await db.select({
+        id: orders.id,
+        prospectCommercialTermsId: orders.prospectCommercialTermsId,
+        prospectCommercialTermsReleasedAt: orders.prospectCommercialTermsReleasedAt,
+      }).from(orders).where(and(eq(orders.id, input.orderId), eq(orders.companyId, ctx.activeCompanyId))).limit(1);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
+      if (!order.prospectCommercialTermsId) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "L’ordine non ha condizioni promozionali prospect da rilasciare" });
+      }
+      if (order.prospectCommercialTermsReleasedAt) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Le condizioni promozionali risultano già rilasciate" });
+      }
+      const [released] = await db.update(orders).set({
+        prospectCommercialTermsReleasedAt: new Date(),
+        prospectCommercialTermsReleasedBy: ctx.user!.id,
+        prospectCommercialTermsReleaseReason: input.reason.trim(),
+        updatedAt: new Date(),
+      }).where(eq(orders.id, input.orderId)).returning({ releasedAt: orders.prospectCommercialTermsReleasedAt });
+      return { released: true, releasedAt: released!.releasedAt };
     }),
 
   // [REMOVED] updateStatus — replaced by specific procedures (confirmPayment, approveForShipping, etc.)

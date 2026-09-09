@@ -542,6 +542,8 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
       ficProformaId: orders.ficProformaId,
       notesInternal: orders.notesInternal,
       companyId: orders.companyId,
+      prospectCommercialTermsId: orders.prospectCommercialTermsId,
+      prospectCommercialTermsReleasedAt: orders.prospectCommercialTermsReleasedAt,
     })
     .from(orders)
     .where(eq(orders.id, input.orderId))
@@ -562,6 +564,13 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
 
   if (!order.retailerId && !isEventOrder) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "Ordine senza retailer né evento non modificabile" });
+  }
+
+  if (order.prospectCommercialTermsId && !order.prospectCommercialTermsReleasedAt) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Questo ordine conserva condizioni promozionali prospect congelate. Registra prima una rinuncia esplicita con motivazione per ricalcolare i prezzi.",
+    });
   }
 
   if (input.items.length === 0) {

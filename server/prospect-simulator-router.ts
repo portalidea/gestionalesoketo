@@ -26,6 +26,13 @@ import {
 } from "./services/prospectInvitationService";
 import { sendProspectInvitationNotification } from "./services/prospectNotificationService";
 import { convertProspectSimulation, previewProspectConversion } from "./services/prospectOrderConversionService";
+import {
+  createProspectTierUpgradePromotion,
+  deactivateProspectPromotion,
+  getActiveProspectTierUpgradePromotion,
+  listProspectTierUpgradePromotions,
+  updateProspectTierUpgradePromotion,
+} from "./services/prospectPromotionService";
 
 const cartItemsInput = z.array(z.object({
   productId: z.string().uuid(),
@@ -66,6 +73,16 @@ const invitedOrderInput = contactInput.extend({
   notes: z.string().trim().max(3000).optional(),
   compositionSessionId: z.string().uuid().optional(),
 });
+const tierUpgradePromotionInput = z.object({
+  title: z.string().trim().min(1).max(255),
+  publicDescription: z.string().trim().min(1).max(5000),
+  internalNotes: z.string().trim().max(5000).optional().nullable(),
+  validFrom: z.coerce.date(),
+  validTo: z.coerce.date(),
+  qualifyingTierCode: z.string().trim().min(1).max(50),
+  grantedTierCode: z.string().trim().min(1).max(50),
+  isActive: z.boolean().default(true),
+}).strict();
 
 function clientIp(ctx: { req: { headers: Record<string, string | string[] | undefined>; socket?: { remoteAddress?: string } } }) {
   return requestIp(ctx.req.headers, ctx.req.socket?.remoteAddress);
@@ -97,6 +114,7 @@ export const prospectSimulatorRouter = router({
     const config = await getInvitationConfigOrNull(database, tokenState.invitation.companyId);
     if (!config) return { available: false as const };
     const catalog = await getPublicProspectCatalog(database);
+    const tierUpgradePromotion = await getActiveProspectTierUpgradePromotion(database, tokenState.invitation.companyId);
     const compositionSession = await openProspectCompositionSession(database, input.token);
     if (!compositionSession) return { available: false as const };
     return {
@@ -113,6 +131,7 @@ export const prospectSimulatorRouter = router({
         tiers: config.tiers,
       },
       products: catalog,
+      tierUpgradePromotion,
     };
   }),
 
@@ -124,7 +143,8 @@ export const prospectSimulatorRouter = router({
     const config = await getInvitationConfigOrNull(database, tokenState.invitation.companyId);
     if (!config) throw new TRPCError({ code: "NOT_FOUND", message: "Link non valido" });
     const catalog = await getPublicProspectCatalog(database);
-    return calculateProspectSimulation(config, catalog, input.items);
+    const tierUpgradePromotion = await getActiveProspectTierUpgradePromotion(database, tokenState.invitation.companyId);
+    return calculateProspectSimulation(config, catalog, input.items, tierUpgradePromotion);
   }),
 
   /** Persistenza best-effort del carrello: token, invito e company restano server-side. */
@@ -173,6 +193,30 @@ export const prospectSimulatorRouter = router({
 
   adminInvitationList: adminProcedure.query(async ({ ctx }) => {
     return listProspectInvitations(await requireDatabase(), ctx.activeCompanyId);
+  }),
+
+  adminTierUpgradePromotionList: adminProcedure.query(async ({ ctx }) => {
+    return listProspectTierUpgradePromotions(await requireDatabase(), ctx.activeCompanyId);
+  }),
+
+  adminTierUpgradePromotionConfig: adminProcedure.query(async ({ ctx }) => {
+    const config = await getProspectSimulatorConfig(await requireDatabase(), ctx.activeCompanyId);
+    return { tiers: config.tiers };
+  }),
+
+  adminCreateTierUpgradePromotion: adminProcedure.input(tierUpgradePromotionInput).mutation(async ({ ctx, input }) => {
+    return createProspectTierUpgradePromotion(await requireDatabase(), ctx.activeCompanyId, ctx.user!.id, input);
+  }),
+
+  adminUpdateTierUpgradePromotion: adminProcedure.input(z.object({
+    id: z.string().uuid(),
+    promotion: tierUpgradePromotionInput,
+  }).strict()).mutation(async ({ ctx, input }) => {
+    return updateProspectTierUpgradePromotion(await requireDatabase(), ctx.activeCompanyId, ctx.user!.id, input.id, input.promotion);
+  }),
+
+  adminDeactivateTierUpgradePromotion: adminProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ ctx, input }) => {
+    return deactivateProspectPromotion(await requireDatabase(), ctx.activeCompanyId, ctx.user!.id, input.id);
   }),
 
   adminInvitationCompositionDetail: adminProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ ctx, input }) => {

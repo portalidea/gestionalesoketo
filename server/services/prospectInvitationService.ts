@@ -6,6 +6,7 @@ import {
   products,
   prospectCompositionSessions,
   prospectInvitations,
+  prospectOrderCommercialTerms,
   prospectSimulationItems,
   prospectSimulations,
   prospectSimulatorConfig,
@@ -13,6 +14,7 @@ import {
 } from "../../drizzle/schema";
 import { calculateProspectSimulation, getPublicProspectCatalog, normalizeProspectTiers, type ProspectCartItemInput } from "./prospectSimulationService";
 import { sendProspectSimulationNotification } from "./prospectNotificationService";
+import { buildProspectTierUpgradeTerms, getActiveProspectTierUpgradePromotion } from "./prospectPromotionService";
 
 type Database = any;
 
@@ -147,6 +149,7 @@ export async function saveProspectCompositionSession(
       eq(prospectCompositionSessions.submitted, false),
     )).limit(1);
     if (!session) return { persisted: false as const, sessionId: null };
+    const tierUpgradePromotion = await getActiveProspectTierUpgradePromotion(tx, invitation.companyId, now);
     const metrics = input.items.length === 0
       ? emptyCompositionMetrics()
       : compositionMetrics(calculateProspectSimulation(
@@ -154,6 +157,7 @@ export async function saveProspectCompositionSession(
           ?? (() => { throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Modulo non disponibile" }); })(),
         await getPublicProspectCatalog(tx),
         input.items,
+        tierUpgradePromotion,
       ));
     const values = { lastActivityAt: now, ...metrics };
     if (sessionIsInactive(session.lastActivityAt, now)) {
@@ -419,7 +423,8 @@ export async function submitInvitedProspectOrder(
     if (!config) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Modulo non disponibile" });
     normalizeProspectTiers(config.tiers);
     const catalog = await getPublicProspectCatalog(tx);
-    const calculation = calculateProspectSimulation(config, catalog, input.items);
+    const tierUpgradePromotion = await getActiveProspectTierUpgradePromotion(tx, lockedInvitation.companyId);
+    const calculation = calculateProspectSimulation(config, catalog, input.items, tierUpgradePromotion);
     const [alreadySubmitted] = await tx.select({ id: prospectSimulations.id }).from(prospectSimulations).where(eq(prospectSimulations.invitationId, lockedInvitation.id)).limit(1);
     if (alreadySubmitted) throw new TRPCError({ code: "CONFLICT", message: "Questo invito ha già prodotto un ordine" });
     const [created] = await tx.insert(prospectSimulations).values({
@@ -436,6 +441,26 @@ export async function submitInvitedProspectOrder(
       quantity: item.quantity, piecesPerUnitSnapshot: item.piecesPerUnit, unitListNetSnapshot: item.unitListNet,
       vatRateSnapshot: item.vatRate, lineListNet: item.lineListNet, sortOrder,
     })));
+    const commercialTerms = buildProspectTierUpgradeTerms(calculation);
+    if (commercialTerms) {
+      await tx.insert(prospectOrderCommercialTerms).values({
+        companyId: lockedInvitation.companyId,
+        simulationId: created.id,
+        invitationId: lockedInvitation.id,
+        promotionId: commercialTerms.promotionId,
+        realTierCode: commercialTerms.realTierCode,
+        pricingTierCode: commercialTerms.pricingTierCode,
+        appliedBenefitsSnapshot: commercialTerms.appliedBenefitsSnapshot,
+        pricedItemsSnapshot: commercialTerms.pricedItemsSnapshot,
+        merchandiseNet: commercialTerms.merchandiseNet,
+        shippingNet: commercialTerms.shippingNet,
+        shippingVatRate: commercialTerms.shippingVatRate,
+        shippingVatAmount: commercialTerms.shippingVatAmount,
+        freeShippingApplied: commercialTerms.freeShippingApplied,
+        vatAmount: commercialTerms.vatAmount,
+        totalGross: commercialTerms.totalGross,
+      });
+    }
     // Il riferimento è opzionale e non può bloccare l'ordine esistente: viene
     // marcato solo se la sessione appartiene allo stesso invito e alla company.
     if (input.compositionSessionId) {

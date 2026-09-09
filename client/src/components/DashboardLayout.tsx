@@ -104,6 +104,7 @@ const adminMenuItems: MenuItem[] = [
   { icon: Building2, label: "Aziende", path: "/settings/companies" },
   { icon: Plug, label: "Integrazioni", path: "/settings/integrations" },
   { icon: Sparkles, label: "Promozioni", path: "/settings/promotions" },
+  { icon: Sparkles, label: "Promo prospect", path: "/settings/prospect-promotions" },
   { icon: Mail, label: "Inviti prospect", path: "/settings/prospect-invitations" },
   { icon: Users, label: "Richieste prospect", path: "/settings/prospect-simulations" },
 ];

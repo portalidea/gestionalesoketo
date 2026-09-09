@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { companies, orders, prospectCompositionSessions, prospectInvitations, prospectSimulations, retailers, userCompanyAccess } from "../../drizzle/schema";
+import { companies, orders, prospectCompositionSessions, prospectInvitations, prospectOrderCommercialTerms, prospectPromotions, prospectSimulations, retailers, userCompanyAccess } from "../../drizzle/schema";
 import { EKETO_COMPANY_ID, SOKETO_COMPANY_ID } from "../../shared/const";
 import { prospectInvitationInput, prospectSimulatorRouter } from "../prospect-simulator-router";
 import type { TrpcContext } from "../_core/context";
@@ -17,6 +17,10 @@ import {
   submitInvitedProspectOrder,
 } from "./prospectInvitationService";
 import { convertProspectSimulation, previewProspectConversion } from "./prospectOrderConversionService";
+import { createProspectTierUpgradePromotion, getActiveProspectTierUpgradePromotion } from "./prospectPromotionService";
+import { calculateProspectSimulation, getProspectSimulatorConfig, getPublicProspectCatalog } from "./prospectSimulationService";
+import { modifyOrderItems } from "./orderStateMachine";
+import { ordersRouter } from "../orders-router";
 
 const ACTOR_ID = "10000000-0000-0000-0000-000000000001";
 const PRODUCT_ID = "20000000-0000-0000-0000-000000000001";
@@ -320,5 +324,95 @@ describe("prospect invitations and conversion — PostgreSQL isolato", () => {
     await saveProspectCompositionSession(database, { token: invitation.token, sessionId: session!.id, items: [{ productId: PRODUCT_ID, quantity: 1 }] });
     await expect(getProspectInvitationCompositionDetail(database, invitation.id, EKETO_COMPANY_ID)).rejects.toThrow("Invito non trovato");
     await expect(getProspectInvitationCompositionDetail(database, invitation.id, SOKETO_COMPANY_ID)).resolves.toMatchObject({ sessions: [{ id: session!.id }] });
+  });
+
+  it("P1: upgrade Partner → Premium conserva il tier reale Partner e calcola prezzi Premium", async () => {
+    const database = await getDb();
+    await database.execute(sql`UPDATE products SET "unitPrice" = 100.00 WHERE id = ${PRODUCT_ID}::uuid`);
+    const now = new Date();
+    const promotion = await createProspectTierUpgradePromotion(database, EKETO_COMPANY_ID, ACTOR_ID, {
+      title: "Benvenuto Premium",
+      publicDescription: "Raggiungi Partner e ottieni i prezzi Premium sul primo ordine.",
+      validFrom: new Date(now.getTime() - 60_000),
+      validTo: new Date(now.getTime() + 86_400_000),
+      qualifyingTierCode: "partner",
+      grantedTierCode: "premium",
+      isActive: true,
+    });
+    const active = await getActiveProspectTierUpgradePromotion(database, EKETO_COMPANY_ID, now);
+    const calculation = calculateProspectSimulation(
+      await getProspectSimulatorConfig(database, EKETO_COMPANY_ID),
+      await getPublicProspectCatalog(database),
+      [{ productId: PRODUCT_ID, quantity: 9 }],
+      active,
+    );
+    expect(promotion.id).toBe(active?.promotionId);
+    expect(calculation.reachedTier.code).toBe("partner");
+    expect(calculation.pricingTier.code).toBe("premium");
+    expect(calculation.realTierMerchandiseNet).toBe("527.40");
+    expect(calculation.currentTierMerchandiseNet).toBe("503.55");
+    expect(calculation.appliedTierUpgrade).toMatchObject({ qualifyingTierCode: "partner", grantedTierCode: "premium" });
+  });
+
+  it("P2: submit congela il contratto e conversione mantiene prezzi Premium ma assegna il package Partner", async () => {
+    const database = await getDb();
+    const now = new Date();
+    const existingPromotion = await getActiveProspectTierUpgradePromotion(database, EKETO_COMPANY_ID, now);
+    if (!existingPromotion) {
+      await createProspectTierUpgradePromotion(database, EKETO_COMPANY_ID, ACTOR_ID, {
+        title: "Benvenuto Premium P2", publicDescription: "Prezzi Premium sul primo ordine.", validFrom: new Date(now.getTime() - 60_000), validTo: new Date(now.getTime() + 86_400_000), qualifyingTierCode: "partner", grantedTierCode: "premium", isActive: true,
+      });
+    }
+    await database.execute(sql`UPDATE products SET "unitPrice" = 100.00 WHERE id = ${PRODUCT_ID}::uuid`);
+    const invitation = await invite(database, "promo-conversion");
+    const submitted = await submitInvitedProspectOrder(database, { token: invitation.token, ...contact("promo-conversion", "IT 55667788990") });
+    const [terms] = await database.select().from(prospectOrderCommercialTerms).where(eq(prospectOrderCommercialTerms.simulationId, submitted.id));
+    expect(terms).toMatchObject({ realTierCode: "partner", pricingTierCode: "premium", merchandiseNet: "503.55" });
+    await database.execute(sql`UPDATE products SET "unitPrice" = 120.00 WHERE id = ${PRODUCT_ID}::uuid`);
+    const preview = await previewProspectConversion(database, EKETO_COMPANY_ID, submitted.id);
+    expect(preview.usesFrozenCommercialTerms).toBe(true);
+    expect(preview.pricingTierCode).toBe("premium");
+    expect(preview.pricing.subtotalNet).toBe("503.55");
+    const converted = await convertProspectSimulation(database, { companyId: EKETO_COMPANY_ID, simulationId: submitted.id, actorId: ACTOR_ID, useExistingRetailer: false });
+    const [retailer] = await database.select({ pricingPackageId: retailers.pricingPackageId }).from(retailers).where(eq(retailers.id, converted.retailerId));
+    const [order] = await database.select({ termsId: orders.prospectCommercialTermsId, subtotal: orders.subtotalNet }).from(orders).where(eq(orders.id, converted.orderId));
+    expect(retailer.pricingPackageId).toBe(PARTNER_ID);
+    expect(order).toMatchObject({ termsId: terms.id, subtotal: "503.55" });
+  });
+
+  it("P3: una seconda campagna live sovrapposta è rifiutata e il lock impedisce il ricalcolo finché la rinuncia non è auditata", async () => {
+    const database = await getDb();
+    const now = new Date();
+    const existingPromotion = await getActiveProspectTierUpgradePromotion(database, EKETO_COMPANY_ID, now);
+    if (!existingPromotion) {
+      await createProspectTierUpgradePromotion(database, EKETO_COMPANY_ID, ACTOR_ID, {
+        title: "Benvenuto Premium P3", publicDescription: "Prezzi Premium sul primo ordine.", validFrom: new Date(now.getTime() - 60_000), validTo: new Date(now.getTime() + 86_400_000), qualifyingTierCode: "partner", grantedTierCode: "premium", isActive: true,
+      });
+      const invitation = await invite(database, "promo-lock");
+      const submitted = await submitInvitedProspectOrder(database, { token: invitation.token, ...contact("promo-lock", "IT 44455566677") });
+      await convertProspectSimulation(database, { companyId: EKETO_COMPANY_ID, simulationId: submitted.id, actorId: ACTOR_ID, useExistingRetailer: false });
+    }
+    await expect(createProspectTierUpgradePromotion(database, EKETO_COMPANY_ID, ACTOR_ID, {
+      title: "Sovrapposta", publicDescription: "Non deve essere attivabile.", validFrom: new Date(now.getTime() - 30_000), validTo: new Date(now.getTime() + 60_000), qualifyingTierCode: "partner", grantedTierCode: "premium", isActive: true,
+    })).rejects.toThrow("sovrapposta");
+    const [lockedOrder] = await database.select({ id: orders.id }).from(orders).where(sql`"prospectCommercialTermsId" IS NOT NULL`).limit(1);
+    await expect(modifyOrderItems({ orderId: lockedOrder.id, actorUserId: ACTOR_ID, items: [{ productId: PRODUCT_ID, quantity: 9 }] })).rejects.toThrow("condizioni promozionali prospect congelate");
+    const caller = ordersRouter.createCaller({ req: { headers: {}, socket: { remoteAddress: "127.0.0.1" } } as TrpcContext["req"], res: {} as TrpcContext["res"], user: { id: ACTOR_ID, role: "admin" }, activeCompanyId: EKETO_COMPANY_ID } as TrpcContext);
+    await expect(caller.releaseProspectCommercialTerms({ orderId: lockedOrder.id, reason: "Quantità rinegoziata con il prospect" })).resolves.toMatchObject({ released: true });
+    const [released] = await database.select({ at: orders.prospectCommercialTermsReleasedAt, by: orders.prospectCommercialTermsReleasedBy, reason: orders.prospectCommercialTermsReleaseReason }).from(orders).where(eq(orders.id, lockedOrder.id));
+    expect(released).toMatchObject({ by: ACTOR_ID, reason: "Quantità rinegoziata con il prospect" });
+    expect(released.at).toBeInstanceOf(Date);
+    await expect(modifyOrderItems({ orderId: lockedOrder.id, actorUserId: ACTOR_ID, items: [{ productId: PRODUCT_ID, quantity: 9 }] })).resolves.toMatchObject({ success: true });
+  });
+
+  it("P4: una campagna E-Keto non è mai risolta né applicata agli inviti SoKeto", async () => {
+    const database = await getDb();
+    expect(await getActiveProspectTierUpgradePromotion(database, SOKETO_COMPANY_ID)).toBeNull();
+    const invitation = await invite(database, "promo-soketo-isolation", SOKETO_COMPANY_ID);
+    const opened = await resolvePublicInvitation(database, invitation.token);
+    expect(opened).toMatchObject({ available: true, invitation: { companyId: SOKETO_COMPANY_ID } });
+    const submitted = await submitInvitedProspectOrder(database, { token: invitation.token, ...contact("promo-soketo-isolation", "IT 91929394950") });
+    const [terms] = await database.select().from(prospectOrderCommercialTerms).where(eq(prospectOrderCommercialTerms.simulationId, submitted.id));
+    expect(terms).toBeUndefined();
   });
 });

@@ -1,10 +1,12 @@
 import { TRPCError } from "@trpc/server";
 import { and, eq, sql } from "drizzle-orm";
+import { z } from "zod";
 import {
   locations,
   orderItems,
   orders,
   pricingPackages,
+  prospectOrderCommercialTerms,
   prospectSimulationItems,
   prospectSimulations,
   retailers,
@@ -40,7 +42,65 @@ async function getSimulation(database: Database, companyId: string, simulationId
     .where(eq(prospectSimulationItems.simulationId, simulation.id))
     .orderBy(prospectSimulationItems.sortOrder);
   if (items.length === 0) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "La richiesta non contiene righe ordine" });
-  return { simulation, items };
+  const [commercialTerms] = await database.select().from(prospectOrderCommercialTerms)
+    .where(and(
+      eq(prospectOrderCommercialTerms.simulationId, simulation.id),
+      eq(prospectOrderCommercialTerms.companyId, companyId),
+    ))
+    .limit(1);
+  return { simulation, items, commercialTerms: commercialTerms ?? null };
+}
+
+type FrozenCommercialItem = {
+  productId: string;
+  productSku: string;
+  productName: string;
+  quantity: number;
+  unitPriceBase: string;
+  discountPercent: string;
+  unitPriceFinal: string;
+  vatRate: string;
+  lineTotalNet: string;
+  lineTotalGross: string;
+};
+
+function frozenItems(snapshot: unknown): FrozenCommercialItem[] {
+  const parsed = z.array(z.object({
+    // PostgreSQL accetta UUID sintatticamente validi anche se non rispettano la
+    // variante RFC stretta di z.uuid(); i dati provengono dallo snapshot server-side.
+    productId: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
+    productSku: z.string().min(1),
+    productName: z.string().min(1),
+    quantity: z.number().int().positive(),
+    unitPriceBase: z.string(),
+    discountPercent: z.string(),
+    unitPriceFinal: z.string(),
+    vatRate: z.string(),
+    lineTotalNet: z.string(),
+    lineTotalGross: z.string(),
+  })).min(1).safeParse(snapshot);
+  if (!parsed.success) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Termini commerciali prospect non validi" });
+  return parsed.data;
+}
+
+function pricingFromCommercialTerms(terms: NonNullable<Awaited<ReturnType<typeof getSimulation>>["commercialTerms"]>): PricingResult {
+  const items = frozenItems(terms.pricedItemsSnapshot).map((item) => ({
+    ...item,
+    piecesPerUnit: 1,
+    stockAvailableConfezioni: 0,
+    stockWarning: false,
+    pricingModel: "tier_discount" as const,
+  }));
+  return {
+    discountPercent: items[0]?.discountPercent ?? "0.00",
+    packageName: terms.pricingTierCode,
+    items,
+    subtotalNet: terms.merchandiseNet,
+    vatAmount: terms.vatAmount,
+    totalGross: terms.totalGross,
+    warnings: [],
+    pricingModel: "tier_discount",
+  };
 }
 
 async function resolveExistingRetailer(database: Database, companyId: string, vatNumber: string) {
@@ -74,32 +134,37 @@ export type ProspectConversionPreview = {
   meetsMinimumOrder: boolean;
   simulationTierNet: string;
   pricingDifferenceNet: string;
+  usesFrozenCommercialTerms: boolean;
+  pricingTierCode: string;
 };
 
 export async function previewProspectConversion(database: Database, companyId: string, simulationId: string): Promise<ProspectConversionPreview> {
-  const { simulation, items } = await getSimulation(database, companyId, simulationId);
+  const { simulation, items, commercialTerms } = await getSimulation(database, companyId, simulationId);
   if (simulation.status === "converted") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Questa richiesta è già stata convertita" });
   const normalizedVat = normalizeVatNumber(simulation.vatNumber);
   const [existingRetailer, proposedPackage] = await Promise.all([
     resolveExistingRetailer(database, companyId, normalizedVat),
     resolveProspectPricingPackage(database, simulation.reachedTierCode),
   ]);
-  const pricing = await calculateOrderPricing({
+  const standardPricing = await calculateOrderPricing({
     retailerId: existingRetailer?.id,
     pricingPackageIdOverride: existingRetailer ? undefined : proposedPackage.id,
     companyId,
     items: items.map((item: { productId: string; quantity: number }) => ({ productId: item.productId, quantity: item.quantity })),
     database,
   });
+  const pricing = commercialTerms ? pricingFromCommercialTerms(commercialTerms) : standardPricing;
   const snapshot = simulation.calculationSnapshot as { minimumOrderNet?: string; currentTierMerchandiseNet?: string };
   const minimumOrderNet = snapshot?.minimumOrderNet ?? "290.00";
   const meetsMinimumOrder = Number(pricing.subtotalNet) >= Number(minimumOrderNet);
-  const simulationTierNet = snapshot?.currentTierMerchandiseNet ?? "0.00";
+  const simulationTierNet = commercialTerms?.merchandiseNet ?? snapshot?.currentTierMerchandiseNet ?? "0.00";
   return {
     simulation, items, proposedPackage, existingRetailer,
     requiresExistingRetailerConfirmation: Boolean(existingRetailer),
     pricing, minimumOrderNet, meetsMinimumOrder, simulationTierNet,
-    pricingDifferenceNet: (Number(pricing.subtotalNet) - Number(simulationTierNet)).toFixed(2),
+    pricingDifferenceNet: (Number(standardPricing.subtotalNet) - Number(simulationTierNet)).toFixed(2),
+    usesFrozenCommercialTerms: Boolean(commercialTerms),
+    pricingTierCode: commercialTerms?.pricingTierCode ?? simulation.reachedTierCode,
   };
 }
 
@@ -113,7 +178,7 @@ export async function convertProspectSimulation(
 ) {
   return database.transaction(async (tx: any) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${input.simulationId}))`);
-    const { simulation, items } = await getSimulation(tx, input.companyId, input.simulationId);
+    const { simulation, items, commercialTerms } = await getSimulation(tx, input.companyId, input.simulationId);
     if (simulation.status === "converted" && simulation.convertedOrderId && simulation.convertedRetailerId) {
       return { alreadyConverted: true as const, retailerId: simulation.convertedRetailerId, orderId: simulation.convertedOrderId };
     }
@@ -124,13 +189,15 @@ export async function convertProspectSimulation(
       throw new TRPCError({ code: "CONFLICT", message: `Esiste già il retailer "${existingRetailer.name}" con la stessa P.IVA. Conferma il collegamento prima di proseguire.` });
     }
     const proposedPackage = existingRetailer ? null : await resolveProspectPricingPackage(tx, simulation.reachedTierCode);
-    const pricing = await calculateOrderPricing({
-      retailerId: existingRetailer?.id,
-      pricingPackageIdOverride: existingRetailer ? undefined : proposedPackage!.id,
-      companyId: input.companyId,
-      items: items.map((item: { productId: string; quantity: number }) => ({ productId: item.productId, quantity: item.quantity })),
-      database: tx as any,
-    });
+    const pricing = commercialTerms
+      ? pricingFromCommercialTerms(commercialTerms)
+      : await calculateOrderPricing({
+        retailerId: existingRetailer?.id,
+        pricingPackageIdOverride: existingRetailer ? undefined : proposedPackage!.id,
+        companyId: input.companyId,
+        items: items.map((item: { productId: string; quantity: number }) => ({ productId: item.productId, quantity: item.quantity })),
+        database: tx as any,
+      });
     const snapshot = simulation.calculationSnapshot as { minimumOrderNet?: string };
     const minimumOrderNet = Number(snapshot?.minimumOrderNet ?? 290);
     const isBelowMinimumOrder = Number(pricing.subtotalNet) < minimumOrderNet;
@@ -165,6 +232,10 @@ export async function convertProspectSimulation(
       status: "pending",
       paymentTerms: retailer.paymentTerms,
       subtotalNet: pricing.subtotalNet,
+      shippingNet: commercialTerms?.shippingNet ?? "0.00",
+      shippingVatRate: commercialTerms?.shippingVatRate ?? null,
+      shippingVatAmount: commercialTerms?.shippingVatAmount ?? "0.00",
+      freeShippingApplied: commercialTerms?.freeShippingApplied ?? false,
       vatAmount: pricing.vatAmount,
       totalGross: pricing.totalGross,
       discountPercent: pricing.discountPercent,
@@ -172,6 +243,7 @@ export async function convertProspectSimulation(
       notesInternal: `Creato dalla richiesta prospect ${simulation.id}`,
       createdBy: input.actorId,
       companyId: input.companyId,
+      prospectCommercialTermsId: commercialTerms?.id ?? null,
     }).returning();
     await tx.insert(orderItems).values(pricing.items.map((item) => ({
       orderId: order.id,
