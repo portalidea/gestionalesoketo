@@ -109,7 +109,7 @@ export async function previewProspectConversion(database: Database, companyId: s
  */
 export async function convertProspectSimulation(
   database: Database,
-  input: { companyId: string; simulationId: string; actorId: string; useExistingRetailer: boolean },
+  input: { companyId: string; simulationId: string; actorId: string; useExistingRetailer: boolean; minimumOrderOverrideReason?: string },
 ) {
   return database.transaction(async (tx: any) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${input.simulationId}))`);
@@ -133,7 +133,9 @@ export async function convertProspectSimulation(
     });
     const snapshot = simulation.calculationSnapshot as { minimumOrderNet?: string };
     const minimumOrderNet = Number(snapshot?.minimumOrderNet ?? 290);
-    if (Number(pricing.subtotalNet) < minimumOrderNet) {
+    const isBelowMinimumOrder = Number(pricing.subtotalNet) < minimumOrderNet;
+    const minimumOrderOverrideReason = input.minimumOrderOverrideReason?.trim();
+    if (isBelowMinimumOrder && !minimumOrderOverrideReason) {
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Ordine non approvabile: netto merce € ${pricing.subtotalNet}, minimo richiesto € ${minimumOrderNet.toFixed(2)}.` });
     }
 
@@ -188,6 +190,10 @@ export async function convertProspectSimulation(
     await tx.update(prospectSimulations).set({
       status: "converted", convertedRetailerId: retailer.id, convertedOrderId: order.id,
       convertedAt: new Date(), convertedBy: input.actorId,
+      minimumOrderOverrideApplied: isBelowMinimumOrder,
+      minimumOrderOverrideReason: isBelowMinimumOrder ? minimumOrderOverrideReason! : null,
+      minimumOrderOverriddenBy: isBelowMinimumOrder ? input.actorId : null,
+      minimumOrderOverriddenAt: isBelowMinimumOrder ? new Date() : null,
     }).where(eq(prospectSimulations.id, simulation.id));
     return { alreadyConverted: false as const, retailerId: retailer.id, orderId: order.id, orderNumber: order.orderNumber, pricing };
   });

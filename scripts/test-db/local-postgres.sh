@@ -98,6 +98,8 @@ reset_database() {
     drizzle/migrations/0037_prospect_pricing_simulator.sql
     drizzle/migrations/0038_prospect_order_invitations_and_conversion.sql
     drizzle/migrations/0039_affiliate_manual_commissions.sql
+    drizzle/migrations/0040_prospect_minimum_order_override.sql
+    drizzle/migrations/0041_prospect_composition_sessions.sql
   )
 
   for file in "${files[@]}"; do

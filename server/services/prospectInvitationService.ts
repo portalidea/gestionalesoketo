@@ -1,12 +1,15 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import {
+  products,
+  prospectCompositionSessions,
   prospectInvitations,
   prospectSimulationItems,
   prospectSimulations,
   prospectSimulatorConfig,
+  type ProspectCompositionSession,
 } from "../../drizzle/schema";
 import { calculateProspectSimulation, getPublicProspectCatalog, normalizeProspectTiers, type ProspectCartItemInput } from "./prospectSimulationService";
 import { sendProspectSimulationNotification } from "./prospectNotificationService";
@@ -18,10 +21,12 @@ export type InvitationPublicState =
   | { available: false };
 
 export type InvitationNotificationResult = { sent: true } | { sent: false; errorMessage: string };
+export type ProspectCompositionCartItem = { productId: string; quantity: number };
 
 const TOKEN_LENGTH = 32;
 const TOKEN_TTL_MS = 15 * 24 * 60 * 60 * 1000;
 const TOKEN_COMPARE_PLACEHOLDER = "0".repeat(TOKEN_LENGTH);
+const COMPOSITION_SESSION_INACTIVITY_MS = 30 * 60 * 1000;
 
 function digest(value: string) {
   return createHash("sha256").update(value).digest();
@@ -54,6 +59,116 @@ function neutralUnavailable(): InvitationPublicState {
 
 function isUnavailable(invitation: { status: string; tokenExpiresAt: Date }, now: Date) {
   return invitation.status === "revoked" || invitation.status === "submitted" || invitation.status === "expired" || invitation.tokenExpiresAt <= now;
+}
+
+function compositionMetrics(calculation: Awaited<ReturnType<typeof calculateProspectSimulation>>) {
+  return {
+    cartSnapshot: calculation.items.map((item) => ({ productId: item.id, quantity: item.quantity })),
+    listTotal: calculation.listSubtotalNet,
+    discountedNet: calculation.currentTierMerchandiseNet,
+    reachedTier: calculation.reachedTier.code,
+    nextTierDistanceEur: calculation.nextTier?.additionalMerchandiseNet ?? null,
+  };
+}
+
+function emptyCompositionMetrics() {
+  return {
+    cartSnapshot: [] as ProspectCompositionCartItem[],
+    listTotal: "0.00",
+    discountedNet: "0.00",
+    reachedTier: null,
+    nextTierDistanceEur: null,
+  };
+}
+
+function sessionIsInactive(lastActivityAt: Date, now: Date) {
+  return now.getTime() - lastActivityAt.getTime() > COMPOSITION_SESSION_INACTIVITY_MS;
+}
+
+async function findActiveInvitationForToken(tx: Database, token: string, now: Date) {
+  if (!/^[A-Za-z0-9_-]{32}$/.test(token)) {
+    timingSafeTokenEquals(token, TOKEN_COMPARE_PLACEHOLDER);
+    return null;
+  }
+  const [candidate] = await tx.select().from(prospectInvitations).where(eq(prospectInvitations.token, token)).limit(1);
+  const tokenMatches = timingSafeTokenEquals(token, candidate?.token ?? TOKEN_COMPARE_PLACEHOLDER);
+  if (!candidate || !tokenMatches) return null;
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${candidate.id}))`);
+  const [lockedInvitation] = await tx.select().from(prospectInvitations).where(eq(prospectInvitations.id, candidate.id)).limit(1);
+  const lockedTokenMatches = timingSafeTokenEquals(token, lockedInvitation?.token ?? TOKEN_COMPARE_PLACEHOLDER);
+  if (!lockedInvitation || !lockedTokenMatches || isUnavailable(lockedInvitation, now)) return null;
+  return lockedInvitation;
+}
+
+/** Crea una sessione all'apertura o riprende quella non inviata ancora attiva entro 30 minuti. */
+export async function openProspectCompositionSession(database: Database, token: string, now = new Date()) {
+  return database.transaction(async (tx: Database) => {
+    const invitation = await findActiveInvitationForToken(tx, token, now);
+    if (!invitation) return null;
+    const [latest] = await tx.select().from(prospectCompositionSessions)
+      .where(and(
+        eq(prospectCompositionSessions.invitationId, invitation.id),
+        eq(prospectCompositionSessions.companyId, invitation.companyId),
+        eq(prospectCompositionSessions.submitted, false),
+      ))
+      .orderBy(desc(prospectCompositionSessions.lastActivityAt))
+      .limit(1);
+    if (latest && !sessionIsInactive(latest.lastActivityAt, now)) {
+      const [resumed] = await tx.update(prospectCompositionSessions)
+        .set({ lastActivityAt: now })
+        .where(eq(prospectCompositionSessions.id, latest.id))
+        .returning();
+      return resumed;
+    }
+    const [created] = await tx.insert(prospectCompositionSessions).values({
+      invitationId: invitation.id,
+      companyId: invitation.companyId,
+      startedAt: now,
+      lastActivityAt: now,
+      ...emptyCompositionMetrics(),
+    }).returning();
+    return created;
+  });
+}
+
+/** Salva un carrello ricalcolato dal server; un session ID non valido non genera nuove scritture. */
+export async function saveProspectCompositionSession(
+  database: Database,
+  input: { token: string; sessionId: string; items: ProspectCartItemInput[] },
+  now = new Date(),
+) {
+  return database.transaction(async (tx: Database) => {
+    const invitation = await findActiveInvitationForToken(tx, input.token, now);
+    if (!invitation) return { persisted: false as const, sessionId: null };
+    const [session] = await tx.select().from(prospectCompositionSessions).where(and(
+      eq(prospectCompositionSessions.id, input.sessionId),
+      eq(prospectCompositionSessions.invitationId, invitation.id),
+      eq(prospectCompositionSessions.companyId, invitation.companyId),
+      eq(prospectCompositionSessions.submitted, false),
+    )).limit(1);
+    if (!session) return { persisted: false as const, sessionId: null };
+    const metrics = input.items.length === 0
+      ? emptyCompositionMetrics()
+      : compositionMetrics(calculateProspectSimulation(
+        (await tx.select().from(prospectSimulatorConfig).where(eq(prospectSimulatorConfig.companyId, invitation.companyId)).limit(1))[0]
+          ?? (() => { throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Modulo non disponibile" }); })(),
+        await getPublicProspectCatalog(tx),
+        input.items,
+      ));
+    const values = { lastActivityAt: now, ...metrics };
+    if (sessionIsInactive(session.lastActivityAt, now)) {
+      const [created] = await tx.insert(prospectCompositionSessions).values({
+        invitationId: invitation.id,
+        companyId: invitation.companyId,
+        startedAt: now,
+        ...values,
+      }).returning();
+      return { persisted: true as const, sessionId: created.id };
+    }
+    const [updated] = await tx.update(prospectCompositionSessions).set(values)
+      .where(eq(prospectCompositionSessions.id, session.id)).returning();
+    return { persisted: true as const, sessionId: updated.id };
+  });
 }
 
 /**
@@ -202,11 +317,71 @@ export async function listProspectInvitations(database: Database, companyId: str
     notificationSentAt: prospectInvitations.notificationSentAt,
     notificationError: prospectInvitations.notificationError,
     simulationId: prospectSimulations.id,
+    hasComposedWithoutSubmitting: sql<boolean>`EXISTS (
+      SELECT 1
+      FROM prospect_composition_sessions pcs
+      WHERE pcs.invitation_id = ${prospectInvitations.id}
+        AND pcs.company_id = ${prospectInvitations.companyId}
+        AND pcs.submitted = false
+        AND jsonb_array_length(pcs.cart_snapshot) > 0
+    )`,
+    lastCompositionAt: sql<Date | null>`(
+      SELECT MAX(pcs.last_activity_at)
+      FROM prospect_composition_sessions pcs
+      WHERE pcs.invitation_id = ${prospectInvitations.id}
+        AND pcs.company_id = ${prospectInvitations.companyId}
+    )`,
   }).from(prospectInvitations)
     .leftJoin(prospectSimulations, eq(prospectSimulations.invitationId, prospectInvitations.id))
     .where(eq(prospectInvitations.companyId, companyId))
     .orderBy(desc(prospectInvitations.createdAt));
   return rows;
+}
+
+function compositionCartItems(snapshot: unknown): ProspectCompositionCartItem[] {
+  if (!Array.isArray(snapshot)) return [];
+  return snapshot.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const candidate = item as { productId?: unknown; quantity?: unknown };
+    if (typeof candidate.productId !== "string" || typeof candidate.quantity !== "number" || !Number.isInteger(candidate.quantity) || candidate.quantity <= 0) return [];
+    return [{ productId: candidate.productId, quantity: candidate.quantity }];
+  });
+}
+
+/** Dettaglio staff dell'attività invito, filtrato dalla company attiva. */
+export async function getProspectInvitationCompositionDetail(database: Database, invitationId: string, companyId: string) {
+  const [invitation] = await database.select({
+    id: prospectInvitations.id,
+    legalName: prospectInvitations.legalName,
+    contactName: prospectInvitations.contactName,
+    status: prospectInvitations.status,
+  }).from(prospectInvitations).where(and(
+    eq(prospectInvitations.id, invitationId),
+    eq(prospectInvitations.companyId, companyId),
+  )).limit(1);
+  if (!invitation) throw new TRPCError({ code: "NOT_FOUND", message: "Invito non trovato" });
+  const sessions = await database.select().from(prospectCompositionSessions).where(and(
+    eq(prospectCompositionSessions.invitationId, invitationId),
+    eq(prospectCompositionSessions.companyId, companyId),
+  )).orderBy(desc(prospectCompositionSessions.lastActivityAt)) as ProspectCompositionSession[];
+  const cartItems = sessions.flatMap((session) => compositionCartItems(session.cartSnapshot));
+  const productIds = Array.from(new Set(cartItems.map((item) => item.productId)));
+  const productRows: Array<{ id: string; sku: string; name: string }> = productIds.length === 0 ? [] : await database.select({
+    id: products.id,
+    sku: products.sku,
+    name: products.name,
+  }).from(products).where(inArray(products.id, productIds));
+  const productById = new Map(productRows.map((product) => [product.id, product]));
+  return {
+    invitation,
+    sessions: sessions.map((session) => ({
+      ...session,
+      cartItems: compositionCartItems(session.cartSnapshot).map((item) => ({
+        ...item,
+        product: productById.get(item.productId) ?? null,
+      })),
+    })),
+  };
 }
 
 /** Persistenza pubblica con token monouso; le righe e lo snapshot sono sempre calcolati server-side. */
@@ -215,7 +390,7 @@ export async function submitInvitedProspectOrder(
   input: {
     token: string; legalName: string; contactName: string; email: string; phone: string;
     businessType: string; address: string; postalCode: string; city: string; province: string;
-    vatNumber: string; notes?: string; privacyAccepted: true; website?: string; items: ProspectCartItemInput[];
+    vatNumber: string; notes?: string; privacyAccepted: true; website?: string; items: ProspectCartItemInput[]; compositionSessionId?: string;
   },
 ) {
   if (input.website?.trim()) throw new TRPCError({ code: "BAD_REQUEST", message: "Richiesta non valida" });
@@ -261,6 +436,20 @@ export async function submitInvitedProspectOrder(
       quantity: item.quantity, piecesPerUnitSnapshot: item.piecesPerUnit, unitListNetSnapshot: item.unitListNet,
       vatRateSnapshot: item.vatRate, lineListNet: item.lineListNet, sortOrder,
     })));
+    // Il riferimento è opzionale e non può bloccare l'ordine esistente: viene
+    // marcato solo se la sessione appartiene allo stesso invito e alla company.
+    if (input.compositionSessionId) {
+      await tx.update(prospectCompositionSessions).set({
+        ...compositionMetrics(calculation),
+        lastActivityAt: new Date(),
+        submitted: true,
+      }).where(and(
+        eq(prospectCompositionSessions.id, input.compositionSessionId),
+        eq(prospectCompositionSessions.invitationId, lockedInvitation.id),
+        eq(prospectCompositionSessions.companyId, lockedInvitation.companyId),
+        eq(prospectCompositionSessions.submitted, false),
+      ));
+    }
     await tx.update(prospectInvitations).set({ status: "submitted" }).where(eq(prospectInvitations.id, lockedInvitation.id));
     return { created, calculation };
   });

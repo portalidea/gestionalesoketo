@@ -238,6 +238,18 @@
 - [x] Committare, pushare e integrare su main il runner di regressione isolata con FEFO dopo autorizzazione esplicita
 - [x] Aggiungere e pubblicare isolatamente lo scope OAuth FiC per DDT senza rimuovere i permessi esistenti
 - [ ] Predisporre una verifica non emissiva della connessione FiC e degli scope concessi dopo la ri-autorizzazione
-- [ ] Aggiungere deroga tracciata al minimo d’ordine nella conversione prospect con motivazione obbligatoria
+- [x] Aggiungere deroga tracciata al minimo d’ordine nella conversione prospect con motivazione obbligatoria
 - [ ] Verificare scope OAuth FiC per DDT, ri-autorizzazione e impatto sulle proforma
 - [x] Raddoppiare proporzionalmente il logo SoKeto nell’header dell’ordine prospect, preservando leggibilità responsive
+- [x] Progettare e sottoporre a revisione la migration append-only per lo storico delle sessioni di composizione dell’ordine prospect
+- [x] Progettare salvataggio pubblico non bloccante con debounce, rate limit e risoluzione invito/company esclusivamente dal token
+- [x] Progettare elenco admin delle sessioni e segnalazione degli inviti composti ma non inviati
+- [x] Riattivare la revisione della migration 0041 sessioni prospect dopo l’applicazione della 0040 override minimo
+- [x] Allineare lo schema Drizzle alla migration 0041 per le sessioni di composizione prospect
+- [x] Implementare salvataggio sessioni tokenizzato, ricalcolato server-side, rate-limited e non bloccante
+- [x] Integrare il debounce del carrello e l’informativa di assistenza commerciale nel modulo ordine prospect
+- [x] Aggiungere dettaglio sessioni invito e segnalazione “Da richiamare” nelle viste amministrative
+- [x] Verificare e, se mancante, completare l’override tracciato del minimo d’ordine con motivazione obbligatoria
+- [x] Implementare la deroga minimo con i campi 0040 confermati: Applied, Reason, OverriddenBy e OverriddenAt
+- [x] Coprire storico sessioni e override minimo con test PostgreSQL isolati e verifiche di build
+- [ ] Committare e pubblicare il branch feature/prospect-composition-session-history, poi integrare su main e verificare il deploy autorizzato

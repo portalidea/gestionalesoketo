@@ -309,6 +309,9 @@ export async function listProspectSimulations(database: Database, companyId: str
     status: prospectSimulations.status,
     notificationStatus: prospectSimulations.notificationStatus,
     notificationError: prospectSimulations.notificationError,
+    minimumOrderOverrideApplied: prospectSimulations.minimumOrderOverrideApplied,
+    minimumOrderOverrideReason: prospectSimulations.minimumOrderOverrideReason,
+    minimumOrderOverriddenAt: prospectSimulations.minimumOrderOverriddenAt,
     createdAt: prospectSimulations.createdAt,
   }).from(prospectSimulations).where(eq(prospectSimulations.companyId, companyId)).orderBy(desc(prospectSimulations.createdAt));
 }
