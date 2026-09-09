@@ -1,16 +1,19 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { companies, orders, prospectInvitations, prospectSimulations, retailers } from "../../drizzle/schema";
+import { companies, orders, prospectCompositionSessions, prospectInvitations, prospectSimulations, retailers, userCompanyAccess } from "../../drizzle/schema";
 import { EKETO_COMPANY_ID, SOKETO_COMPANY_ID } from "../../shared/const";
 import { prospectInvitationInput, prospectSimulatorRouter } from "../prospect-simulator-router";
 import type { TrpcContext } from "../_core/context";
 import {
   createProspectInvitation,
+  getProspectInvitationCompositionDetail,
   normalizeVatNumber,
+  openProspectCompositionSession,
   regenerateProspectInvitation,
   resolvePublicInvitation,
   revokeProspectInvitation,
+  saveProspectCompositionSession,
   submitInvitedProspectOrder,
 } from "./prospectInvitationService";
 import { convertProspectSimulation, previewProspectConversion } from "./prospectOrderConversionService";
@@ -62,7 +65,7 @@ async function submit(database: any, suffix: string, vatNumber?: string, company
 beforeAll(async () => {
   const database = await getDb();
   if (!database) throw new Error("DATABASE_URL isolato obbligatorio per questa suite");
-  await database.execute(sql`TRUNCATE TABLE "prospect_simulation_items", prospect_simulations, prospect_invitations, "orderItems", orders, locations, retailers, "pricingPackages", products, prospect_simulator_config, users, companies CASCADE`);
+  await database.execute(sql`TRUNCATE TABLE prospect_composition_sessions, "prospect_simulation_items", prospect_simulations, prospect_invitations, "orderItems", orders, locations, retailers, "pricingPackages", products, prospect_simulator_config, users, companies CASCADE`);
   // Il catalogo di produzione è già riallineato con 0033; la migration non è
   // versionata nel branch, quindi questa fixture locale rende esplicita la lacuna.
   await database.execute(sql`DO $$ BEGIN CREATE TYPE payment_status_enum AS ENUM ('unpaid', 'paid', 'refunded'); EXCEPTION WHEN duplicate_object THEN NULL; END $$`);
@@ -71,6 +74,7 @@ beforeAll(async () => {
   await database.execute(sql`DELETE FROM auth.users`);
   await database.execute(sql`INSERT INTO companies (id, name) VALUES (${EKETO_COMPANY_ID}::uuid, 'E-Keto Food Srls'), (${SOKETO_COMPANY_ID}::uuid, 'SoKeto Srl')`);
   await database.execute(sql`INSERT INTO auth.users (id, email) VALUES (${ACTOR_ID}::uuid, 'admin@example.test')`);
+  await database.insert(userCompanyAccess).values({ userId: ACTOR_ID, companyId: EKETO_COMPANY_ID, isDefault: true });
   await database.execute(sql`INSERT INTO products (id, sku, name, "unitPrice", "vatRate", "piecesPerUnit", "showInSimulator", "simulatorOrder", "costPrice") VALUES (${PRODUCT_ID}::uuid, 'TEST-PROSPECT', 'Prodotto prospect test', 100.00, 10.00, 1, true, 1, 25.00)`);
   await database.execute(sql`
     INSERT INTO prospect_simulator_config (company_id, minimum_order_net, shipping_fee_net, free_shipping_threshold_net, recommended_public_discount_percent, display_stand_threshold, privacy_policy_url, tiers)
@@ -153,13 +157,22 @@ describe("prospect invitations and conversion — PostgreSQL isolato", () => {
     await database.execute(sql`INSERT INTO "pricingPackages" (id, name, "discountPercent", "sortOrder") VALUES (${PARTNER_ID}::uuid, 'Partner', 41.40, 2)`);
   });
 
-  it("T7: sotto il minimo commerciale l'anteprima segnala il blocco e la conversione non ammette override", async () => {
+  it("T7: sotto il minimo commerciale la conversione richiede una motivazione e traccia la deroga", async () => {
     const database = await getDb();
     const invitation = await invite(database, "minimum");
     const submitted = await submitInvitedProspectOrder(database, { token: invitation.token, ...contact("minimum", "IT 99988877766", 3) });
     const preview = await previewProspectConversion(database, EKETO_COMPANY_ID, submitted.id);
     expect(preview.meetsMinimumOrder).toBe(false);
     await expect(convertProspectSimulation(database, { companyId: EKETO_COMPANY_ID, simulationId: submitted.id, actorId: ACTOR_ID, useExistingRetailer: false })).rejects.toThrow("Ordine non approvabile");
+    await expect(convertProspectSimulation(database, { companyId: EKETO_COMPANY_ID, simulationId: submitted.id, actorId: ACTOR_ID, useExistingRetailer: false, minimumOrderOverrideReason: "Ordine campione per il punto vendita" })).resolves.toMatchObject({ alreadyConverted: false });
+    const [stored] = await database.select({
+      applied: prospectSimulations.minimumOrderOverrideApplied,
+      reason: prospectSimulations.minimumOrderOverrideReason,
+      overriddenBy: prospectSimulations.minimumOrderOverriddenBy,
+      overriddenAt: prospectSimulations.minimumOrderOverriddenAt,
+    }).from(prospectSimulations).where(eq(prospectSimulations.id, submitted.id));
+    expect(stored).toMatchObject({ applied: true, reason: "Ordine campione per il punto vendita", overriddenBy: ACTOR_ID });
+    expect(stored.overriddenAt).toBeInstanceOf(Date);
   });
 
   it("T8: la preview evidenzia il delta quando il listino normale cambia dopo l'invio prospect", async () => {
@@ -208,5 +221,104 @@ describe("prospect invitations and conversion — PostgreSQL isolato", () => {
       user: null,
     });
     await expect(caller.getInvitationPublicData({ token: invitation.token })).resolves.toEqual({ available: false });
+    await database.execute(sql`
+      INSERT INTO prospect_simulator_config (company_id, minimum_order_net, shipping_fee_net, free_shipping_threshold_net, recommended_public_discount_percent, display_stand_threshold, privacy_policy_url, tiers)
+      VALUES (${SOKETO_COMPANY_ID}::uuid, 290.00, 18.00, 500.00, 10.00, 790.00, 'https://example.test/privacy',
+        '[{"code":"starter","name":"Starter","discount_percent":38.50,"minimum_list_net":0},{"code":"partner","name":"Partner","discount_percent":41.40,"minimum_list_net":500},{"code":"premium","name":"Premium","discount_percent":44.05,"minimum_list_net":790},{"code":"elite","name":"Elite","discount_percent":46.50,"minimum_list_net":1005}]'::jsonb)
+    `);
+  });
+
+  it("S1: l'apertura valida crea una sessione vuota legata esclusivamente all'invito e alla sua company", async () => {
+    const database = await getDb();
+    const invitation = await invite(database, "composition-open", EKETO_COMPANY_ID);
+    const session = await openProspectCompositionSession(database, invitation.token);
+    expect(session).toMatchObject({ invitationId: invitation.id, companyId: EKETO_COMPANY_ID, submitted: false, cartSnapshot: [], listTotal: "0.00", discountedNet: "0.00", reachedTier: null });
+  });
+
+  it("S2: un ritorno entro 30 minuti riapre la stessa sessione e ne aggiorna l'attività", async () => {
+    const database = await getDb();
+    const invitation = await invite(database, "composition-resume");
+    const base = new Date();
+    const first = await openProspectCompositionSession(database, invitation.token, base);
+    const resumed = await openProspectCompositionSession(database, invitation.token, new Date(base.getTime() + (29 * 60 + 59) * 1000));
+    expect(resumed?.id).toBe(first?.id);
+    expect(resumed?.lastActivityAt.getTime()).toBeGreaterThan(first?.lastActivityAt.getTime() ?? 0);
+  });
+
+  it("S3: oltre 30 minuti di inattività viene creata una nuova sessione e la precedente resta storica", async () => {
+    const database = await getDb();
+    const invitation = await invite(database, "composition-new-session");
+    const base = new Date();
+    const first = await openProspectCompositionSession(database, invitation.token, base);
+    const second = await openProspectCompositionSession(database, invitation.token, new Date(base.getTime() + 30 * 60 * 1000 + 1));
+    expect(second?.id).not.toBe(first?.id);
+    const rows = await database.select().from(prospectCompositionSessions).where(eq(prospectCompositionSessions.invitationId, invitation.id));
+    expect(rows).toHaveLength(2);
+  });
+
+  it("S4: il salvataggio conserva solo ID/quantità e totali autorevoli ricalcolati dal server", async () => {
+    const database = await getDb();
+    await database.execute(sql`UPDATE products SET "unitPrice" = 100.00 WHERE id = ${PRODUCT_ID}::uuid`);
+    const invitation = await invite(database, "composition-calculation");
+    const session = await openProspectCompositionSession(database, invitation.token);
+    const saved = await saveProspectCompositionSession(database, { token: invitation.token, sessionId: session!.id, items: [{ productId: PRODUCT_ID, quantity: 9 }] });
+    expect(saved).toEqual({ persisted: true, sessionId: session!.id });
+    const [stored] = await database.select().from(prospectCompositionSessions).where(eq(prospectCompositionSessions.id, session!.id));
+    expect(stored.cartSnapshot).toEqual([{ productId: PRODUCT_ID, quantity: 9 }]);
+    expect(Object.keys((stored.cartSnapshot as Array<object>)[0]!).sort()).toEqual(["productId", "quantity"]);
+    expect(stored).toMatchObject({ listTotal: "900.00", discountedNet: "527.40", reachedTier: "partner" });
+  });
+
+  it("S5: token scaduto, revocato o inesistente non scrive nuove sessioni e conserva lo storico esistente", async () => {
+    const database = await getDb();
+    const revoked = await invite(database, "composition-revoked");
+    const session = await openProspectCompositionSession(database, revoked.token);
+    await revokeProspectInvitation(database, revoked.id, EKETO_COMPANY_ID, ACTOR_ID);
+    await expect(saveProspectCompositionSession(database, { token: revoked.token, sessionId: session!.id, items: [{ productId: PRODUCT_ID, quantity: 1 }] })).resolves.toEqual({ persisted: false, sessionId: null });
+    const [historicalCount] = await database.select({ total: sql<number>`count(*)::int` }).from(prospectCompositionSessions).where(eq(prospectCompositionSessions.invitationId, revoked.id));
+    expect(historicalCount.total).toBe(1);
+    expect(await openProspectCompositionSession(database, "x".repeat(32))).toBeNull();
+  });
+
+  it("S6: il submit marca nella medesima transazione la sessione che ha prodotto l'ordine", async () => {
+    const database = await getDb();
+    const invitation = await invite(database, "composition-submitted");
+    const session = await openProspectCompositionSession(database, invitation.token);
+    await saveProspectCompositionSession(database, { token: invitation.token, sessionId: session!.id, items: [{ productId: PRODUCT_ID, quantity: 9 }] });
+    await submitInvitedProspectOrder(database, { token: invitation.token, ...contact("composition-submitted"), compositionSessionId: session!.id });
+    const [stored] = await database.select().from(prospectCompositionSessions).where(eq(prospectCompositionSessions.id, session!.id));
+    expect(stored).toMatchObject({ submitted: true, cartSnapshot: [{ productId: PRODUCT_ID, quantity: 9 }], reachedTier: "partner" });
+  });
+
+  it("S7: un riferimento sessione estraneo non blocca il submit e non può marcare l'attività di un altro invito", async () => {
+    const database = await getDb();
+    const first = await invite(database, "composition-safe-submit");
+    const other = await invite(database, "composition-other");
+    const otherSession = await openProspectCompositionSession(database, other.token);
+    await expect(submitInvitedProspectOrder(database, { token: first.token, ...contact("composition-safe-submit"), compositionSessionId: otherSession!.id })).resolves.toMatchObject({ id: expect.any(String) });
+    const [unchanged] = await database.select().from(prospectCompositionSessions).where(eq(prospectCompositionSessions.id, otherSession!.id));
+    expect(unchanged.submitted).toBe(false);
+  });
+
+  it("S8: la lista inviti segnala solo un carrello non vuoto ancora non inviato come prospect da richiamare", async () => {
+    const database = await getDb();
+    const invitation = await invite(database, "composition-follow-up");
+    const session = await openProspectCompositionSession(database, invitation.token);
+    await saveProspectCompositionSession(database, { token: invitation.token, sessionId: session!.id, items: [{ productId: PRODUCT_ID, quantity: 1 }] });
+    const caller = prospectSimulatorRouter.createCaller({
+      req: { headers: {}, socket: { remoteAddress: "127.0.0.1" } } as TrpcContext["req"], res: {} as TrpcContext["res"],
+      user: { id: ACTOR_ID, role: "admin" }, activeCompanyId: EKETO_COMPANY_ID,
+    } as TrpcContext);
+    const row = (await caller.adminInvitationList()).find((candidate) => candidate.id === invitation.id);
+    expect(row).toMatchObject({ hasComposedWithoutSubmitting: true });
+  });
+
+  it("S9: il dettaglio sessioni non oltrepassa mai lo scope della company attiva", async () => {
+    const database = await getDb();
+    const invitation = await invite(database, "composition-company-scope", SOKETO_COMPANY_ID);
+    const session = await openProspectCompositionSession(database, invitation.token);
+    await saveProspectCompositionSession(database, { token: invitation.token, sessionId: session!.id, items: [{ productId: PRODUCT_ID, quantity: 1 }] });
+    await expect(getProspectInvitationCompositionDetail(database, invitation.id, EKETO_COMPANY_ID)).rejects.toThrow("Invito non trovato");
+    await expect(getProspectInvitationCompositionDetail(database, invitation.id, SOKETO_COMPANY_ID)).resolves.toMatchObject({ sessions: [{ id: session!.id }] });
   });
 });

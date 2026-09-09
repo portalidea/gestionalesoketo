@@ -14,11 +14,14 @@ import {
 } from "./services/prospectSimulationService";
 import {
   createProspectInvitation,
+  getProspectInvitationCompositionDetail,
   listProspectInvitations,
+  openProspectCompositionSession,
   regenerateProspectInvitation,
   resendProspectInvitation,
   resolvePublicInvitation,
   revokeProspectInvitation,
+  saveProspectCompositionSession,
   submitInvitedProspectOrder,
 } from "./services/prospectInvitationService";
 import { sendProspectInvitationNotification } from "./services/prospectNotificationService";
@@ -43,6 +46,11 @@ const contactInput = z.object({
 });
 
 const tokenInput = z.object({ token: z.string().trim().min(1).max(128) });
+const compositionInput = z.object({
+  token: tokenInput.shape.token,
+  sessionId: z.string().uuid(),
+  items: z.array(z.object({ productId: z.string().uuid(), quantity: z.number().int().positive() })).max(100),
+}).strict();
 export const prospectInvitationInput = z.object({
   legalName: z.string().trim().min(1).max(250),
   contactName: z.string().trim().min(1).max(250),
@@ -56,6 +64,7 @@ const invitedOrderInput = contactInput.extend({
   postalCode: z.string().trim().min(1).max(10),
   province: z.string().trim().length(2),
   notes: z.string().trim().max(3000).optional(),
+  compositionSessionId: z.string().uuid().optional(),
 });
 
 function clientIp(ctx: { req: { headers: Record<string, string | string[] | undefined>; socket?: { remoteAddress?: string } } }) {
@@ -88,9 +97,12 @@ export const prospectSimulatorRouter = router({
     const config = await getInvitationConfigOrNull(database, tokenState.invitation.companyId);
     if (!config) return { available: false as const };
     const catalog = await getPublicProspectCatalog(database);
+    const compositionSession = await openProspectCompositionSession(database, input.token);
+    if (!compositionSession) return { available: false as const };
     return {
       available: true as const,
       invitation: tokenState.invitation,
+      compositionSessionId: compositionSession.id,
       config: {
         minimumOrderNet: config.minimumOrderNet,
         shippingFeeNet: config.shippingFeeNet,
@@ -113,6 +125,12 @@ export const prospectSimulatorRouter = router({
     if (!config) throw new TRPCError({ code: "NOT_FOUND", message: "Link non valido" });
     const catalog = await getPublicProspectCatalog(database);
     return calculateProspectSimulation(config, catalog, input.items);
+  }),
+
+  /** Persistenza best-effort del carrello: token, invito e company restano server-side. */
+  saveInvitationComposition: publicProcedure.input(compositionInput).mutation(async ({ ctx, input }) => {
+    enforceProspectRateLimit(`prospect:invite-composition:${clientIp(ctx as never)}`, 120, 10 * 60_000);
+    return saveProspectCompositionSession(await requireDatabase(), input);
   }),
 
   submitInvitationOrder: publicProcedure.input(invitedOrderInput).mutation(async ({ ctx, input }) => {
@@ -142,17 +160,23 @@ export const prospectSimulatorRouter = router({
   adminConvertToOrder: adminProcedure.input(z.object({
     id: z.string().uuid(),
     useExistingRetailer: z.boolean().default(false),
+    minimumOrderOverrideReason: z.string().trim().min(1, "Inserisci una motivazione per la deroga.").max(2000).optional(),
   })).mutation(async ({ ctx, input }) => {
     return convertProspectSimulation(await requireDatabase(), {
       companyId: ctx.activeCompanyId,
       simulationId: input.id,
       actorId: ctx.user!.id,
       useExistingRetailer: input.useExistingRetailer,
+      minimumOrderOverrideReason: input.minimumOrderOverrideReason,
     });
   }),
 
   adminInvitationList: adminProcedure.query(async ({ ctx }) => {
     return listProspectInvitations(await requireDatabase(), ctx.activeCompanyId);
+  }),
+
+  adminInvitationCompositionDetail: adminProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ ctx, input }) => {
+    return getProspectInvitationCompositionDetail(await requireDatabase(), input.id, ctx.activeCompanyId);
   }),
 
   adminCreateInvitation: adminProcedure.input(prospectInvitationInput).mutation(async ({ ctx, input }) => {

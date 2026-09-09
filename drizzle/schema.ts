@@ -3,6 +3,7 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -287,6 +288,32 @@ export const prospectInvitations = pgTable("prospect_invitations", {
 
 export type ProspectInvitation = typeof prospectInvitations.$inferSelect;
 
+/** Storico server-side delle composizioni del carrello per un invito prospect. */
+export const prospectCompositionSessions = pgTable("prospect_composition_sessions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  invitationId: uuid("invitation_id").notNull(),
+  companyId: uuid("company_id").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+  lastActivityAt: timestamp("last_activity_at", { withTimezone: true }).defaultNow().notNull(),
+  cartSnapshot: jsonb("cart_snapshot").default(sql`'[]'::jsonb`).notNull(),
+  listTotal: numeric("list_total", { precision: 10, scale: 2 }).default("0").notNull(),
+  discountedNet: numeric("discounted_net", { precision: 10, scale: 2 }).default("0").notNull(),
+  reachedTier: varchar("reached_tier", { length: 50 }),
+  nextTierDistanceEur: numeric("next_tier_distance_eur", { precision: 10, scale: 2 }),
+  submitted: boolean("submitted").default(false).notNull(),
+}, (t) => [
+  foreignKey({
+    columns: [t.invitationId, t.companyId],
+    foreignColumns: [prospectInvitations.id, prospectInvitations.companyId],
+    name: "prospect_composition_sessions_invitation_company_fkey",
+  }).onDelete("restrict"),
+  index("idx_prospect_composition_sessions_invitation_activity").on(t.invitationId, t.lastActivityAt),
+  index("idx_prospect_composition_sessions_company_activity").on(t.companyId, t.lastActivityAt),
+  index("idx_prospect_composition_sessions_unsubmitted").on(t.invitationId, t.lastActivityAt).where(sql`submitted = false`),
+]);
+
+export type ProspectCompositionSession = typeof prospectCompositionSessions.$inferSelect;
+
 /** Richiesta prospect e snapshot immutabile della simulazione server-side. */
 export const prospectSimulations = pgTable("prospect_simulations", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -316,6 +343,10 @@ export const prospectSimulations = pgTable("prospect_simulations", {
   convertedOrderId: uuid("convertedOrderId").references(() => orders.id),
   convertedAt: timestamp("convertedAt", { withTimezone: true }),
   convertedBy: uuid("convertedBy").references(() => users.id, { onDelete: "set null" }),
+  minimumOrderOverrideApplied: boolean("minimumOrderOverrideApplied").default(false).notNull(),
+  minimumOrderOverrideReason: text("minimumOrderOverrideReason"),
+  minimumOrderOverriddenBy: uuid("minimumOrderOverriddenBy").references(() => users.id, { onDelete: "set null" }),
+  minimumOrderOverriddenAt: timestamp("minimumOrderOverriddenAt", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
