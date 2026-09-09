@@ -93,6 +93,7 @@ reset_database() {
     drizzle/migrations/0028_m13_expiry_alerts.sql
     drizzle/migrations/0029_m13_item_declaration_anomaly.sql
     drizzle/migrations/0030_m13_reorder_suppression.sql
+    drizzle/migrations/0031_order_shipping_fields.sql
     drizzle/migrations/0035_intercompany_transfer_report_indexes.sql
     drizzle/migrations/0036_shopify_import_cutoff.sql
     drizzle/migrations/0037_prospect_pricing_simulator.sql
@@ -100,6 +101,7 @@ reset_database() {
     drizzle/migrations/0039_affiliate_manual_commissions.sql
     drizzle/migrations/0040_prospect_minimum_order_override.sql
     drizzle/migrations/0041_prospect_composition_sessions.sql
+    drizzle/migrations/0042_prospect_promotions.sql
   )
 
   for file in "${files[@]}"; do

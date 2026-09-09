@@ -431,6 +431,8 @@ export default function OrderDetail() {
   const [cancelReason, setCancelReason] = useState("");
   const [editItemsOpen, setEditItemsOpen] = useState(false);
   const [editItems, setEditItems] = useState<Array<{ productId: string; quantity: number; unitPrice: number; vatRate: number }>>([]);
+  const [releaseTermsOpen, setReleaseTermsOpen] = useState(false);
+  const [releaseTermsReason, setReleaseTermsReason] = useState("");
 
   const orderQuery = trpc.orders.getById.useQuery(
     { id: params.id ?? "" },
@@ -511,6 +513,15 @@ export default function OrderDetail() {
     },
     onError: (err) => toast.error(`Errore modifica items: ${err.message}`),
   });
+  const releaseTermsMutation = trpc.orders.releaseProspectCommercialTerms.useMutation({
+    onSuccess: () => {
+      toast.success("Condizioni promozionali rilasciate: il prossimo ricalcolo userà il tier reale del retailer.");
+      setReleaseTermsOpen(false);
+      setReleaseTermsReason("");
+      invalidateOrder();
+    },
+    onError: (err) => toast.error(err.message),
+  });
 
   function invalidateOrder() {
     utils.orders.getById.invalidate({ id: params.id ?? "" });
@@ -569,7 +580,8 @@ export default function OrderDetail() {
   const isCancelled = order.status === "cancelled";
   const isDelivered = order.status === "delivered";
   const canEditBatches = !isCancelled && !isDelivered;
-  const canEditItems = order.status === "pending";
+  const hasLockedProspectCommercialTerms = Boolean(order.prospectCommercialTermsId && !order.prospectCommercialTermsReleasedAt);
+  const canEditItems = order.status === "pending" && !hasLockedProspectCommercialTerms;
   const paymentStatus = (order as any).paymentStatus ?? "unpaid";
   const paymentMethod = (order as any).paymentMethod ?? null;
   const paymentStatusCfg = PAYMENT_STATUS_CONFIG[paymentStatus] ?? PAYMENT_STATUS_CONFIG.unpaid;
@@ -757,6 +769,13 @@ export default function OrderDetail() {
           </Card>
         )}
 
+        {order.prospectCommercialTermsId && (
+          <Card className={hasLockedProspectCommercialTerms ? "border-[#7AB648]/70 bg-[#F3F7ED]" : "border-muted bg-muted/30"}>
+            <CardContent className="flex flex-col gap-3 pt-6 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex gap-3"><AlertTriangle className={`mt-0.5 h-5 w-5 shrink-0 ${hasLockedProspectCommercialTerms ? "text-[#5D973B]" : "text-muted-foreground"}`} /><div><p className="font-medium">{hasLockedProspectCommercialTerms ? "Prezzi promozionali prospect congelati" : "Condizioni promozionali prospect rilasciate"}</p><p className="text-sm text-muted-foreground">{hasLockedProspectCommercialTerms ? "Le righe rispettano il contratto del primo ordine. Per modificarle è necessaria una rinuncia esplicita: il ricalcolo userà il tier reale del retailer." : <>Rilasciate il {order.prospectCommercialTermsReleasedAt ? format(new Date(order.prospectCommercialTermsReleasedAt), "dd/MM/yyyy HH:mm") : "—"}. Motivo: {order.prospectCommercialTermsReleaseReason}</>}</p></div></div>{hasLockedProspectCommercialTerms && order.status === "pending" && <Button variant="outline" size="sm" onClick={() => setReleaseTermsOpen(true)}>Rinuncia alle condizioni promo</Button>}</CardContent>
+          </Card>
+        )}
+
         {/* Warning: items senza lotto */}
         {canEditBatches && unassignedCount > 0 && (
           <Card className="border-amber-500/30 bg-amber-500/5">
@@ -790,6 +809,7 @@ export default function OrderDetail() {
                   Modifica Items
                 </Button>
               )}
+              {order.status === "pending" && hasLockedProspectCommercialTerms && <Badge variant="outline" className="border-[#7AB648] text-[#426b2f]">Prezzi bloccati da promo</Badge>}
               {totalItems > 0 && (
                 <>
                   {assignedCount > 0 && (
@@ -1387,6 +1407,21 @@ export default function OrderDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <AlertDialog open={releaseTermsOpen} onOpenChange={setReleaseTermsOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Rinunciare alle condizioni promozionali?</AlertDialogTitle>
+            <AlertDialogDescription>Questa azione è irreversibile: le future modifiche ricalcoleranno l’ordine con il tier reale del retailer. L’ordine conserverà data, utente e motivazione della rinuncia.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <textarea className="min-h-24 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm" placeholder="Motivazione obbligatoria" value={releaseTermsReason} onChange={(event) => setReleaseTermsReason(event.target.value)} />
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={releaseTermsMutation.isPending}>Annulla</AlertDialogCancel>
+            <AlertDialogAction disabled={!releaseTermsReason.trim() || releaseTermsMutation.isPending} onClick={(event) => { event.preventDefault(); releaseTermsMutation.mutate({ orderId: order.id, reason: releaseTermsReason.trim() }); }}>
+              {releaseTermsMutation.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}Conferma rinuncia
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {/* M12: Label insufficiency error dialog */}
       <AlertDialog open={!!labelErrorMsg} onOpenChange={(open) => { if (!open) setLabelErrorMsg(null); }}>
         <AlertDialogContent>

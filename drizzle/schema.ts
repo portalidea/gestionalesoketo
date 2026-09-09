@@ -262,6 +262,81 @@ export const prospectSimulatorConfig = pgTable("prospect_simulator_config", {
 
 export type ProspectSimulatorConfig = typeof prospectSimulatorConfig.$inferSelect;
 
+/** Campagne temporanee applicabili esclusivamente al primo ordine prospect. */
+export const prospectPromotions = pgTable("prospect_promotions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  title: varchar("title", { length: 255 }).notNull(),
+  publicDescription: text("public_description").default("").notNull(),
+  internalNotes: text("internal_notes"),
+  validFrom: timestamp("valid_from", { withTimezone: true }).notNull(),
+  validTo: timestamp("valid_to", { withTimezone: true }).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdBy: uuid("created_by").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "restrict" }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  unique("prospect_promotions_id_company_unique").on(t.id, t.companyId),
+  check("prospect_promotions_title_nonblank", sql`length(btrim(${t.title})) > 0`),
+  check("prospect_promotions_window_valid", sql`${t.validTo} > ${t.validFrom}`),
+]);
+
+export type ProspectPromotion = typeof prospectPromotions.$inferSelect;
+
+/** Benefit tipizzati; il primo rilascio userà esclusivamente tier_upgrade. */
+export const prospectPromotionBenefits = pgTable("prospect_promotion_benefits", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  promotionId: uuid("promotion_id").notNull().references(() => prospectPromotions.id, { onDelete: "cascade" }),
+  benefitType: varchar("benefit_type", { length: 30 }).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  qualifyingTierCode: varchar("qualifying_tier_code", { length: 50 }),
+  grantedTierCode: varchar("granted_tier_code", { length: 50 }),
+  giftThresholdNet: numeric("gift_threshold_net", { precision: 10, scale: 2 }),
+  giftProductId: uuid("gift_product_id").references(() => products.id, { onDelete: "restrict" }),
+  giftQuantity: integer("gift_quantity"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  unique("prospect_promotion_benefits_one_type_per_campaign").on(t.promotionId, t.benefitType),
+  index("idx_prospect_promotion_benefits_promotion_sort").on(t.promotionId, t.sortOrder, t.id),
+  check("prospect_promotion_benefits_type_valid", sql`${t.benefitType} IN ('tier_upgrade', 'free_shipping', 'gift_product')`),
+  check("prospect_promotion_benefits_sort_order_nonnegative", sql`${t.sortOrder} >= 0`),
+  check("prospect_promotion_benefits_configuration_valid", sql`
+    (
+      ${t.benefitType} = 'tier_upgrade'
+      AND ${t.qualifyingTierCode} IS NOT NULL
+      AND length(btrim(${t.qualifyingTierCode})) > 0
+      AND ${t.grantedTierCode} IS NOT NULL
+      AND length(btrim(${t.grantedTierCode})) > 0
+      AND ${t.qualifyingTierCode} <> ${t.grantedTierCode}
+      AND ${t.giftThresholdNet} IS NULL
+      AND ${t.giftProductId} IS NULL
+      AND ${t.giftQuantity} IS NULL
+    )
+    OR (
+      ${t.benefitType} = 'free_shipping'
+      AND ${t.qualifyingTierCode} IS NULL
+      AND ${t.grantedTierCode} IS NULL
+      AND ${t.giftThresholdNet} IS NULL
+      AND ${t.giftProductId} IS NULL
+      AND ${t.giftQuantity} IS NULL
+    )
+    OR (
+      ${t.benefitType} = 'gift_product'
+      AND ${t.qualifyingTierCode} IS NULL
+      AND ${t.grantedTierCode} IS NULL
+      AND ${t.giftThresholdNet} IS NOT NULL
+      AND ${t.giftThresholdNet} >= 0
+      AND ${t.giftProductId} IS NOT NULL
+      AND ${t.giftQuantity} IS NOT NULL
+      AND ${t.giftQuantity} > 0
+    )
+  `),
+]);
+
+export type ProspectPromotionBenefit = typeof prospectPromotionBenefits.$inferSelect;
+
 /** Invito individuale e revocabile al modulo ordine prospect. */
 export const prospectInvitations = pgTable("prospect_invitations", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -359,6 +434,56 @@ export const prospectSimulations = pgTable("prospect_simulations", {
 ]);
 
 export type ProspectSimulation = typeof prospectSimulations.$inferSelect;
+
+/** Contratto immutabile del primo ordine prospect quando una promozione è stata congelata al submit. */
+export const prospectOrderCommercialTerms = pgTable("prospect_order_commercial_terms", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: uuid("company_id").notNull(),
+  simulationId: uuid("simulation_id").notNull(),
+  invitationId: uuid("invitation_id").notNull(),
+  promotionId: uuid("promotion_id").notNull(),
+  realTierCode: varchar("real_tier_code", { length: 50 }).notNull(),
+  pricingTierCode: varchar("pricing_tier_code", { length: 50 }).notNull(),
+  appliedBenefitsSnapshot: jsonb("applied_benefits_snapshot").default(sql`'[]'::jsonb`).notNull(),
+  pricedItemsSnapshot: jsonb("priced_items_snapshot").default(sql`'[]'::jsonb`).notNull(),
+  merchandiseNet: numeric("merchandise_net", { precision: 10, scale: 2 }).notNull(),
+  shippingNet: numeric("shipping_net", { precision: 10, scale: 2 }).default("0").notNull(),
+  shippingVatRate: numeric("shipping_vat_rate", { precision: 5, scale: 2 }),
+  shippingVatAmount: numeric("shipping_vat_amount", { precision: 10, scale: 2 }).default("0").notNull(),
+  freeShippingApplied: boolean("free_shipping_applied").default(false).notNull(),
+  vatAmount: numeric("vat_amount", { precision: 10, scale: 2 }).notNull(),
+  totalGross: numeric("total_gross", { precision: 10, scale: 2 }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  unique("prospect_order_terms_simulation_unique").on(t.simulationId),
+  unique("prospect_order_terms_invitation_unique").on(t.invitationId),
+  foreignKey({
+    columns: [t.simulationId, t.companyId],
+    foreignColumns: [prospectSimulations.id, prospectSimulations.companyId],
+    name: "prospect_order_terms_simulation_company_fkey",
+  }).onDelete("restrict"),
+  foreignKey({
+    columns: [t.invitationId, t.companyId],
+    foreignColumns: [prospectInvitations.id, prospectInvitations.companyId],
+    name: "prospect_order_terms_invitation_company_fkey",
+  }).onDelete("restrict"),
+  foreignKey({
+    columns: [t.promotionId, t.companyId],
+    foreignColumns: [prospectPromotions.id, prospectPromotions.companyId],
+    name: "prospect_order_terms_promotion_company_fkey",
+  }).onDelete("restrict"),
+  index("idx_prospect_order_terms_company_created").on(t.companyId, t.createdAt),
+  check("prospect_order_terms_real_tier_nonblank", sql`length(btrim(${t.realTierCode})) > 0`),
+  check("prospect_order_terms_pricing_tier_nonblank", sql`length(btrim(${t.pricingTierCode})) > 0`),
+  check("prospect_order_terms_benefits_array", sql`jsonb_typeof(${t.appliedBenefitsSnapshot}) = 'array'`),
+  check("prospect_order_terms_items_array", sql`jsonb_typeof(${t.pricedItemsSnapshot}) = 'array'`),
+  check("prospect_order_terms_merchandise_nonnegative", sql`${t.merchandiseNet} >= 0`),
+  check("prospect_order_terms_shipping_nonnegative", sql`${t.shippingNet} >= 0 AND ${t.shippingVatAmount} >= 0`),
+  check("prospect_order_terms_vat_nonnegative", sql`${t.vatAmount} >= 0`),
+  check("prospect_order_terms_total_nonnegative", sql`${t.totalGross} >= 0`),
+]);
+
+export type ProspectOrderCommercialTerms = typeof prospectOrderCommercialTerms.$inferSelect;
 
 /** Righe snapshot del carrello prospect. */
 export const prospectSimulationItems = pgTable("prospect_simulation_items", {
@@ -886,6 +1011,10 @@ export const orders = pgTable(
     fiscalReceiptRef: varchar("fiscalReceiptRef", { length: 50 }),
     status: orderStatusEnum("status").default("pending").notNull(),
     subtotalNet: numeric("subtotalNet", { precision: 10, scale: 2 }).default("0").notNull(),
+    shippingNet: numeric("shippingNet", { precision: 10, scale: 2 }).default("0").notNull(),
+    shippingVatRate: numeric("shippingVatRate", { precision: 5, scale: 2 }),
+    shippingVatAmount: numeric("shippingVatAmount", { precision: 10, scale: 2 }).default("0").notNull(),
+    freeShippingApplied: boolean("freeShippingApplied").default(false).notNull(),
     vatAmount: numeric("vatAmount", { precision: 10, scale: 2 }).default("0").notNull(),
     totalGross: numeric("totalGross", { precision: 10, scale: 2 }).default("0").notNull(),
     discountPercent: numeric("discountPercent", { precision: 5, scale: 2 }).default("0").notNull(),
@@ -914,6 +1043,13 @@ export const orders = pgTable(
       .references(() => companies.id),
     // M11.A.markup: override markup per singolo ordine
     markupPercentageOverride: numeric("markupPercentageOverride", { precision: 5, scale: 2 }),
+    // La FK reale è `orders_prospect_commercial_terms_fkey` della migration 0042.
+    // La relazione non viene ripetuta qui per evitare un ciclo TypeScript con
+    // prospectSimulations.convertedOrderId e prospect_order_commercial_terms.
+    prospectCommercialTermsId: uuid("prospectCommercialTermsId"),
+    prospectCommercialTermsReleasedAt: timestamp("prospectCommercialTermsReleasedAt", { withTimezone: true }),
+    prospectCommercialTermsReleasedBy: uuid("prospectCommercialTermsReleasedBy").references(() => users.id, { onDelete: "restrict" }),
+    prospectCommercialTermsReleaseReason: text("prospectCommercialTermsReleaseReason"),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -928,6 +1064,28 @@ export const orders = pgTable(
       .where(sql`${t.paymentStatus} = 'paid'`),
     index("orders_createdAt_desc_idx").on(t.createdAt),
     index("orders_status_createdAt_idx").on(t.status, t.createdAt),
+    uniqueIndex("idx_orders_prospect_commercial_terms_unique").on(t.prospectCommercialTermsId).where(sql`${t.prospectCommercialTermsId} IS NOT NULL`),
+    index("idx_orders_prospect_terms_locked").on(t.prospectCommercialTermsId).where(sql`${t.prospectCommercialTermsId} IS NOT NULL AND ${t.prospectCommercialTermsReleasedAt} IS NULL`),
+    check("orders_prospect_terms_release_audit_valid", sql`
+      (
+        ${t.prospectCommercialTermsId} IS NULL
+        AND ${t.prospectCommercialTermsReleasedAt} IS NULL
+        AND ${t.prospectCommercialTermsReleasedBy} IS NULL
+        AND ${t.prospectCommercialTermsReleaseReason} IS NULL
+      )
+      OR (
+        ${t.prospectCommercialTermsId} IS NOT NULL
+        AND ${t.prospectCommercialTermsReleasedAt} IS NULL
+        AND ${t.prospectCommercialTermsReleasedBy} IS NULL
+        AND ${t.prospectCommercialTermsReleaseReason} IS NULL
+      )
+      OR (
+        ${t.prospectCommercialTermsId} IS NOT NULL
+        AND ${t.prospectCommercialTermsReleasedAt} IS NOT NULL
+        AND ${t.prospectCommercialTermsReleasedBy} IS NOT NULL
+        AND length(btrim(${t.prospectCommercialTermsReleaseReason})) > 0
+      )
+    `),
   ],
 );
 
