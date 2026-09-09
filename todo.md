@@ -262,3 +262,5 @@
 - [x] Coprire tier upgrade, snapshot, conversione, sovrapposizioni, lock/rinuncia auditata e isolamento company con test PostgreSQL isolati
 - [ ] Committare, pushare, integrare su main e verificare il deploy delle promozioni prospect tier upgrade autorizzate
 - [x] Allineare Drizzle alle tabelle 0042 e alle colonne di lock/audit sugli ordini
+- [x] Rinominare nel modulo prospect “Completa il tuo ordine SoKeto” in “Configura il tuo ordine SoKeto” e allineare titolo browser, email e testo introduttivo
+- [ ] Committare, pushare, integrare su main e verificare il deploy del micro-fix testuale “Configura il tuo ordine SoKeto” autorizzato
