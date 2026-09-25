@@ -19,7 +19,6 @@ export interface CartItem {
   quantity: number;
   imageUrl: string | null;
   sellableUnitLabel: string;
-  stockAvailable: number;
 }
 
 interface CartContextType {

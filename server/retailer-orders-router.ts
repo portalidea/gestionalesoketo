@@ -27,6 +27,10 @@ import { sendEmail } from "./email";
 import { uuidSchema } from "../shared/schemas";
 import { allocateBatchesSelectively } from "./services/selectiveFefoAllocation";
 
+function warnLegacyCall(procedure: string, ctx: { user: { id: string }; retailerId: string }) {
+  console.warn("[LEGACY_CALL]", procedure, "userId=", ctx.user.id, "retailerId=", ctx.retailerId, "timestamp=", new Date().toISOString());
+}
+
 export const retailerOrdersRouter = router({
   /**
    * 1. list — lista ordini del retailer corrente
@@ -40,6 +44,7 @@ export const retailerOrdersRouter = router({
       }),
     )
     .query(async ({ input, ctx }) => {
+      warnLegacyCall("retailerOrders.list", ctx);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -112,6 +117,7 @@ export const retailerOrdersRouter = router({
   getById: retailerProcedure
     .input(z.object({ id: uuidSchema }))
     .query(async ({ input, ctx }) => {
+      warnLegacyCall("retailerOrders.getById", ctx);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -183,6 +189,7 @@ export const retailerOrdersRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      warnLegacyCall("retailerOrders.updateItems", ctx);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -405,6 +412,7 @@ export const retailerOrdersRouter = router({
   cancel: retailerProcedure
     .input(z.object({ id: uuidSchema }))
     .mutation(async ({ input, ctx }) => {
+      warnLegacyCall("retailerOrders.cancel", ctx);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 

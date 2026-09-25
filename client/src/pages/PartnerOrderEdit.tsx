@@ -343,15 +343,6 @@ export default function PartnerOrderEdit() {
               </div>
             ) : pricing ? (
               <>
-                {pricing.warnings && (pricing.warnings as any[]).length > 0 && (
-                  <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-3">
-                    {(pricing.warnings as any[]).map((w: any, i: number) => (
-                      <p key={i} className="text-xs text-yellow-700 dark:text-yellow-400">
-                        {typeof w === 'string' ? w : w.message}
-                      </p>
-                    ))}
-                  </div>
-                )}
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Subtotale netto</span>
                   <span>&euro;{parseFloat(pricing.subtotalNet).toFixed(2)}</span>

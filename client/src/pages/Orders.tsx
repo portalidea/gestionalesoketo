@@ -281,7 +281,7 @@ export default function Orders() {
                             {(order as any).hasUnassignedBatch && !["delivered", "cancelled"].includes(order.status) ? (
                               <Badge variant="outline" className="text-xs gap-1 text-amber-500 border-amber-500/30">
                                 <AlertTriangle className="h-3 w-3" />
-                                Backorder
+                                Da allocare
                               </Badge>
                             ) : null}
                           </TableCell>
