@@ -278,4 +278,4 @@
 - [x] Aggiungere test isolato: ordine/modifica oltre giacenza, senza allocazione e senza variazione inventario
 - [x] Mantenere temporaneamente catalogPortal, retailerCheckout e retailerOrders per autorizzazione esplicita
 - [x] Aggiungere `console.warn("[LEGACY_CALL]", procedura, userId, retailerId, timestamp)` a ogni procedura legacy
-- [ ] Dopo 14 giorni dal deploy, cercare `[LEGACY_CALL]` nei log Vercel: zero occorrenze → rimuovere catalogPortal, retailerCheckout e retailerOrders
+- [ ] Dopo 14 giorni dal deploy (**Vercel Success 2026-09-25; controllo dal 2026-10-09**), cercare `[LEGACY_CALL]` nei log Vercel: zero occorrenze → rimuovere catalogPortal, retailerCheckout e retailerOrders
