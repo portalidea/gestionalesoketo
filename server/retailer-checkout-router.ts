@@ -28,6 +28,10 @@ const cartItemSchema = z.object({
   quantity: z.number().int().min(1),
 });
 
+function warnLegacyCall(procedure: string, ctx: { user: { id: string }; retailerId: string }) {
+  console.warn("[LEGACY_CALL]", procedure, "userId=", ctx.user.id, "retailerId=", ctx.retailerId, "timestamp=", new Date().toISOString());
+}
+
 export const retailerCheckoutRouter = router({
   /**
    * 1. preview — anteprima ordine con totali calcolati
@@ -35,6 +39,7 @@ export const retailerCheckoutRouter = router({
   preview: retailerProcedure
     .input(z.object({ items: z.array(cartItemSchema).min(1) }))
     .query(async ({ input, ctx }) => {
+      warnLegacyCall("retailerCheckout.preview", ctx);
       const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
       return pricing;
     }),
@@ -54,6 +59,7 @@ export const retailerCheckoutRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      warnLegacyCall("retailerCheckout.create", ctx);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 

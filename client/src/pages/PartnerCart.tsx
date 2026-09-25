@@ -184,7 +184,6 @@ export default function PartnerCart() {
                         type="number"
                         inputMode="numeric"
                         min={1}
-                        max={item.stockAvailable}
                         aria-label={`Quantità per ${item.name}`}
                         value={item.quantity}
                         onChange={(e) => updateQuantity(item.productId, parseInt(e.target.value) || 1)}
@@ -272,7 +271,6 @@ export default function PartnerCart() {
                           <input
                             type="number"
                             min={1}
-                            max={item.stockAvailable}
                             value={item.quantity}
                             onChange={(e) =>
                               updateQuantity(item.productId, parseInt(e.target.value) || 1)
@@ -355,15 +353,6 @@ export default function PartnerCart() {
                 </div>
               ) : preview ? (
                 <>
-                  {preview.warnings && preview.warnings.length > 0 && (
-                    <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-3">
-                      {preview.warnings.map((w: { productId: string; message: string }, i: number) => (
-                        <p key={i} className="text-xs text-yellow-700 dark:text-yellow-400">
-                          {w.message}
-                        </p>
-                      ))}
-                    </div>
-                  )}
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Subtotale netto</span>
                     <span>&euro;{parseFloat(preview.subtotalNet).toFixed(2)}</span>

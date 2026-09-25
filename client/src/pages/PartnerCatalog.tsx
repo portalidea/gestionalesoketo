@@ -74,7 +74,6 @@ export default function PartnerCatalog() {
       vatRate: item.vatRate.toFixed(2),
       imageUrl: item.imageUrl,
       sellableUnitLabel: item.sellableUnitLabel,
-      stockAvailable: item.availableStock,
       quantity: qty,
     });
     toast.success(`${item.name} aggiunto al carrello`, {
@@ -91,7 +90,7 @@ export default function PartnerCatalog() {
           <div>
             <h1 className="text-2xl font-bold text-foreground">Catalogo</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              {catalogQuery.data?.totalCount ?? 0} prodotti disponibili
+              {catalogQuery.data?.totalCount ?? 0} prodotti a catalogo
               {catalogQuery.data?.packageName && (
                 <span className="ml-2 text-[#7AB648] font-medium">
                   — Sconto {catalogQuery.data.discountPercent}% ({catalogQuery.data.packageName})
@@ -128,7 +127,7 @@ export default function PartnerCatalog() {
             <p className="mt-4 text-muted-foreground">
               {debouncedSearch
                 ? `Nessun prodotto trovato per "${debouncedSearch}"`
-                : "Nessun prodotto disponibile al momento"}
+                : "Nessun prodotto nel catalogo"}
             </p>
           </div>
         )}
@@ -136,10 +135,6 @@ export default function PartnerCatalog() {
         {/* Griglia prodotti */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {catalogQuery.data?.products.map((item) => {
-            const isBackorder = item.stockStatus === 'backorder';
-            const isUnavailable = item.stockStatus === 'unavailable';
-            const outOfStock = item.availableStock <= 0 && !isBackorder;
-            const stockLow = item.stockStatus === 'low_stock';
             const hasDiscount = item.discountPercentage > 0;
             const hasPromotion = Boolean(item.promotionId);
             const inCart = getItemQuantity(item.productId);
@@ -147,7 +142,7 @@ export default function PartnerCatalog() {
             return (
               <Card
                 key={item.productId}
-                className={`overflow-hidden transition-all hover:shadow-md ${outOfStock ? "opacity-60" : ""}`}
+                className="overflow-hidden transition-all hover:shadow-md"
               >
                 {/* Immagine */}
                 <div className="relative aspect-square bg-muted">
@@ -174,16 +169,6 @@ export default function PartnerCatalog() {
                   ) : hasDiscount && (
                     <div className="absolute top-2 left-2 bg-[#F5A623] text-white text-xs font-bold rounded-md px-2 py-0.5">
                       -{item.discountPercentage.toFixed(0)}%
-                    </div>
-                  )}
-                  {isUnavailable && (
-                    <div className="absolute inset-0 bg-background/60 flex items-center justify-center">
-                      <Badge variant="destructive" className="text-sm">Non disponibile</Badge>
-                    </div>
-                  )}
-                  {isBackorder && (
-                    <div className="absolute bottom-2 left-2">
-                      <Badge className="bg-amber-500 text-white text-xs">Backorder</Badge>
                     </div>
                   )}
                 </div>
@@ -224,60 +209,38 @@ export default function PartnerCatalog() {
                     </p>
                   )}
 
-                  {/* Stock */}
-                  <p
-                    className={`text-xs font-medium ${
-                      isUnavailable
-                        ? "text-destructive"
-                        : isBackorder
-                          ? "text-amber-600 dark:text-amber-400"
-                          : stockLow
-                            ? "text-yellow-600 dark:text-yellow-400"
-                            : "text-muted-foreground"
-                    }`}
-                  >
-                    {isUnavailable
-                      ? "Non disponibile"
-                      : isBackorder
-                        ? "Disponibile su ordinazione"
-                        : `${item.availableStock} ${item.sellableUnitLabel.toLowerCase()} disponibili`}
-                  </p>
-
                   {/* Aggiungi al carrello */}
-                  {!isUnavailable && (
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center border rounded-md">
-                        <button
-                          className="p-1.5 hover:bg-accent transition-colors"
-                          onClick={() => setQty(item.productId, getQty(item.productId) - 1)}
-                        >
-                          <Minus className="h-3 w-3" />
-                        </button>
-                        <input
-                          type="number"
-                          min={1}
-                          max={isBackorder ? 9999 : (item.availableStock || 9999)}
-                          value={getQty(item.productId)}
-                          onChange={(e) => setQty(item.productId, parseInt(e.target.value) || 1)}
-                          className="w-10 text-center text-sm bg-transparent border-x py-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        />
-                        <button
-                          className="p-1.5 hover:bg-accent transition-colors"
-                          onClick={() => setQty(item.productId, getQty(item.productId) + 1)}
-                        >
-                          <Plus className="h-3 w-3" />
-                        </button>
-                      </div>
-                      <Button
-                        size="sm"
-                        className="flex-1 bg-[#2D5A27] hover:bg-[#2D5A27]/90 text-white"
-                        onClick={() => handleAdd(item)}
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center border rounded-md">
+                      <button
+                        className="p-1.5 hover:bg-accent transition-colors"
+                        onClick={() => setQty(item.productId, getQty(item.productId) - 1)}
                       >
-                        <ShoppingCart className="h-3.5 w-3.5 mr-1" />
-                        Aggiungi
-                      </Button>
+                        <Minus className="h-3 w-3" />
+                      </button>
+                      <input
+                        type="number"
+                        min={1}
+                        value={getQty(item.productId)}
+                        onChange={(e) => setQty(item.productId, parseInt(e.target.value) || 1)}
+                        className="w-10 text-center text-sm bg-transparent border-x py-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                      <button
+                        className="p-1.5 hover:bg-accent transition-colors"
+                        onClick={() => setQty(item.productId, getQty(item.productId) + 1)}
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
                     </div>
-                  )}
+                    <Button
+                      size="sm"
+                      className="flex-1 bg-[#2D5A27] hover:bg-[#2D5A27]/90 text-white"
+                      onClick={() => handleAdd(item)}
+                    >
+                      <ShoppingCart className="h-3.5 w-3.5 mr-1" />
+                      Aggiungi
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             );

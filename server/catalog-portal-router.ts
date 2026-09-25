@@ -24,6 +24,10 @@ import {
 } from "../drizzle/schema";
 import { uuidSchema } from "../shared/schemas";
 
+function warnLegacyCall(procedure: string, ctx: { user: { id: string }; retailerId: string }) {
+  console.warn("[LEGACY_CALL]", procedure, "userId=", ctx.user.id, "retailerId=", ctx.retailerId, "timestamp=", new Date().toISOString());
+}
+
 export const catalogPortalRouter = router({
   /**
    * 1. catalogPortal.list — catalogo prodotti per retailer
@@ -44,6 +48,7 @@ export const catalogPortalRouter = router({
       }),
     )
     .query(async ({ input, ctx }) => {
+      warnLegacyCall("catalogPortal.list", ctx);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -244,6 +249,7 @@ export const catalogPortalRouter = router({
   getById: retailerProcedure
     .input(z.object({ productId: uuidSchema }))
     .query(async ({ input, ctx }) => {
+      warnLegacyCall("catalogPortal.getById", ctx);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
@@ -353,7 +359,8 @@ export const catalogPortalRouter = router({
   /**
    * 3. categories — lista categorie distinte per filtro
    */
-  categories: retailerProcedure.query(async () => {
+  categories: retailerProcedure.query(async ({ ctx }) => {
+    warnLegacyCall("catalogPortal.categories", ctx);
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 

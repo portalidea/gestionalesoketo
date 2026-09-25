@@ -2,7 +2,7 @@
  * M6.2.B Parte B — Retailer Self-Service Router
  *
  * Procedure tRPC per il portale retailer self-service:
- * - catalog.list: catalogo prodotti con prezzi scontati e stock
+ * - catalog.list: catalogo prodotti con prezzi scontati, senza disponibilità
  * - cart.preview: anteprima totali carrello
  * - cart.checkout: crea ordine + email IBAN
  * - orders.list: lista ordini retailer
@@ -23,18 +23,133 @@ import {
   orderItems,
   productBatches,
 } from "../drizzle/schema";
-import { getAvailableStock } from "./services/stockService";
 import { calculateOrderPricing, PricingItemInput } from "./pricing";
 import { transitionOrder } from "./services/orderStateMachine";
 import { sendEmail } from "./email";
 import { ENV } from "./_core/env";
 import { uuidSchema } from "../shared/schemas";
 
+/**
+ * products è un'anagrafica/listino condivisa: non possiede companyId né un
+ * flag di attivazione per company. Nel modello attuale un prodotto ammesso al
+ * portale è quello con prezzo di listino configurato; il prezzo riservato è
+ * poi calcolato tramite il pacchetto del retailer. Non si consulta mai il
+ * magazzino: lotti e quantità non sono criteri di visibilità né di acquisto.
+ * Questa funzione è l'unica fonte per lista, dettaglio e validazione carrello.
+ */
+function buildCatalogProductConditions(input: {
+  search?: string;
+  productId?: string;
+}) {
+  const conditions = [sql`${products.unitPrice} IS NOT NULL AND btrim(${products.unitPrice}) <> ''`];
+  if (input.productId) conditions.push(eq(products.id, input.productId));
+  if (input.search) conditions.push(ilike(products.name, `%${input.search}%`));
+  return conditions;
+}
+
+async function assertProductsInRetailerCatalog(
+  database: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  productIds: string[],
+) {
+  const uniqueProductIds = Array.from(new Set(productIds));
+  if (uniqueProductIds.length === 0) return;
+
+  const allowedProducts = await database
+    .select({ id: products.id })
+    .from(products)
+    .where(and(
+      inArray(products.id, uniqueProductIds),
+      ...buildCatalogProductConditions({}),
+    ));
+
+  if (allowedProducts.length !== uniqueProductIds.length) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Uno o più prodotti non sono disponibili nel catalogo" });
+  }
+}
+
+async function getRetailerCatalogProducts(
+  database: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  params: {
+    retailerId: string;
+    companyId: string;
+    search?: string;
+    productId?: string;
+    limit?: number;
+    offset?: number;
+  },
+) {
+  const conditions = buildCatalogProductConditions(params);
+  const productRows = await database
+    .select({
+      id: products.id,
+      name: products.name,
+      sku: products.sku,
+      category: products.category,
+      imageUrl: products.imageUrl,
+      unitPrice: products.unitPrice,
+      vatRate: products.vatRate,
+      piecesPerUnit: products.piecesPerUnit,
+      sellableUnitLabel: products.sellableUnitLabel,
+      description: products.description,
+    })
+    .from(products)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .limit(params.limit ?? 1)
+    .offset(params.offset ?? 0)
+    .orderBy(products.name);
+
+  if (productRows.length === 0) return [];
+
+  const pricingPreview = await calculateOrderPricing(
+    params.retailerId,
+    productRows.map((product) => ({ productId: product.id, quantity: 1 })),
+    params.companyId,
+  );
+  const priceByProduct = new Map(pricingPreview.items.map((item) => [item.productId, item]));
+
+  return productRows.map((product) => {
+    const price = priceByProduct.get(product.id);
+    if (!price) throw new Error(`Prezzo non calcolabile per il prodotto ${product.id}`);
+
+    return {
+      productId: product.id,
+      id: product.id,
+      name: product.name,
+      sku: product.sku,
+      category: product.category,
+      imageUrl: product.imageUrl,
+      listPrice: parseFloat(product.unitPrice ?? "0"),
+      discountedPrice: parseFloat(price.unitPriceFinal),
+      discountPercentage: parseFloat(price.discountPercent),
+      priceBeforePromotion: price.unitPriceBeforePromotion
+        ? parseFloat(price.unitPriceBeforePromotion)
+        : null,
+      promotionId: price.promotionId ?? null,
+      promotionTitle: price.promotionTitle ?? null,
+      promotionDiscountPercent: price.promotionDiscountPercent
+        ? parseFloat(price.promotionDiscountPercent)
+        : null,
+      unitPriceBase: price.unitPriceBase,
+      unitPriceFinal: price.unitPriceFinal,
+      discountPercent: price.discountPercent,
+      unitPriceBeforePromotion: price.unitPriceBeforePromotion ?? null,
+      publicListPrice: price.publicListPrice ?? null,
+      unitPriceTier: price.unitPriceTier ?? null,
+      promotionSavingsPerUnit: price.promotionSavingsPerUnit ?? null,
+      packageName: pricingPreview.packageName,
+      vatRate: parseFloat(product.vatRate),
+      piecesPerUnit: product.piecesPerUnit,
+      sellableUnitLabel: product.sellableUnitLabel,
+      description: product.description,
+    };
+  });
+}
+
 export const retailerSelfServiceRouter = router({
   // ============= CATALOGO =============
 
   /**
-   * Lista catalogo prodotti con prezzi scontati e stock disponibile.
+   * Lista catalogo prodotti della company con prezzi scontati, senza disponibilità.
    */
   catalogList: retailerProcedure
     .input(
@@ -77,11 +192,9 @@ export const retailerSelfServiceRouter = router({
         }
       }
 
-      // Build conditions
-      const conditions = [];
-      if (input.search) {
-        conditions.push(ilike(products.name, `%${input.search}%`));
-      }
+      // Stessa scope query della vista dettaglio: prodotti a listino; il
+      // prezzo riservato e le promozioni sono risolti lato server.
+      const conditions = buildCatalogProductConditions(input);
 
       // Count total
       const countResult = await database
@@ -90,93 +203,39 @@ export const retailerSelfServiceRouter = router({
         .where(conditions.length > 0 ? and(...conditions) : undefined);
       const totalCount = countResult[0]?.count ?? 0;
 
-      // Get products
-      const productRows = await database
-        .select({
-          id: products.id,
-          name: products.name,
-          sku: products.sku,
-          category: products.category,
-          imageUrl: products.imageUrl,
-          unitPrice: products.unitPrice,
-          vatRate: products.vatRate,
-          piecesPerUnit: products.piecesPerUnit,
-          sellableUnitLabel: products.sellableUnitLabel,
-          description: products.description,
-          isBackorderable: products.isBackorderable,
-        })
-        .from(products)
-        .where(conditions.length > 0 ? and(...conditions) : undefined)
-        .limit(input.limit)
-        .offset(input.offset)
-        .orderBy(products.name);
-
-      if (productRows.length === 0) return { products: [], packageName, discountPercent, totalCount };
-
-      // Get available stock
-      const productIds = productRows.map((p) => p.id);
-      const stockMap = await getAvailableStock(productIds, ctx.activeCompanyId);
-      const pricingPreview = await calculateOrderPricing(
-        ctx.retailerId,
-        productIds.map((productId) => ({ productId, quantity: 1 })),
-        ctx.activeCompanyId,
-      );
-      const priceByProduct = new Map(
-        pricingPreview.items.map((item) => [item.productId, item]),
-      );
-
-      // Map results with M8.4 stockStatus
-      // NOTA: availableQty è in pezzi, convertiamo in confezioni per il retailer
-      const catalogProducts = productRows.map((p) => {
-        const listPrice = parseFloat(p.unitPrice ?? "0");
-        const price = priceByProduct.get(p.id);
-        const discountedPrice = parseFloat(price?.unitPriceFinal ?? listPrice.toFixed(2));
-        const priceBeforePromotion = price?.unitPriceBeforePromotion
-          ? parseFloat(price.unitPriceBeforePromotion)
-          : null;
-        const stock = stockMap.get(p.id);
-        const ppu = p.piecesPerUnit ?? 1;
-        const availableStock = Math.floor((stock?.availableQty ?? 0) / ppu);
-
-        // M8.4: stockStatus (in confezioni)
-        let stockStatus: 'in_stock' | 'low_stock' | 'backorder' | 'unavailable';
-        if (availableStock >= 10) {
-          stockStatus = 'in_stock';
-        } else if (availableStock > 0) {
-          stockStatus = 'low_stock';
-        } else if (p.isBackorderable) {
-          stockStatus = 'backorder';
-        } else {
-          stockStatus = 'unavailable';
-        }
-
-        return {
-          productId: p.id,
-          name: p.name,
-          sku: p.sku,
-          category: p.category,
-          imageUrl: p.imageUrl,
-          listPrice,
-          discountedPrice,
-          discountPercentage: parseFloat(price?.discountPercent ?? discountPercent.toFixed(2)),
-          priceBeforePromotion,
-          promotionId: price?.promotionId ?? null,
-          promotionTitle: price?.promotionTitle ?? null,
-          promotionDiscountPercent: price?.promotionDiscountPercent
-            ? parseFloat(price.promotionDiscountPercent)
-            : null,
-          vatRate: parseFloat(p.vatRate),
-          availableStock,
-          stockStatus,
-          isBackorderable: p.isBackorderable,
-          piecesPerUnit: p.piecesPerUnit,
-          sellableUnitLabel: p.sellableUnitLabel,
-          description: p.description,
-        };
+      const catalogProducts = await getRetailerCatalogProducts(database, {
+        retailerId: ctx.retailerId,
+        companyId: ctx.activeCompanyId,
+        search: input.search,
+        limit: input.limit,
+        offset: input.offset,
       });
 
       console.log(`[retailerPortal.catalogList] DONE: ${catalogProducts.length} products, totalCount=${totalCount}`);
       return { products: catalogProducts, packageName, discountPercent, totalCount };
+    }),
+
+  /**
+   * Dettaglio di un prodotto del catalogo partner. Riusa esattamente la
+   * stessa query di catalogList: non espone disponibilità né lotti.
+   */
+  catalogGetById: retailerProcedure
+    .input(z.object({ productId: uuidSchema }))
+    .query(async ({ input, ctx }) => {
+      const database = await getDb();
+      if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+
+      const [product] = await getRetailerCatalogProducts(database, {
+        retailerId: ctx.retailerId,
+        companyId: ctx.activeCompanyId,
+        productId: input.productId,
+      });
+
+      if (!product) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Prodotto non trovato nel catalogo" });
+      }
+
+      return { product };
     }),
 
   // ============= CARRELLO =============
@@ -193,13 +252,14 @@ export const retailerSelfServiceRouter = router({
     .mutation(async ({ input, ctx }) => {
       console.log(`[retailerPortal.cartPreview] retailerId=${ctx.retailerId} items=${input.items.length}`);
 
+      const database = await getDb();
+      if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+      await assertProductsInRetailerCatalog(database, input.items.map((item) => item.productId));
+
       // Prezzi autorevoli, inclusi tier e promozioni della company attiva.
       const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
 
       // Get retailer payment terms
-      const database = await getDb();
-      if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
-
       const [retailer] = await database
         .select({ paymentTerms: retailers.paymentTerms })
         .from(retailers)
@@ -213,23 +273,6 @@ export const retailerSelfServiceRouter = router({
         credit_card: "Carta di credito",
         manual: "Manuale",
       };
-
-      // Check stock warnings (converti pezzi in confezioni)
-      const productIds = input.items.map((i) => i.productId);
-      const stockMap = await getAvailableStock(productIds, ctx.activeCompanyId);
-      const warnings: Array<{ productId: string; message: string }> = [];
-      for (const item of input.items) {
-        const stock = stockMap.get(item.productId);
-        const pricingItem = pricing.items.find((pi) => pi.productId === item.productId);
-        const ppu = pricingItem?.piecesPerUnit ?? 1;
-        const availableConf = Math.floor((stock?.availableQty ?? 0) / ppu);
-        if (item.quantity > availableConf) {
-          warnings.push({
-            productId: item.productId,
-            message: `Solo ${availableConf} conf. disponibili per "${pricingItem?.productName ?? item.productId}", richieste ${item.quantity}`,
-          });
-        }
-      }
 
       return {
         items: pricing.items.map((pi) => ({
@@ -258,7 +301,6 @@ export const retailerSelfServiceRouter = router({
         packageName: pricing.packageName,
         paymentTerms,
         paymentTermsLabel: paymentTermsLabels[paymentTerms] ?? paymentTerms,
-        warnings,
       };
     }),
 
@@ -277,35 +319,7 @@ export const retailerSelfServiceRouter = router({
 
       const database = await getDb();
       if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
-
-      // Validate stock (hard fail) — converti pezzi in confezioni
-      const productIds = input.items.map((i) => i.productId);
-      const stockMap = await getAvailableStock(productIds, ctx.activeCompanyId);
-      // Recupera piecesPerUnit per ogni prodotto
-      const ppuRows = await database.execute<{ id: string; piecesPerUnit: number | null }>(sql`
-        SELECT "id"::text, "piecesPerUnit" FROM "products"
-        WHERE "id" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})
-      `);
-      const ppuMap = new Map(
-        (ppuRows as unknown as Array<{ id: string; piecesPerUnit: number | null }>).map((r) => [
-          r.id, r.piecesPerUnit ?? 1,
-        ]),
-      );
-      const insufficientItems: string[] = [];
-      for (const item of input.items) {
-        const stock = stockMap.get(item.productId);
-        const ppu = ppuMap.get(item.productId) ?? 1;
-        const availableConf = Math.floor((stock?.availableQty ?? 0) / ppu);
-        if (item.quantity > availableConf) {
-          insufficientItems.push(item.productId);
-        }
-      }
-      if (insufficientItems.length > 0) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Stock insufficiente per ${insufficientItems.length} prodotto/i. Aggiorna le quantit\u00e0.`,
-        });
-      }
+      await assertProductsInRetailerCatalog(database, input.items.map((item) => item.productId));
 
       // Get retailer info for order
       const [retailer] = await database
@@ -611,6 +625,7 @@ export const retailerSelfServiceRouter = router({
       console.log(`[retailerPortal.ordersModifyItems] retailerId=${ctx.retailerId} orderId=${input.orderId}`);
       const database = await getDb();
       if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+      await assertProductsInRetailerCatalog(database, input.items.map((item) => item.productId));
 
       // Verify ownership + status
       const [order] = await database
@@ -624,40 +639,6 @@ export const retailerSelfServiceRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Solo ordini in stato 'pending' possono essere modificati" });
       }
 
-       // Validate stock (excluding current order from reserved) — converti pezzi in confezioni
-      const productIds = input.items.map((i) => i.productId);
-      const stockMap = await getAvailableStock(productIds, ctx.activeCompanyId);
-      // Recupera piecesPerUnit
-      const ppuRows = await database.execute<{ id: string; piecesPerUnit: number | null }>(sql`
-        SELECT "id"::text, "piecesPerUnit" FROM "products"
-        WHERE "id" IN (${sql.join(productIds.map((id) => sql`${id}::uuid`), sql`, `)})
-      `);
-      const ppuMap = new Map(
-        (ppuRows as unknown as Array<{ id: string; piecesPerUnit: number | null }>).map((r) => [
-          r.id, r.piecesPerUnit ?? 1,
-        ]),
-      );
-      // Get current order items to "free" their reserved stock (in confezioni)
-      const currentItems = await database
-        .select({ productId: orderItems.productId, quantity: orderItems.quantity })
-        .from(orderItems)
-        .where(eq(orderItems.orderId, input.orderId));
-      const currentReserved = new Map<string, number>();
-      for (const ci of currentItems) {
-        currentReserved.set(ci.productId, (currentReserved.get(ci.productId) ?? 0) + ci.quantity);
-      }
-      for (const item of input.items) {
-        const stock = stockMap.get(item.productId);
-        const ppu = ppuMap.get(item.productId) ?? 1;
-        // availableQty è in pezzi, convertiamo in confezioni + aggiungiamo le conf già riservate da questo ordine
-        const availableConf = Math.floor((stock?.availableQty ?? 0) / ppu) + (currentReserved.get(item.productId) ?? 0);
-        if (item.quantity > availableConf) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `Stock insufficiente per prodotto ${item.productId}: disponibili ${availableConf} conf., richieste ${item.quantity}`,
-          });
-        }
-      }
       // Recalculate pricing, including promotions still active at modification time.
       const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
 

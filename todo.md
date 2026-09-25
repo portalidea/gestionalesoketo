@@ -268,3 +268,14 @@
 - [x] Spostare “Prezzi del tuo assortimento” sopra il catalogo e mostrarlo soltanto con almeno un prodotto selezionato
 - [x] Verificare la permanenza della dicitura “Configura il tuo ordine SoKeto” nel modulo prospect
 - [ ] Committare, pushare, integrare su main e verificare il deploy del micro-fix sottotitoli prodotto e riepilogo condizionale autorizzato
+
+## Backlog — trasferimenti inter-company
+- [ ] Verificare e correggere `startTransfer`: non deve poter lasciare un ordine in stato `transferring` con righe non trasferite; da affrontare separatamente dallo sblocco stock rivenditori.
+
+## Ordini rivenditore — PR 1 sblocco stock
+- [x] Rimuovere blocchi e avvisi stock dal catalogo, carrello, checkout e modifica ordine partner
+- [x] Spostare il dettaglio prodotto sul router self-service senza disponibilità né lotti
+- [x] Aggiungere test isolato: ordine/modifica oltre giacenza, senza allocazione e senza variazione inventario
+- [x] Mantenere temporaneamente catalogPortal, retailerCheckout e retailerOrders per autorizzazione esplicita
+- [x] Aggiungere `console.warn("[LEGACY_CALL]", procedura, userId, retailerId, timestamp)` a ogni procedura legacy
+- [ ] Dopo 14 giorni dal deploy, cercare `[LEGACY_CALL]` nei log Vercel: zero occorrenze → rimuovere catalogPortal, retailerCheckout e retailerOrders
