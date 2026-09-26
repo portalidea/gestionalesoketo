@@ -279,3 +279,10 @@
 - [x] Mantenere temporaneamente catalogPortal, retailerCheckout e retailerOrders per autorizzazione esplicita
 - [x] Aggiungere `console.warn("[LEGACY_CALL]", procedura, userId, retailerId, timestamp)` a ogni procedura legacy
 - [ ] Dopo 14 giorni dal deploy (**Vercel Success 2026-09-25; controllo dal 2026-10-09**), cercare `[LEGACY_CALL]` nei log Vercel: zero occorrenze → rimuovere catalogPortal, retailerCheckout e retailerOrders
+
+
+## DDT — validazione derivata da dati correnti
+- [x] Sostituire banner, badge e blocco conferma basati su note di estrazione con validazione condivisa di prodotto, lotto, scadenza e quantità correnti
+- [x] Rendere la conferma server-side fail-closed sulle stesse regole e invalidare il dettaglio tRPC dopo la correzione manuale
+- [x] Coprire con test isolato: correzione lotto, storico neutro, conferma, lotto/scadenza mancanti, data non valida e quantità zero
+- [ ] Committare e pubblicare `fix/ddt-derived-validation` dopo autorizzazione esplicita

@@ -36,6 +36,7 @@ import {
   CheckCircle2,
   Download,
   FileText,
+  Info,
   Link2,
   Loader2,
   Plus,
@@ -170,13 +171,8 @@ export default function DdtImportDetail() {
     );
   }
 
-  const unmatchedCount = ddtImport.items.filter((i) => !i.productMatchedId).length;
-  const missingBatchCount = ddtImport.items.filter((i) => !i.batchNumber).length;
-  const missingExpiryCount = ddtImport.items.filter((i) => !i.expirationDate).length;
-  const extractionFailedCount = ddtImport.items.filter(
-    (i) => i.notes && i.notes.startsWith("[ESTRAZIONE PARZIALE]")
-  ).length;
-  const canConfirm = ddtImport.status === "review" && unmatchedCount === 0 && missingBatchCount === 0 && missingExpiryCount === 0 && extractionFailedCount === 0;
+  const validation = ddtImport.validationSummary;
+  const canConfirm = ddtImport.status === "review" && validation.incompleteCount === 0;
 
   return (
     <DashboardLayout>
@@ -203,7 +199,7 @@ export default function DdtImportDetail() {
           </div>
 
           <div className="flex items-center gap-2">
-            {(ddtImport.status === "failed" || (ddtImport.status === "review" && extractionFailedCount > 0)) && (
+            {(ddtImport.status === "failed" || (ddtImport.status === "review" && validation.incompleteCount > 0)) && (
               <Button
                 variant="outline"
                 onClick={() => retryMutation.mutate({ id: id! })}
@@ -256,51 +252,18 @@ export default function DdtImportDetail() {
           </Card>
         )}
 
-        {extractionFailedCount > 0 && ddtImport.status === "review" && (
+        {validation.incompleteCount > 0 && ddtImport.status === "review" && (
           <Card className="border-orange-500/50 bg-orange-50/30 dark:bg-orange-950/20">
             <CardContent className="pt-4">
               <div className="flex items-start gap-3">
                 <AlertCircle className="h-5 w-5 text-orange-500 shrink-0 mt-0.5" />
                 <div className="space-y-1">
                   <p className="font-medium text-orange-700 dark:text-orange-400">
-                    Estrazione parziale: {extractionFailedCount} {extractionFailedCount === 1 ? "riga" : "righe"} con dati incompleti
+                    Dati di riga incompleti: {validation.incompleteCount} {validation.incompleteCount === 1 ? "riga" : "righe"} da completare
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    Le righe evidenziate in arancione hanno quantità o lotto non estratti correttamente.
-                    Modifica manualmente i campi mancanti oppure elimina le righe e riprova l'estrazione.
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {(unmatchedCount > 0 || missingBatchCount > 0 || missingExpiryCount > 0) && ddtImport.status === "review" && (
-          <Card className="border-yellow-500/50">
-            <CardContent className="pt-4">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="h-5 w-5 text-yellow-500 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  {unmatchedCount > 0 && (
-                    <p className="font-medium text-yellow-600">
-                      {unmatchedCount} {unmatchedCount === 1 ? "riga non matchata" : "righe non matchate"}
-                      {" — "}assegna manualmente il prodotto corretto.
-                    </p>
-                  )}
-                  {missingBatchCount > 0 && (
-                    <p className="font-medium text-yellow-600">
-                      {missingBatchCount} {missingBatchCount === 1 ? "riga senza lotto" : "righe senza lotto"}
-                      {" — "}inserisci il numero di lotto manualmente.
-                    </p>
-                  )}
-                  {missingExpiryCount > 0 && (
-                    <p className="font-medium text-yellow-600">
-                      {missingExpiryCount} {missingExpiryCount === 1 ? "riga senza scadenza" : "righe senza scadenza"}
-                      {" — "}inserisci la data di scadenza manualmente.
-                    </p>
-                  )}
-                  <p className="text-sm text-muted-foreground">
-                    Compila tutti i campi mancanti prima di confermare il DDT.
+                    Le righe evidenziate in arancione hanno prodotto, quantità, lotto o scadenza mancanti o non validi.
+                    Completa i campi richiesti per abilitare la conferma del DDT.
                   </p>
                 </div>
               </div>
@@ -549,6 +512,15 @@ function DdtItemRow({
     quantityPieces: number;
     status: string;
     notes: string | null;
+    validation: {
+      isValid: boolean;
+      missingProduct: boolean;
+      missingBatch: boolean;
+      invalidExpirationDate: boolean;
+      invalidQuantity: boolean;
+      hasHistoricalPartialExtraction: boolean;
+      isHistoricallyCorrected: boolean;
+    };
   };
   products: { id: string; name: string }[];
   isEditing: boolean;
@@ -638,7 +610,7 @@ function DdtItemRow({
                 onSave({
                   productMatchedId: editProductId || undefined,
                   batchNumber: editBatch,
-                  expirationDate: editExpiry || undefined,
+                  expirationDate: editExpiry,
                   quantityPieces: editQty,
                 });
               }}
@@ -659,10 +631,11 @@ function DdtItemRow({
     );
   }
 
-  const isExtractionFailed = item.notes && item.notes.startsWith("[ESTRAZIONE PARZIALE]");
+  const isIncomplete = !item.validation.isValid;
+  const historicalNote = item.notes?.replace("[ESTRAZIONE PARZIALE] ", "");
 
   return (
-    <TableRow className={isExtractionFailed ? "bg-orange-50/60 dark:bg-orange-950/20 border-l-2 border-l-orange-400" : ""}>
+    <TableRow className={isIncomplete ? "bg-orange-50/60 dark:bg-orange-950/20 border-l-2 border-l-orange-400" : ""}>
       <TableCell>
         <div>
           <span className="font-medium">{item.productNameExtracted}</span>
@@ -671,10 +644,16 @@ function DdtItemRow({
               [{item.productCodeExtracted}]
             </span>
           )}
-          {isExtractionFailed && (
+          {isIncomplete && (
             <p className="text-xs text-orange-600 dark:text-orange-400 mt-0.5 flex items-center gap-1">
               <AlertCircle className="h-3 w-3" />
-              {item.notes!.replace("[ESTRAZIONE PARZIALE] ", "")}
+              Dati obbligatori incompleti: completa prodotto, quantità, lotto e scadenza.
+            </p>
+          )}
+          {item.validation.isHistoricallyCorrected && (
+            <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1" title={historicalNote}>
+              <Info className="h-3 w-3" />
+              Estratto parzialmente, corretto a mano
             </p>
           )}
         </div>
@@ -700,7 +679,7 @@ function DdtItemRow({
         )}
       </TableCell>
       <TableCell className="font-mono text-sm">
-        {item.batchNumber ? (
+        {!item.validation.missingBatch ? (
           item.batchNumber
         ) : (
           <span className="text-yellow-600 italic text-xs flex items-center gap-1">
@@ -710,7 +689,7 @@ function DdtItemRow({
         )}
       </TableCell>
       <TableCell className="text-sm">
-        {item.expirationDate ? (
+        {!item.validation.invalidExpirationDate ? (
           item.expirationDate
         ) : (
           <span className="text-yellow-600 italic text-xs flex items-center gap-1">
@@ -719,7 +698,14 @@ function DdtItemRow({
           </span>
         )}
       </TableCell>
-      <TableCell className="font-medium">{item.quantityPieces}</TableCell>
+      <TableCell className="font-medium">
+        {item.validation.invalidQuantity ? (
+          <span className="text-yellow-600 italic text-xs flex items-center gap-1">
+            <AlertCircle className="h-3 w-3" />
+            Non valida
+          </span>
+        ) : item.quantityPieces}
+      </TableCell>
       <TableCell>{statusBadge()}</TableCell>
       <TableCell>
         {isReview && (
