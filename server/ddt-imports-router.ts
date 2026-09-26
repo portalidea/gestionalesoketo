@@ -23,7 +23,11 @@ import {
 import { uploadDdtPdf, getSignedUrl, deleteDdtPdf } from "../lib/storage";
 import { findBestMatch } from "../lib/fuzzyMatch";
 import { uuidSchema } from "../shared/schemas";
-
+import {
+  deriveDdtItemValidation,
+  isValidDdtExpirationDate,
+  summarizeDdtItemValidation,
+} from "./services/ddtItemValidation";
 /**
  * Detect unit weight in kg from product name.
  * E.g. "Penne High Protein 250g" → 0.250
@@ -189,10 +193,12 @@ export const ddtImportsRouter = router({
         producerName,
         items: items.map((item) => ({
           ...item,
+          validation: deriveDdtItemValidation(item),
           productMatchedName: item.productMatchedId
             ? productMap[item.productMatchedId] ?? null
             : null,
         })),
+        validationSummary: summarizeDdtItemValidation(items),
       };
     }),
 
@@ -595,9 +601,9 @@ export const ddtImportsRouter = router({
       z.object({
         itemId: uuid,
         productMatchedId: uuid.optional(),
-        batchNumber: z.string().min(1).optional(),
-        expirationDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-        quantityPieces: z.number().int().positive().optional(),
+        batchNumber: z.string().optional(),
+        expirationDate: z.string().optional(),
+        quantityPieces: z.number().int().min(0).optional(),
       })
     )
     .mutation(async ({ input }) => {
@@ -609,9 +615,23 @@ export const ddtImportsRouter = router({
         updateData.productMatchedId = input.productMatchedId;
         updateData.status = "matched";
       }
-      if (input.batchNumber !== undefined) updateData.batchNumber = input.batchNumber;
-      if (input.expirationDate !== undefined) updateData.expirationDate = input.expirationDate;
-      if (input.quantityPieces !== undefined) updateData.quantityPieces = input.quantityPieces;
+      if (input.batchNumber !== undefined) updateData.batchNumber = input.batchNumber.trim() || null;
+      if (input.expirationDate !== undefined) {
+        const expirationDate = input.expirationDate.trim();
+        if (expirationDate && !isValidDdtExpirationDate(expirationDate)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "La scadenza deve essere una data valida nel formato AAAA-MM-GG",
+          });
+        }
+        updateData.expirationDate = expirationDate || null;
+      }
+      if (input.quantityPieces !== undefined) {
+        if (input.quantityPieces <= 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "La quantità deve essere maggiore di zero" });
+        }
+        updateData.quantityPieces = input.quantityPieces;
+      }
 
       if (Object.keys(updateData).length === 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Nessun campo da aggiornare" });
@@ -671,25 +691,18 @@ export const ddtImportsRouter = router({
         .from(ddtImportItems)
         .where(eq(ddtImportItems.ddtImportId, input.id));
 
-      // Verifica che tutti gli items siano matchati
-      const unmatchedItems = items.filter((i) => !i.productMatchedId);
-      if (unmatchedItems.length > 0) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `${unmatchedItems.length} item(s) non matchati. Risolvere prima di confermare.`,
-        });
-      }
-
-      // Verifica che tutti gli items abbiano batchNumber e expirationDate compilati
-      const missingBatch = items.filter((i) => !i.batchNumber);
-      const missingExpiry = items.filter((i) => !i.expirationDate);
-      if (missingBatch.length > 0 || missingExpiry.length > 0) {
+      // Le note di estrazione rimangono audit storico: la conferma usa soltanto
+      // i valori correnti di prodotto, lotto, scadenza e quantità.
+      const validation = summarizeDdtItemValidation(items);
+      if (validation.incompleteCount > 0) {
         const parts: string[] = [];
-        if (missingBatch.length > 0) parts.push(`${missingBatch.length} item(s) senza lotto`);
-        if (missingExpiry.length > 0) parts.push(`${missingExpiry.length} item(s) senza scadenza`);
+        if (validation.missingProductCount > 0) parts.push(`${validation.missingProductCount} item(s) non matchati`);
+        if (validation.missingBatchCount > 0) parts.push(`${validation.missingBatchCount} item(s) senza lotto`);
+        if (validation.invalidExpirationDateCount > 0) parts.push(`${validation.invalidExpirationDateCount} item(s) senza scadenza valida`);
+        if (validation.invalidQuantityCount > 0) parts.push(`${validation.invalidQuantityCount} item(s) con quantità non valida`);
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Compila tutti i lotti e scadenze prima di confermare: ${parts.join(", ")}.`,
+          message: `Completa tutti i dati di riga prima di confermare: ${parts.join(", ")}.`,
         });
       }
 
