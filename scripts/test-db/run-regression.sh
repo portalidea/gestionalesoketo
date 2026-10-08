@@ -24,6 +24,7 @@ pnpm run testdb:m13-recovery
 pnpm run testdb:m13-idempotency
 pnpm run testdb:fefo
 pnpm run testdb:retailer-stock-unblock
+pnpm run testdb:legacy-api-calls
 pnpm run testdb:retailer-allowances
 pnpm run testdb:ddt:derived-validation
 pnpm run testdb:intercompany

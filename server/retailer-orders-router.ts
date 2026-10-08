@@ -13,6 +13,7 @@ import { z } from "zod";
 import { retailerProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
 import { calculateOrderPricing } from "./pricing";
+import { recordLegacyApiCall } from "./services/legacyApiCallService";
 import {
   inventoryByBatch,
   locations,
@@ -30,7 +31,10 @@ import { uuidSchema } from "../shared/schemas";
 import { allocateBatchesSelectively } from "./services/selectiveFefoAllocation";
 
 function warnLegacyCall(procedure: string, ctx: { user: { id: string }; retailerId: string }) {
-  console.warn("[LEGACY_CALL]", procedure, "userId=", ctx.user.id, "retailerId=", ctx.retailerId, "timestamp=", new Date().toISOString());
+  recordLegacyApiCall(procedure, {
+    userId: ctx.user.id,
+    retailerId: ctx.retailerId,
+  });
 }
 
 async function assertLegacyPricingSafe(

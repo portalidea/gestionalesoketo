@@ -26,6 +26,7 @@
     "testdb:fefo:update-items": "tsx scripts/test-orders-update-items-batches.ts",
     "testdb:fefo": "pnpm run testdb:fefo:selective && pnpm run testdb:fefo:update-items",
     "testdb:retailer-stock-unblock": "tsx scripts/test-retailer-order-stock-unblock.ts",
+    "testdb:legacy-api-calls": "tsx scripts/test-legacy-api-call-audit.ts",
     "testdb:retailer-allowances": "tsx scripts/test-retailer-product-allowances.ts",
     "testdb:ddt:derived-validation": "tsx scripts/test-ddt-derived-validation.ts",
     "testdb:shopify": "tsx scripts/test-shopify-automatic-stock.ts",
