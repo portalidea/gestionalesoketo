@@ -110,6 +110,10 @@ export default function RetailerDetail() {
     { id: retailerId },
     { enabled: retailerId.length > 0 },
   );
+  const allowanceQuery = trpc.retailers.allowance.useQuery(
+    { retailerId },
+    { enabled: retailerId.length > 0 },
+  );
 
   const deleteRetailerMutation = trpc.retailers.delete.useMutation({
     onSuccess: async () => {
@@ -622,7 +626,7 @@ export default function RetailerDetail() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">— Nessuno —</SelectItem>
-                    {packages?.map((p) => (
+                    {packages?.filter((p) => p.isAssignableToNewRetailers || p.id === retailer.pricingPackageId).map((p) => (
                       <SelectItem key={p.id} value={p.id}>
                         {p.name} (-{parseFloat(p.discountPercent).toFixed(0)}%)
                       </SelectItem>
@@ -650,6 +654,68 @@ export default function RetailerDetail() {
             </div>
           </CardContent>
         </Card>
+
+        {allowanceQuery.data?.allowance && (
+          <Card className="border-[#7AB648]/40 bg-[#7AB648]/5">
+            <CardHeader>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle>Plafond prodotti incluso</CardTitle>
+                <Badge variant={allowanceQuery.data.allowance.status === "active" ? "default" : "secondary"}>
+                  {allowanceQuery.data.allowance.status === "active" ? "Attivo" : "Esaurito"}
+                </Badge>
+              </div>
+              <CardDescription>
+                {allowanceQuery.data.allowance.allowanceType === "investor_benefit"
+                  ? "Beneficio investitore: consumo valorizzato a prezzo al pubblico."
+                  : `Pacchetto ristoratore: consumo valorizzato Premium con sconto congelato del ${parseFloat(allowanceQuery.data.allowance.valuationDiscountPercent).toFixed(2)}%.`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div><p className="text-xs text-muted-foreground">Totale</p><p className="text-xl font-bold">€ {parseFloat(allowanceQuery.data.allowance.initialAmount).toFixed(2)}</p></div>
+                <div><p className="text-xs text-muted-foreground">Consumati</p><p className="text-xl font-bold">€ {parseFloat(allowanceQuery.data.allowance.consumedAmount).toFixed(2)}</p></div>
+                <div><p className="text-xs text-muted-foreground">Residuo</p><p className="text-xl font-bold text-[#2D5A27]">€ {parseFloat(allowanceQuery.data.allowance.remainingAmount).toFixed(2)}</p></div>
+              </div>
+              <div className="grid grid-cols-1 gap-3 border-t pt-3 text-sm sm:grid-cols-3">
+                <div>
+                  <p className="text-xs text-muted-foreground">Tipo di credito</p>
+                  <p className="font-medium">
+                    {allowanceQuery.data.allowance.allowanceType === "investor_benefit" ? "Beneficio investitore" : "Pacchetto ristoratore"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Criterio di valorizzazione</p>
+                  <p className="font-medium">
+                    {allowanceQuery.data.allowance.allowanceType === "investor_benefit"
+                      ? "Prezzo al pubblico"
+                      : `Premium (${parseFloat(allowanceQuery.data.allowance.valuationDiscountPercent).toFixed(2)}%)`}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Origine</p>
+                  <p className="font-medium break-words">€ {parseFloat(allowanceQuery.data.allowance.sourceAmount).toFixed(2)} · {allowanceQuery.data.allowance.sourceReference}</p>
+                  <p className="text-xs text-muted-foreground">Incassato il {format(new Date(allowanceQuery.data.allowance.sourceReceivedAt), "d MMMM yyyy", { locale: it })}</p>
+                </div>
+              </div>
+              <div className="space-y-2 border-t pt-3">
+                <p className="text-sm font-semibold">Ledger ordini</p>
+                {allowanceQuery.data.entries.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Nessun consumo registrato.</p>
+                ) : allowanceQuery.data.entries.map((entry) => (
+                  <div key={entry.id} className="flex items-center justify-between text-sm">
+                    <span>
+                      {entry.entryType === "reversal" ? "Storno" : "Consumo"} · ordine {entry.orderId.slice(0, 8).toUpperCase()}
+                      {entry.entryType === "consumption" && Math.abs(parseFloat(entry.coveredQuantity) - Math.round(parseFloat(entry.coveredQuantity))) > 0.000001
+                        ? " · quota finanziaria parziale"
+                        : ""}
+                    </span>
+                    <span className={entry.entryType === "reversal" ? "font-medium text-[#2D5A27]" : "font-medium"}>€ {parseFloat(entry.consumptionAmount).toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Card Affiliato */}
         <Card className="border-border bg-card">

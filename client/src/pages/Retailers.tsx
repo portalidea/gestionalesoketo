@@ -98,6 +98,7 @@ type FicClient = {
 
 export default function Retailers() {
   const { data: rawRetailers, isLoading } = trpc.retailers.list.useQuery();
+  const { data: allowanceSummaries } = trpc.retailers.allowanceSummaries.useQuery();
   const [, setLocation] = useLocation();
   const searchStr = useSearch();
 
@@ -144,6 +145,10 @@ export default function Retailers() {
   const retailers = useMemo(
     () => (rawRetailers ? sortData(rawRetailers, sortFromUrl, retailerAccessor) : undefined),
     [rawRetailers, sortFromUrl, retailerAccessor],
+  );
+  const allowanceByRetailerId = useMemo(
+    () => new Map((allowanceSummaries ?? []).map((summary) => [summary.retailerId, summary])),
+    [allowanceSummaries],
   );
   const [dialogOpen, setDialogOpen] = useState(false);
   const utils = trpc.useUtils();
@@ -636,6 +641,7 @@ export default function Retailers() {
                       <SortableTableHead sortKey="activeBatchCount" sort={sortFromUrl} onSort={setSort} className="text-right">Lotti attivi</SortableTableHead>
                       <SortableTableHead sortKey="totalStock" sort={sortFromUrl} onSort={setSort} className="text-right">Stock totale</SortableTableHead>
                       <SortableTableHead sortKey="inventoryValue" sort={sortFromUrl} onSort={setSort} className="text-right">Valore inventario</SortableTableHead>
+                      <TableHead className="text-right">Residuo plafond</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -681,6 +687,11 @@ export default function Retailers() {
                         </TableCell>
                         <TableCell className="text-right font-semibold">
                           €{r.inventoryValue}
+                        </TableCell>
+                        <TableCell className="text-right font-semibold text-[#2D5A27]">
+                          {allowanceByRetailerId.has(r.id)
+                            ? `€${parseFloat(allowanceByRetailerId.get(r.id)!.remainingAmount).toFixed(2)}`
+                            : "—"}
                         </TableCell>
                       </TableRow>
                     ))}

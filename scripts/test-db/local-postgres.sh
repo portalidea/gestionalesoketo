@@ -102,6 +102,9 @@ reset_database() {
     drizzle/migrations/0040_prospect_minimum_order_override.sql
     drizzle/migrations/0041_prospect_composition_sessions.sql
     drizzle/migrations/0042_prospect_promotions.sql
+    drizzle/migrations/0043_retailer_product_allowances.sql
+    drizzle/migrations/0044_allowance_optional_invoice_reference.sql
+    drizzle/migrations/0045_retailer_allowance_types.sql
   )
 
   for file in "${files[@]}"; do

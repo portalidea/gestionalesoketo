@@ -286,3 +286,29 @@
 - [x] Rendere la conferma server-side fail-closed sulle stesse regole e invalidare il dettaglio tRPC dopo la correzione manuale
 - [x] Coprire con test isolato: correzione lotto, storico neutro, conferma, lotto/scadenza mancanti, data non valida e quantità zero
 - [ ] Committare e pubblicare `fix/ddt-derived-validation` dopo autorizzazione esplicita
+
+
+## Plafond prodotti inclusi per retailer
+- [x] Diagnosticare anagrafiche ARIKI, snapshot prezzi e consumo storico in sola lettura
+- [x] Preparare migration 0043 append-only: plafond per retailer, ledger consumo, flag package non assegnabile e backfill P. IVA ARIKI
+- [x] Fissare il consumo con arrotondamento per ordine: €1.625,35 nel backfill ARIKI; la differenza tecnica è assegnata deterministicamente all’ultima quota coperta dell’ordine
+- [x] Verificare read-only che le tabelle 0043 e il flag Special sono presenti in produzione
+- [ ] Applicare manualmente la migration 0044: riferimento fattura plafond nullable per il credito ARIKI senza fattura emessa
+- [ ] Attendere i dati di attivazione ARIKI (importo, data, company) per il backfill separato
+- [ ] Mostrare il backfill ARIKI €1.625,35 prima di ogni INSERT su plafond/ledger
+- [x] Implementare pricing, checkout/modifica, annullamento, admin e portale con ledger append-only e split delle righe
+- [x] Bloccare l'assegnazione server/UI del package Special e mettere fail-closed i writer legacy per plafonds/Special
+- [x] Coprire split, writer portale/admin, storno, anagrafica non titolare, sconto congelato, Special e router legacy nel database isolato
+- [x] Eseguire typecheck, regressione completa isolata, build e diff check
+- [ ] Committare e pubblicare `feature/retailer-product-allowances` dopo autorizzazione esplicita
+
+## Tipi plafond — pacchetto ristoratore e beneficio investitore
+- [x] Preparare e validare localmente la migration 0045: tipo, origine economica e vincolo investitore a valorizzazione zero
+- [x] Verificare read-only l'applicazione manuale della 0045 in Supabase, inclusa coveredQuantity numeric(12,6)
+- [x] Implementare nel servizio i vincoli tipo → company, investimento incassato e formula 5% per investor_benefit
+- [x] Aggiornare card admin con tipo, criterio e origine; estendere test, regressione e build
+- [ ] Committare il branch; merge e deploy dopo autorizzazione esplicita
+- [ ] Generare il backfill ARIKI solo dopo il deploy, inclusa la gestione approvata della quota finanziaria parziale sulla riga a cavallo
+
+## Backlog plafond
+- [ ] Rendere configurabile l'importo iniziale del `restaurant_package`, oggi fissato a € 1.000 nel servizio.

@@ -9,6 +9,7 @@ import {
   products,
   stockMovements,
 } from "../../drizzle/schema";
+import { reverseAllowanceConsumptionsForOrder } from "./retailerAllowanceService";
 
 export const ORDER_TRANSFER_SOURCE_TYPE = "order_transfer";
 export const ORDER_CANCELLATION_REVERSAL_SOURCE_TYPE = "order_cancellation_reversal";
@@ -250,6 +251,12 @@ export async function cancelOrderWithTransferReversal(input: {
         }
       }
     }
+
+    await reverseAllowanceConsumptionsForOrder(tx, {
+      orderId: order.id,
+      createdBy: input.actorUserId,
+      reason: "Ordine annullato",
+    });
 
     await tx
       .update(orders)

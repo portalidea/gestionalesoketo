@@ -23,8 +23,14 @@ import {
   orderItems,
   productBatches,
 } from "../drizzle/schema";
-import { calculateOrderPricing, PricingItemInput } from "./pricing";
-import { transitionOrder } from "./services/orderStateMachine";
+import { calculateOrderPricing } from "./pricing";
+import {
+  calculateOrderPricingWithAllowance,
+  getRetailerAllowanceSummary,
+  persistAllowanceConsumptions,
+  reverseAllowanceConsumptionsForOrder,
+} from "./services/retailerAllowanceService";
+import { cancelOrderWithTransferReversal } from "./services/orderTransferReversal";
 import { sendEmail } from "./email";
 import { ENV } from "./_core/env";
 import { uuidSchema } from "../shared/schemas";
@@ -146,6 +152,13 @@ async function getRetailerCatalogProducts(
 }
 
 export const retailerSelfServiceRouter = router({
+  /** Residuo del solo plafond dell'anagrafica autenticata, senza ledger interno. */
+  allowanceSummary: retailerProcedure.query(async ({ ctx }) => {
+    const database = await getDb();
+    if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+    return getRetailerAllowanceSummary(database, ctx.retailerId, ctx.activeCompanyId);
+  }),
+
   // ============= CATALOGO =============
 
   /**
@@ -256,8 +269,13 @@ export const retailerSelfServiceRouter = router({
       if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
       await assertProductsInRetailerCatalog(database, input.items.map((item) => item.productId));
 
-      // Prezzi autorevoli, inclusi tier e promozioni della company attiva.
-      const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
+      // Prezzi autorevoli, inclusi tier/promozioni e l'eventuale plafond.
+      const pricing = await calculateOrderPricingWithAllowance({
+        database,
+        retailerId: ctx.retailerId,
+        companyId: ctx.activeCompanyId,
+        items: input.items,
+      });
 
       // Get retailer payment terms
       const [retailer] = await database
@@ -293,12 +311,15 @@ export const retailerSelfServiceRouter = router({
           vatRate: pi.vatRate,
           lineTotalNet: pi.lineTotalNet,
           lineTotalGross: pi.lineTotalGross,
+          allowanceCovered: pi.allowanceCovered,
+          allowanceConsumptionAmount: pi.allowanceConsumptionAmount,
         })),
         subtotalNet: pricing.subtotalNet,
         vatAmount: pricing.vatAmount,
         totalGross: pricing.totalGross,
         discountPercent: pricing.discountPercent,
         packageName: pricing.packageName,
+        allowance: pricing.allowance,
         paymentTerms,
         paymentTermsLabel: paymentTermsLabels[paymentTerms] ?? paymentTerms,
       };
@@ -334,11 +355,16 @@ export const retailerSelfServiceRouter = router({
 
       if (!retailer) throw new TRPCError({ code: "NOT_FOUND", message: "Retailer non trovato" });
 
-      // Calculate pricing
-      const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
-
       // Create order in transaction (same logic as orders.create but for retailer)
       const result = await database.transaction(async (tx) => {
+        // Il lock sul plafond serializza checkout concorrenti.
+        const pricing = await calculateOrderPricingWithAllowance({
+          database: tx,
+          retailerId: ctx.retailerId,
+          companyId: ctx.activeCompanyId,
+          items: input.items,
+          lockAllowance: true,
+        });
         const [order] = await tx
           .insert(orders)
           .values({
@@ -375,24 +401,30 @@ export const retailerSelfServiceRouter = router({
           await tx.insert(orderItems).values(itemValues);
         }
 
-        return order;
+        await persistAllowanceConsumptions(tx, {
+          orderId: order.id,
+          createdBy: ctx.user.id,
+          pricing,
+        });
+
+        return { order, pricing };
       });
 
       // Send order summary email to retailer
-      const orderShortId = result.id.slice(0, 8).toUpperCase();
+      const orderShortId = result.order.id.slice(0, 8).toUpperCase();
       if (retailer.email) {
         try {
           const emailHtml = buildCheckoutEmailHtml({
             retailerName: retailer.name,
             orderShortId,
-            items: pricing.items,
-            subtotalNet: pricing.subtotalNet,
-            vatAmount: pricing.vatAmount,
-            totalGross: pricing.totalGross,
-            discountPercent: pricing.discountPercent,
-            packageName: pricing.packageName,
+            items: result.pricing.items,
+            subtotalNet: result.pricing.subtotalNet,
+            vatAmount: result.pricing.vatAmount,
+            totalGross: result.pricing.totalGross,
+            discountPercent: result.pricing.discountPercent,
+            packageName: result.pricing.packageName,
             paymentTerms: retailer.paymentTerms,
-            orderId: result.id,
+            orderId: result.order.id,
           });
           await sendEmail({
             to: retailer.email,
@@ -412,15 +444,19 @@ export const retailerSelfServiceRouter = router({
           html: `<p>Nuovo ordine ricevuto dal portale self-service.</p>
 <p><strong>Retailer:</strong> ${retailer.name}<br/>
 <strong>Ordine:</strong> #${orderShortId}<br/>
-<strong>Totale:</strong> €${pricing.totalGross}<br/>
+<strong>Totale:</strong> €${result.pricing.totalGross}<br/>
 <strong>Pagamento:</strong> ${retailer.paymentTerms === "on_delivery" ? "Alla consegna" : "Bonifico anticipato"}</p>`,
         });
       } catch (e: any) {
         console.error(`[retailerPortal.cartCheckout] admin email failed: ${e.message}`);
       }
 
-      console.log(`[retailerPortal.cartCheckout] DONE: orderId=${result.id} orderNumber=${result.orderNumber}`);
-      return { orderId: result.id, orderNumber: result.orderNumber };
+      console.log(`[retailerPortal.cartCheckout] DONE: orderId=${result.order.id} orderNumber=${result.order.orderNumber}`);
+      return {
+        orderId: result.order.id,
+        orderNumber: result.order.orderNumber,
+        allowance: result.pricing.allowance,
+      };
     }),
 
   // ============= ORDINI =============
@@ -639,24 +675,33 @@ export const retailerSelfServiceRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Solo ordini in stato 'pending' possono essere modificati" });
       }
 
-      // Recalculate pricing, including promotions still active at modification time.
-      const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
-
       // Update in transaction
-      await database.transaction(async (tx) => {
+      const pricing = await database.transaction(async (tx) => {
+        await reverseAllowanceConsumptionsForOrder(tx, {
+          orderId: input.orderId,
+          createdBy: ctx.user.id,
+          reason: "Ordine modificato",
+        });
+        const nextPricing = await calculateOrderPricingWithAllowance({
+          database: tx,
+          retailerId: ctx.retailerId,
+          companyId: ctx.activeCompanyId,
+          items: input.items,
+          lockAllowance: true,
+        });
         await tx.delete(orderItems).where(eq(orderItems.orderId, input.orderId));
         await tx
           .update(orders)
           .set({
-            subtotalNet: pricing.subtotalNet,
-            vatAmount: pricing.vatAmount,
-            totalGross: pricing.totalGross,
-            discountPercent: pricing.discountPercent,
+            subtotalNet: nextPricing.subtotalNet,
+            vatAmount: nextPricing.vatAmount,
+            totalGross: nextPricing.totalGross,
+            discountPercent: nextPricing.discountPercent,
             updatedAt: new Date(),
           })
           .where(eq(orders.id, input.orderId));
 
-        const itemValues = pricing.items.map((pi) => ({
+        const itemValues = nextPricing.items.map((pi) => ({
           orderId: input.orderId,
           productId: pi.productId,
           quantity: pi.quantity,
@@ -671,6 +716,12 @@ export const retailerSelfServiceRouter = router({
           batchId: null,
         }));
         await tx.insert(orderItems).values(itemValues);
+        await persistAllowanceConsumptions(tx, {
+          orderId: input.orderId,
+          createdBy: ctx.user.id,
+          pricing: nextPricing,
+        });
+        return nextPricing;
       });
 
       // Send email notification
@@ -717,10 +768,8 @@ export const retailerSelfServiceRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Solo ordini in stato 'pending' possono essere annullati" });
       }
 
-      // Use state machine for transition
-      await transitionOrder({
+      await cancelOrderWithTransferReversal({
         orderId: input.orderId,
-        toStatus: "cancelled",
         actorUserId: ctx.user.id,
         reason: input.reason,
       });
