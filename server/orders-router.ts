@@ -33,7 +33,12 @@ import { cancelOrderWithTransferReversal } from "./services/orderTransferReversa
 import { sendOrderStatusEmail } from "./services/orderEmailService";
 import { voidCommissionForOrder } from "./services/commissionService";
 import * as ficDocService from "./services/ficDocumentService";
-import { allocateBatchesSelectively } from "./services/selectiveFefoAllocation";
+import { allocateBatchesSelectively, type BatchAllocation } from "./services/selectiveFefoAllocation";
+import {
+  calculateOrderPricingWithAllowance,
+  persistAllowanceConsumptions,
+  reverseAllowanceConsumptionsForOrder,
+} from "./services/retailerAllowanceService";
 import {
   confirmIntercompanyTransferAndAssign,
   confirmManualIntercompanyTransfer,
@@ -248,7 +253,10 @@ export const ordersRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      return calculateOrderPricing({
+      const database = await getDb();
+      if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+      return calculateOrderPricingWithAllowance({
+        database,
         retailerId: input.retailerId,
         items: input.items,
         companyId: ctx.activeCompanyId,
@@ -283,8 +291,10 @@ export const ordersRouter = router({
         .limit(1);
       const resolvedPaymentTerms = input.paymentTerms ?? retailerForPT?.paymentTerms ?? 'advance_transfer';
 
-      // Calcola pricing (M11.A.markup: pass override)
-      const pricing = await calculateOrderPricing({
+      // Calcola pricing e l'eventuale plafond; il ledger viene scritto nella
+      // stessa transazione dell'ordine poco sotto.
+      const pricing = await calculateOrderPricingWithAllowance({
+        database: db,
         retailerId: input.retailerId,
         items: input.items,
         companyId: ctx.activeCompanyId,
@@ -314,7 +324,10 @@ export const ordersRouter = router({
         const allocations: BatchAllocation[] = [];
         let remaining = pi.quantity; // in confezioni
 
-        if (warehouse) {
+        // Una riga plafond può essere spezzata in quota gratuita e quota a
+        // pagamento. L'assegnazione FEFO resta per la fase di evasione: non
+        // si duplicano qui gli stessi lotti su due sotto-righe prezzo.
+        if (warehouse && !pricing.allowance) {
           // Query lotti disponibili FEFO per questo prodotto nel magazzino centrale
           const availableBatches = await db
             .select({
@@ -369,6 +382,16 @@ export const ordersRouter = router({
 
       // Crea ordine in transazione
       const result = await db.transaction(async (tx) => {
+        const lockedPricing = pricing.allowance
+          ? await calculateOrderPricingWithAllowance({
+            database: tx,
+            retailerId: input.retailerId,
+            items: input.items,
+            companyId: ctx.activeCompanyId,
+            markupPercentageOverride: input.markupPercentageOverride ?? undefined,
+            lockAllowance: true,
+          })
+          : pricing;
         // Insert order
         const [order] = await tx
           .insert(orders)
@@ -376,10 +399,10 @@ export const ordersRouter = router({
             retailerId: input.retailerId,
             status: "pending",
             paymentTerms: resolvedPaymentTerms,
-            subtotalNet: pricing.subtotalNet,
-            vatAmount: pricing.vatAmount,
-            totalGross: pricing.totalGross,
-            discountPercent: pricing.discountPercent,
+            subtotalNet: lockedPricing.subtotalNet,
+            vatAmount: lockedPricing.vatAmount,
+            totalGross: lockedPricing.totalGross,
+            discountPercent: lockedPricing.discountPercent,
             notes: input.notes ?? null,
             notesInternal: input.notesInternal ?? null,
             createdBy: ctx.user!.id,
@@ -406,7 +429,10 @@ export const ordersRouter = router({
           batchId: string | null;
         }> = [];
 
-        for (const pi of allAllocations) {
+        const itemPricing = lockedPricing.allowance
+          ? lockedPricing.items.map((item) => ({ ...item, allocations: [] as BatchAllocation[] }))
+          : allAllocations;
+        for (const pi of itemPricing) {
           if (pi.allocations.length === 0) {
             // Nessun lotto disponibile — item senza batch
             itemValues.push({
@@ -473,14 +499,20 @@ export const ordersRouter = router({
           await tx.insert(orderItems).values(itemValues);
         }
 
-        return order;
+        await persistAllowanceConsumptions(tx, {
+          orderId: order.id,
+          createdBy: ctx.user!.id,
+          pricing: lockedPricing,
+        });
+
+        return { order, pricing: lockedPricing };
       });
 
       return {
-        id: result.id,
-        orderNumber: result.orderNumber,
-        totalGross: pricing.totalGross,
-        warnings: [...pricing.warnings, ...fefoWarnings],
+        id: result.order.id,
+        orderNumber: result.order.orderNumber,
+        totalGross: result.pricing.totalGross,
+        warnings: [...result.pricing.warnings, ...fefoWarnings],
       };
     }),
 
@@ -530,7 +562,7 @@ export const ordersRouter = router({
       }
 
       // Ricalcola pricing (M11.A.markup: pass override)
-      const pricing = await calculateOrderPricing({
+      const pricing = await calculateOrderPricingWithAllowance({
         retailerId: order.retailerId!,
         items: input.items,
         companyId: ctx.activeCompanyId,
@@ -547,21 +579,40 @@ export const ordersRouter = router({
         })
         .from(orderItems)
         .where(eq(orderItems.orderId, input.orderId));
-      const selectiveAllocation = await allocateBatchesSelectively({
-        companyId: ctx.activeCompanyId,
-        items: pricing.items,
-        existingAssignments: existingAssignments.map((item) => ({
-          productId: item.productId,
-          batchId: item.batchId,
-          quantity: item.quantity,
-        })),
-      });
+      const selectiveAllocation = pricing.allowance
+        ? { allocationsByProduct: new Map<string, Array<{ batchId: string; quantity: number }>>(), warnings: [] }
+        : await allocateBatchesSelectively({
+          companyId: ctx.activeCompanyId,
+          items: pricing.items,
+          existingAssignments: existingAssignments.map((item) => ({
+            productId: item.productId,
+            batchId: item.batchId,
+            quantity: item.quantity,
+          })),
+        });
       const allAllocations = pricing.items.map((item) => ({
         ...item,
         allocations: selectiveAllocation.allocationsByProduct.get(item.productId) ?? [],
       }));
 
-      await db.transaction(async (tx) => {
+      const result = await db.transaction(async (tx) => {
+        if (pricing.allowance) {
+          await reverseAllowanceConsumptionsForOrder(tx, {
+            orderId: input.orderId,
+            createdBy: ctx.user!.id,
+            reason: "Modifica righe ordine",
+          });
+        }
+        const lockedPricing = pricing.allowance
+          ? await calculateOrderPricingWithAllowance({
+            database: tx,
+            retailerId: order.retailerId!,
+            items: input.items,
+            companyId: ctx.activeCompanyId,
+            markupPercentageOverride: input.markupPercentageOverride ?? undefined,
+            lockAllowance: true,
+          })
+          : pricing;
         // Elimina vecchi items
         await tx.delete(orderItems).where(eq(orderItems.orderId, input.orderId));
 
@@ -569,10 +620,10 @@ export const ordersRouter = router({
         await tx
           .update(orders)
           .set({
-            subtotalNet: pricing.subtotalNet,
-            vatAmount: pricing.vatAmount,
-            totalGross: pricing.totalGross,
-            discountPercent: pricing.discountPercent,
+            subtotalNet: lockedPricing.subtotalNet,
+            vatAmount: lockedPricing.vatAmount,
+            totalGross: lockedPricing.totalGross,
+            discountPercent: lockedPricing.discountPercent,
             notes: input.notes ?? null,
             notesInternal: input.notesInternal ?? null,
             updatedAt: new Date(),
@@ -595,7 +646,10 @@ export const ordersRouter = router({
           batchId: string | null;
         }> = [];
 
-        for (const pi of allAllocations) {
+        const itemPricing = lockedPricing.allowance
+          ? lockedPricing.items.map((item) => ({ ...item, allocations: [] as BatchAllocation[] }))
+          : allAllocations;
+        for (const pi of itemPricing) {
           if (pi.allocations.length === 0) {
             itemValues.push({
               orderId: input.orderId,
@@ -654,11 +708,19 @@ export const ordersRouter = router({
         }
 
         await tx.insert(orderItems).values(itemValues);
+        if (lockedPricing.allowance) {
+          await persistAllowanceConsumptions(tx, {
+            orderId: input.orderId,
+            createdBy: ctx.user!.id,
+            pricing: lockedPricing,
+          });
+        }
+        return lockedPricing;
       });
 
       return {
-        totalGross: pricing.totalGross,
-        warnings: [...pricing.warnings, ...selectiveAllocation.warnings],
+        totalGross: result.totalGross,
+        warnings: [...result.warnings, ...selectiveAllocation.warnings],
       };
     }),
 

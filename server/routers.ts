@@ -40,6 +40,12 @@ import { affiliatePortalRouter } from "./affiliate-portal-router";
 import { shopifyRouter } from "./shopify-router";
 import { reportsRouter } from "./reports-router";
 import { inventoryExportRouter } from "./inventory-export-router";
+import {
+  createRetailerAllowance,
+  getAllowanceOriginReport,
+  getCompanyAllowanceSummaries,
+  getRetailerAllowanceLedger,
+} from "./services/retailerAllowanceService";
 import { companiesRouter } from "./companies-router";
 import { tierRulesRouter } from "./tier-rules-router";
 import { paymentReconciliationRouter } from "./payment-reconciliation-router";
@@ -246,10 +252,66 @@ export const appRouter = router({
       return await db.getAllRetailers(ctx.activeCompanyId);
     }),
 
+    allowanceSummaries: staffProcedure.query(async ({ ctx }) => {
+      const database = await db.getDb();
+      if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+      return getCompanyAllowanceSummaries(database, ctx.activeCompanyId);
+    }),
+
+    /** Origini aggregate: richiede l'accesso autorizzato a più company. */
+    allowanceOriginReport: staffProcedure.query(async ({ ctx }) => {
+      const { getUserCompanyIds } = await import("./services/multiCompanyAccess");
+      const companyIds = await getUserCompanyIds(ctx.user!.id);
+      if (companyIds.length < 2) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Il report delle origini condivise richiede accesso a più company.",
+        });
+      }
+      const database = await db.getDb();
+      if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+      return getAllowanceOriginReport(database, companyIds);
+    }),
+
     getById: staffProcedure
       .input(z.object({ id: uuid }))
       .query(async ({ input, ctx }) => {
         return await db.getRetailerById(input.id, ctx.activeCompanyId);
+      }),
+
+    allowance: staffProcedure
+      .input(z.object({ retailerId: uuid }))
+      .query(async ({ input, ctx }) => {
+        const retailer = await db.getRetailerById(input.retailerId, ctx.activeCompanyId);
+        if (!retailer) throw new TRPCError({ code: "NOT_FOUND", message: "Rivenditore non trovato" });
+        const database = await db.getDb();
+        if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+        return getRetailerAllowanceLedger(database, input.retailerId, ctx.activeCompanyId);
+      }),
+
+    /** Attivazione staff: applica le regole company/tipo e il 5% investitore lato server. */
+    createAllowance: writerProcedure
+      .input(z.object({
+        retailerId: uuid,
+        allowanceType: z.enum(["restaurant_package", "investor_benefit"]),
+        sourceAmount: z.number().positive(),
+        sourceReference: z.string().trim().min(1),
+        sourceReceivedAt: z.coerce.date(),
+        activatedAt: z.coerce.date().optional(),
+        packageInvoiceReference: z.string().trim().min(1).nullable().optional(),
+        notes: z.string().trim().min(1).nullable().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const retailer = await db.getRetailerById(input.retailerId, ctx.activeCompanyId);
+        if (!retailer) throw new TRPCError({ code: "NOT_FOUND", message: "Rivenditore non trovato" });
+        const database = await db.getDb();
+        if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+        return database.transaction(async (tx) => createRetailerAllowance(tx, {
+          ...input,
+          companyId: ctx.activeCompanyId,
+          activatedAt: input.activatedAt ?? new Date(),
+          createdBy: ctx.user!.id,
+        }));
       }),
 
     /**
@@ -432,6 +494,12 @@ export const appRouter = router({
             throw new TRPCError({
               code: "NOT_FOUND",
               message: "Pacchetto commerciale non trovato",
+            });
+          }
+          if (!pkg.isAssignableToNewRetailers) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: "Questo pacchetto non è assegnabile a nuovi rivenditori. Usa il pacchetto previsto dopo l'esaurimento del plafond.",
             });
           }
         }

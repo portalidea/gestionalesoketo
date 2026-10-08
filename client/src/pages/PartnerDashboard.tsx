@@ -43,6 +43,9 @@ export default function PartnerDashboard() {
   const promosQuery = trpc.retailerPortal.activePromotions.useQuery(undefined, {
     enabled: Boolean(user),
   });
+  const allowanceQuery = trpc.retailerSelfService.allowanceSummary.useQuery(undefined, {
+    enabled: Boolean(user?.retailerId),
+  });
 
   // Fetch retailer name
   const retailerQuery = trpc.retailers.getById.useQuery(
@@ -150,6 +153,20 @@ export default function PartnerDashboard() {
               color="#7AB648"
             />
           </div>
+        )}
+
+        {allowanceQuery.data && (
+          <Card className="border-[#7AB648]/40 bg-[#7AB648]/10">
+            <CardContent className="flex flex-col gap-1 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-[#2D5A27]">Credito prodotti incluso</p>
+                <p className="text-xs text-muted-foreground">Residuo disponibile sul tuo pacchetto</p>
+              </div>
+              <p className="text-2xl font-bold text-[#2D5A27]">
+                € {parseFloat(allowanceQuery.data.remainingAmount).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </CardContent>
+          </Card>
         )}
 
         {/* F17: Alert Scadenze */}

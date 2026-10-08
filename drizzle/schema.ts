@@ -805,6 +805,7 @@ export const pricingPackages = pgTable(
     discountPercent: numeric("discountPercent", { precision: 5, scale: 2 }).notNull(),
     description: text("description"),
     sortOrder: integer("sortOrder").default(0).notNull(),
+    isAssignableToNewRetailers: boolean("isAssignableToNewRetailers").default(true).notNull(),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -1132,6 +1133,60 @@ export const orderItems = pgTable(
 
 export type OrderItem = typeof orderItems.$inferSelect;
 export type InsertOrderItem = typeof orderItems.$inferInsert;
+
+/**
+ * Plafond prodotti inclusi, appartenente a una singola anagrafica retailer.
+ * Il riferimento fattura può essere nullo solo per un credito concordato.
+ */
+export const retailerAllowances = pgTable("retailer_allowances", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  retailerId: uuid("retailerId").notNull().references(() => retailers.id, { onDelete: "restrict" }),
+  billingCompanyId: uuid("billingCompanyId").notNull().references(() => companies.id, { onDelete: "restrict" }),
+  initialAmount: numeric("initialAmount", { precision: 12, scale: 2 }).notNull(),
+  valuationDiscountPercent: numeric("valuationDiscountPercent", { precision: 5, scale: 2 }).notNull(),
+  activatedAt: timestamp("activatedAt", { withTimezone: true }).notNull(),
+  packageInvoiceReference: text("packageInvoiceReference"),
+  postExhaustionPricingPackageId: uuid("postExhaustionPricingPackageId").notNull().references(() => pricingPackages.id, { onDelete: "restrict" }),
+  status: varchar("status", { length: 20 }).default("active").notNull(),
+  allowanceType: varchar("allowanceType", { length: 32 }).notNull(),
+  sourceAmount: numeric("sourceAmount", { precision: 12, scale: 2 }).notNull(),
+  sourceReference: text("sourceReference").notNull(),
+  sourceReceivedAt: timestamp("sourceReceivedAt", { withTimezone: true }).notNull(),
+  predecessorAllowanceId: uuid("predecessorAllowanceId"),
+  notes: text("notes"),
+  createdBy: uuid("createdBy").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("idx_retailer_allowances_retailer_activated").on(t.retailerId, t.activatedAt),
+  index("idx_retailer_allowances_billing_company_status").on(t.billingCompanyId, t.status),
+]);
+
+export type RetailerAllowance = typeof retailerAllowances.$inferSelect;
+export type InsertRetailerAllowance = typeof retailerAllowances.$inferInsert;
+
+/** Ledger append-only: le modifiche e gli annullamenti aggiungono una reversal. */
+export const retailerAllowanceConsumptions = pgTable("retailer_allowance_consumptions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  allowanceId: uuid("allowanceId").notNull().references(() => retailerAllowances.id, { onDelete: "restrict" }),
+  orderId: uuid("orderId").notNull().references(() => orders.id, { onDelete: "restrict" }),
+  orderItemId: uuid("orderItemId").references(() => orderItems.id, { onDelete: "set null" }),
+  entryType: varchar("entryType", { length: 20 }).default("consumption").notNull(),
+  reversesConsumptionId: uuid("reversesConsumptionId"),
+  coveredQuantity: numeric("coveredQuantity", { precision: 12, scale: 6 }).notNull(),
+  listUnitPriceSnapshot: numeric("listUnitPriceSnapshot", { precision: 12, scale: 2 }).notNull(),
+  valuationDiscountPercentSnapshot: numeric("valuationDiscountPercentSnapshot", { precision: 5, scale: 2 }).notNull(),
+  consumptionAmount: numeric("consumptionAmount", { precision: 12, scale: 2 }).notNull(),
+  createdBy: uuid("createdBy").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  reversalReason: text("reversalReason"),
+}, (t) => [
+  index("idx_retailer_allowance_consumptions_allowance_active").on(t.allowanceId, t.createdAt),
+  index("idx_retailer_allowance_consumptions_order").on(t.orderId),
+]);
+
+export type RetailerAllowanceConsumption = typeof retailerAllowanceConsumptions.$inferSelect;
+export type InsertRetailerAllowanceConsumption = typeof retailerAllowanceConsumptions.$inferInsert;
 
 // M7-A — Affiliates module
 export const affiliateStatusEnum = pgEnum("affiliate_status", ["active", "inactive"]);

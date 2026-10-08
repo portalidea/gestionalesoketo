@@ -15,6 +15,9 @@ import {
   promotions,
 } from "../drizzle/schema";
 
+type RootPricingDatabase = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+export type PricingDatabase = RootPricingDatabase | Parameters<Parameters<RootPricingDatabase["transaction"]>[0]>[0];
+
 export interface PricingItemInput {
   productId: string;
   quantity: number; // in unità di vendita (confezioni)
@@ -69,7 +72,7 @@ export interface CalculateOrderPricingOptions {
   /** Usato dalla preview/conversione prospect prima della creazione del retailer. */
   pricingPackageIdOverride?: string;
   /** Client Drizzle transazionale: evita query fuori dalla conversione atomica. */
-  database?: NonNullable<Awaited<ReturnType<typeof getDb>>>;
+  database?: PricingDatabase;
 }
 
 /**
@@ -87,7 +90,7 @@ export async function calculateOrderPricing(
   let companyId: string | undefined;
   let markupPercentageOverride: number | null | undefined;
   let pricingPackageIdOverride: string | undefined;
-  let suppliedDatabase: NonNullable<Awaited<ReturnType<typeof getDb>>> | undefined;
+  let suppliedDatabase: PricingDatabase | undefined;
 
   if (typeof retailerIdOrOpts === "string") {
     retailerId = retailerIdOrOpts;

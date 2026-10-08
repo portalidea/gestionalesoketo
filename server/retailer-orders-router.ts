@@ -18,8 +18,10 @@ import {
   locations,
   orderItems,
   orders,
+  pricingPackages,
   productBatches,
   products,
+  retailerAllowances,
   retailers,
 } from "../drizzle/schema";
 import { createFicProformaForCompany, getRetailerFicClientId } from "./fic-integration";
@@ -29,6 +31,34 @@ import { allocateBatchesSelectively } from "./services/selectiveFefoAllocation";
 
 function warnLegacyCall(procedure: string, ctx: { user: { id: string }; retailerId: string }) {
   console.warn("[LEGACY_CALL]", procedure, "userId=", ctx.user.id, "retailerId=", ctx.retailerId, "timestamp=", new Date().toISOString());
+}
+
+async function assertLegacyPricingSafe(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  retailerId: string,
+  companyId: string,
+) {
+  const [allowance] = await db
+    .select({ id: retailerAllowances.id })
+    .from(retailerAllowances)
+    .where(and(
+      eq(retailerAllowances.retailerId, retailerId),
+      eq(retailerAllowances.billingCompanyId, companyId),
+      eq(retailerAllowances.status, "active"),
+    ))
+    .limit(1);
+  const [retailer] = await db
+    .select({ discountPercent: pricingPackages.discountPercent })
+    .from(retailers)
+    .leftJoin(pricingPackages, eq(retailers.pricingPackageId, pricingPackages.id))
+    .where(eq(retailers.id, retailerId))
+    .limit(1);
+  if (allowance || Number(retailer?.discountPercent ?? 0) === 100) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Procedura obsoleta non disponibile per questo pacchetto commerciale. Usa il portale aggiornato.",
+    });
+  }
 }
 
 export const retailerOrdersRouter = router({
@@ -192,6 +222,7 @@ export const retailerOrdersRouter = router({
       warnLegacyCall("retailerOrders.updateItems", ctx);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+      await assertLegacyPricingSafe(db, ctx.retailerId, ctx.activeCompanyId);
 
       // Verifica ownership + status
       const [order] = await db
@@ -415,6 +446,7 @@ export const retailerOrdersRouter = router({
       warnLegacyCall("retailerOrders.cancel", ctx);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+      await assertLegacyPricingSafe(db, ctx.retailerId, ctx.activeCompanyId);
 
       const [order] = await db
         .select()

@@ -17,6 +17,8 @@ import {
   orderItems,
   orders,
   productBatches,
+  pricingPackages,
+  retailerAllowances,
   retailers,
 } from "../drizzle/schema";
 import { createFicProformaForCompany, getRetailerFicClientId } from "./fic-integration";
@@ -32,6 +34,38 @@ function warnLegacyCall(procedure: string, ctx: { user: { id: string }; retailer
   console.warn("[LEGACY_CALL]", procedure, "userId=", ctx.user.id, "retailerId=", ctx.retailerId, "timestamp=", new Date().toISOString());
 }
 
+/**
+ * I namespace legacy non conoscono lo split/ledger del plafond: per questi
+ * retailer falliscono chiusi, evitando qualunque ordine gratuito non tracciato.
+ */
+async function assertLegacyPricingSafe(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  retailerId: string,
+  companyId: string,
+) {
+  const [allowance] = await db
+    .select({ id: retailerAllowances.id })
+    .from(retailerAllowances)
+    .where(and(
+      eq(retailerAllowances.retailerId, retailerId),
+      eq(retailerAllowances.billingCompanyId, companyId),
+      eq(retailerAllowances.status, "active"),
+    ))
+    .limit(1);
+  const [retailer] = await db
+    .select({ discountPercent: pricingPackages.discountPercent })
+    .from(retailers)
+    .leftJoin(pricingPackages, eq(retailers.pricingPackageId, pricingPackages.id))
+    .where(eq(retailers.id, retailerId))
+    .limit(1);
+  if (allowance || Number(retailer?.discountPercent ?? 0) === 100) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Procedura obsoleta non disponibile per questo pacchetto commerciale. Usa il portale aggiornato.",
+    });
+  }
+}
+
 export const retailerCheckoutRouter = router({
   /**
    * 1. preview — anteprima ordine con totali calcolati
@@ -40,6 +74,9 @@ export const retailerCheckoutRouter = router({
     .input(z.object({ items: z.array(cartItemSchema).min(1) }))
     .query(async ({ input, ctx }) => {
       warnLegacyCall("retailerCheckout.preview", ctx);
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+      await assertLegacyPricingSafe(db, ctx.retailerId, ctx.activeCompanyId);
       const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);
       return pricing;
     }),
@@ -62,6 +99,7 @@ export const retailerCheckoutRouter = router({
       warnLegacyCall("retailerCheckout.create", ctx);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+      await assertLegacyPricingSafe(db, ctx.retailerId, ctx.activeCompanyId);
 
       // 1. Calcola pricing
       const pricing = await calculateOrderPricing(ctx.retailerId, input.items, ctx.activeCompanyId);

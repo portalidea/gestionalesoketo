@@ -16,6 +16,13 @@ import { orders, orderItems, retailers, products, productBatches } from "../../d
 import * as ficDocService from "./ficDocumentService";
 import { sendOrderStatusEmail } from "./orderEmailService";
 import { allocateBatchesSelectively } from "./selectiveFefoAllocation";
+import type { PricingResult } from "../pricing";
+import {
+  type AllowancePricingResult,
+  calculateOrderPricingWithAllowance,
+  persistAllowanceConsumptions,
+  reverseAllowanceConsumptionsForOrder,
+} from "./retailerAllowanceService";
 
 // --- Types ---
 
@@ -578,22 +585,23 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
   }
 
   // 2. Recalculate pricing (M11.A.markup: read markupPercentageOverride from order)
-  let pricing;
+  let pricing: PricingResult | AllowancePricingResult;
+  let markupOverride: number | undefined;
   if (isEventOrder) {
     const { calculateEventOrderPricing } = await import("../pricing");
     pricing = await calculateEventOrderPricing(input.items);
   } else {
-    const { calculateOrderPricing } = await import("../pricing");
     // Read existing markupPercentageOverride from the order row
     const [orderForMarkup] = await db
       .select({ markupPercentageOverride: orders.markupPercentageOverride })
       .from(orders)
       .where(eq(orders.id, input.orderId))
       .limit(1);
-    const markupOverride = orderForMarkup?.markupPercentageOverride
+    markupOverride = orderForMarkup?.markupPercentageOverride
       ? parseFloat(orderForMarkup.markupPercentageOverride)
       : undefined;
-    pricing = await calculateOrderPricing({
+    pricing = await calculateOrderPricingWithAllowance({
+      database: db,
       retailerId: order.retailerId!,
       items: input.items,
       companyId: order.companyId,
@@ -609,14 +617,32 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
     })
     .from(orderItems)
     .where(eq(orderItems.orderId, input.orderId));
-  const selectiveAllocation = await allocateBatchesSelectively({
-    companyId: order.companyId,
-    items: pricing.items,
-    existingAssignments,
-  });
+  const allowancePricing = isEventOrder ? null : pricing as AllowancePricingResult;
+  const selectiveAllocation = allowancePricing?.allowance
+    ? { allocationsByProduct: new Map<string, Array<{ batchId: string; quantity: number }>>(), warnings: [] }
+    : await allocateBatchesSelectively({
+      companyId: order.companyId,
+      items: pricing.items,
+      existingAssignments,
+    });
 
   // 3. Transaction: replace rows using the same selective FEFO allocation as backoffice.
   await db.transaction(async (tx) => {
+    if (!isEventOrder) {
+      await reverseAllowanceConsumptionsForOrder(tx, {
+        orderId: input.orderId,
+        createdBy: input.actorUserId,
+        reason: "Ordine modificato",
+      });
+      pricing = await calculateOrderPricingWithAllowance({
+        database: tx,
+        retailerId: order.retailerId!,
+        items: input.items,
+        companyId: order.companyId,
+        markupPercentageOverride: markupOverride,
+        lockAllowance: true,
+      });
+    }
     await tx.delete(orderItems).where(eq(orderItems.orderId, input.orderId));
 
     const itemValues: Array<{
@@ -694,6 +720,14 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
     }
 
     await tx.insert(orderItems).values(itemValues);
+
+    if (!isEventOrder) {
+      await persistAllowanceConsumptions(tx, {
+        orderId: input.orderId,
+        createdBy: input.actorUserId,
+        pricing: pricing as AllowancePricingResult,
+      });
+    }
 
     await tx
       .update(orders)
