@@ -279,7 +279,7 @@
 - [x] Mantenere temporaneamente catalogPortal, retailerCheckout e retailerOrders per autorizzazione esplicita
 - [x] Aggiungere `console.warn("[LEGACY_CALL]", procedura, userId, retailerId, timestamp)` a ogni procedura legacy
 - [x] Aggiungere audit persistente best-effort `legacy_api_calls` a ogni procedura legacy e testare l'assenza di blocco dopo errore audit
-- [ ] Dopo 14 giorni dal deploy dell'audit persistente, eseguire: `SELECT procedure, count(*) FROM legacy_api_calls WHERE "createdAt" >= '<timestamp deploy>' GROUP BY procedure ORDER BY procedure;`. Zero righe → rimuovere catalogPortal, retailerCheckout e retailerOrders e migrare il test FEFO al router self-service.
+- [ ] **Controllo il 22 ottobre 2026 dopo le 11:57 CEST** (deploy audit persistente completato l'8 ottobre 2026 alle 11:57 CEST): eseguire `SELECT procedure, count(*) FROM legacy_api_calls WHERE "createdAt" >= TIMESTAMPTZ '2026-10-08 09:57:00+00' GROUP BY procedure ORDER BY procedure;`. Zero righe → rimuovere catalogPortal, retailerCheckout e retailerOrders e migrare il test FEFO al router self-service.
 
 
 ## DDT — validazione derivata da dati correnti
