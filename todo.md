@@ -312,3 +312,11 @@
 
 ## Backlog plafond
 - [ ] Rendere configurabile l'importo iniziale del `restaurant_package`, oggi fissato a € 1.000 nel servizio.
+
+
+## Report ordini cliente esportabile
+- [x] Creare procedure staff read-only per PDF cliente e Excel interno con scope company preservato
+- [x] Includere aggregazione per P. IVA solo sulle company autorizzate, esclusione annullati da PDF/totali e dettaglio prodotti
+- [x] Riepilogare i crediti per tipo senza esporre sconti di valorizzazione, ledger o note interne nel PDF cliente
+- [x] Aggiungere azioni di export nella scheda admin del rivenditore e test isolati dei due formati
+- [ ] Generare e revisionare gli esempi ARIKI dal 2026-04-28 prima di commit e merge

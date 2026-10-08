@@ -40,6 +40,7 @@ import { affiliatePortalRouter } from "./affiliate-portal-router";
 import { shopifyRouter } from "./shopify-router";
 import { reportsRouter } from "./reports-router";
 import { inventoryExportRouter } from "./inventory-export-router";
+import { customerOrderReportRouter } from "./customer-order-report-router";
 import {
   createRetailerAllowance,
   getAllowanceOriginReport,
@@ -2237,6 +2238,8 @@ export const appRouter = router({
   reports: reportsRouter,
   // ============= INVENTORY EXPORT =============
   inventoryExport: inventoryExportRouter,
+  // ============= REPORT CLIENTE =============
+  customerOrderReport: customerOrderReportRouter,
   // ============= M11.A — COMPANIES =============
   companies: companiesRouter,
   // ============= M13.A — TIER ENGINE =============

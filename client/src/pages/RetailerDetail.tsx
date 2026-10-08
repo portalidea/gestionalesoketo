@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
@@ -81,6 +82,8 @@ import {
   XCircle,
   Shield,
   Copy,
+  Download,
+  FileText,
   Send,
 } from "lucide-react";
 import { useState, useEffect, useMemo, type FormEvent } from "react";
@@ -95,6 +98,23 @@ type WriteOffTarget = {
   maxQuantity: number;
   expirationDate: Date | null;
 };
+
+function downloadBase64File(fileBase64: string, filename: string, mimeType: string) {
+  const byteCharacters = atob(fileBase64);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let index = 0; index < byteCharacters.length; index += 1) {
+    byteNumbers[index] = byteCharacters.charCodeAt(index);
+  }
+  const blob = new Blob([new Uint8Array(byteNumbers)], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
 
 export default function RetailerDetail() {
   const [, params] = useRoute("/retailers/:id");
@@ -172,6 +192,25 @@ export default function RetailerDetail() {
   const [writeOffNotes, setWriteOffNotes] = useState("");
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("inventory");
+  const [customerReportOpen, setCustomerReportOpen] = useState(false);
+  const [customerReportFrom, setCustomerReportFrom] = useState(() => `${new Date().getFullYear()}-01-01`);
+  const [customerReportTo, setCustomerReportTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [includeRelatedProfiles, setIncludeRelatedProfiles] = useState(true);
+
+  const customerReportPdfMutation = trpc.customerOrderReport.exportPdf.useMutation({
+    onSuccess: (result) => {
+      downloadBase64File(result.fileBase64, result.filename, result.mimeType);
+      toast.success("PDF pronto", { description: `Scaricato ${result.filename}` });
+    },
+    onError: (error) => toast.error("Errore generazione PDF", { description: error.message }),
+  });
+  const customerReportXlsxMutation = trpc.customerOrderReport.exportXlsx.useMutation({
+    onSuccess: (result) => {
+      downloadBase64File(result.fileBase64, result.filename, result.mimeType);
+      toast.success("Excel pronto", { description: `Scaricato ${result.filename}` });
+    },
+    onError: (error) => toast.error("Errore generazione Excel", { description: error.message }),
+  });
 
   const writeOffMutation = trpc.stockMovements.expiryWriteOff.useMutation({
     onSuccess: async () => {
@@ -242,6 +281,13 @@ export default function RetailerDetail() {
 
   const { retailer, inventory, recentMovements, stats } = data;
   const now = Date.now();
+  const canIncludeRelatedProfiles = Boolean(retailer.vatNumber);
+  const reportInput = {
+    retailerId,
+    dateFrom: customerReportFrom,
+    dateTo: customerReportTo,
+    includeRelatedProfiles: includeRelatedProfiles && canIncludeRelatedProfiles,
+  };
 
   // ====== Aggregazione per prodotto (riga espandibile lotti) ======
   type ProductGroup = {
@@ -375,7 +421,7 @@ export default function RetailerDetail() {
             <ArrowLeft className="h-4 w-4 mr-2" />
             Torna ai Rivenditori
           </Button>
-          <div className="flex items-start justify-between">
+          <div className="flex items-start justify-between gap-4">
             <div className="flex items-start gap-4">
               <div className="h-16 w-16 rounded-lg bg-primary/20 flex items-center justify-center">
                 <Store className="h-8 w-8 text-primary" />
@@ -391,44 +437,130 @@ export default function RetailerDetail() {
                 )}
               </div>
             </div>
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                  aria-label="Elimina rivenditore"
-                >
-                  <Trash2 className="h-5 w-5" />
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Eliminare {retailer.name}?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Saranno eliminate anche{" "}
-                    <strong>{deps?.inventory ?? "?"} lotti correnti</strong>,{" "}
-                    <strong>{deps?.stockMovements ?? "?"} movimenti</strong>,{" "}
-                    <strong>{deps?.alerts ?? "?"} alert</strong> e{" "}
-                    <strong>{deps?.syncLogs ?? "?"} log di sync</strong>{" "}
-                    associati. L'operazione è irreversibile.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Annulla</AlertDialogCancel>
-                  <AlertDialogAction
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                    onClick={() =>
-                      deleteRetailerMutation.mutate({ id: retailerId })
-                    }
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setCustomerReportOpen(true)}
+                className="flex"
+              >
+                <FileText className="mr-2 h-4 w-4" />
+                Report cliente
+              </Button>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    aria-label="Elimina rivenditore"
                   >
-                    Elimina rivenditore
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+                    <Trash2 className="h-5 w-5" />
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Eliminare {retailer.name}?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Saranno eliminate anche{" "}
+                      <strong>{deps?.inventory ?? "?"} lotti correnti</strong>,{" "}
+                      <strong>{deps?.stockMovements ?? "?"} movimenti</strong>,{" "}
+                      <strong>{deps?.alerts ?? "?"} alert</strong> e{" "}
+                      <strong>{deps?.syncLogs ?? "?"} log di sync</strong>{" "}
+                      associati. L'operazione è irreversibile.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Annulla</AlertDialogCancel>
+                    <AlertDialogAction
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      onClick={() =>
+                        deleteRetailerMutation.mutate({ id: retailerId })
+                      }
+                    >
+                      Elimina rivenditore
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
           </div>
         </div>
+
+        <Dialog open={customerReportOpen} onOpenChange={setCustomerReportOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Genera report ordini cliente</DialogTitle>
+              <DialogDescription>
+                Documento destinato a {retailer.name}. Gli ordini annullati restano nell'Excel come riferimento interno, ma sono esclusi dal PDF e dai totali.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+                <p className="font-medium text-foreground">Cliente: {retailer.name}</p>
+                <p className="text-muted-foreground">{retailer.vatNumber ? `P. IVA ${retailer.vatNumber}` : "P. IVA non disponibile"}</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="customer-report-from">Dal</Label>
+                  <Input
+                    id="customer-report-from"
+                    type="date"
+                    value={customerReportFrom}
+                    max={customerReportTo}
+                    onChange={(event) => setCustomerReportFrom(event.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="customer-report-to">Al</Label>
+                  <Input
+                    id="customer-report-to"
+                    type="date"
+                    value={customerReportTo}
+                    min={customerReportFrom}
+                    max={new Date().toISOString().slice(0, 10)}
+                    onChange={(event) => setCustomerReportTo(event.target.value)}
+                  />
+                </div>
+              </div>
+              <label className="flex items-start gap-3 rounded-lg border border-border p-3 text-sm">
+                <Checkbox
+                  checked={includeRelatedProfiles && canIncludeRelatedProfiles}
+                  disabled={!canIncludeRelatedProfiles}
+                  onCheckedChange={(checked) => setIncludeRelatedProfiles(checked === true)}
+                />
+                <span>
+                  <span className="block font-medium text-foreground">Includi tutte le anagrafiche con la stessa P. IVA</span>
+                  <span className="block text-xs text-muted-foreground">
+                    {canIncludeRelatedProfiles
+                      ? "Sono incluse solo le company per cui hai già accesso staff."
+                      : "Non disponibile: questa anagrafica non ha una P. IVA valorizzata."}
+                  </span>
+                </span>
+              </label>
+            </div>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button variant="outline" onClick={() => setCustomerReportOpen(false)}>
+                Annulla
+              </Button>
+              <Button
+                variant="outline"
+                disabled={!customerReportFrom || !customerReportTo || customerReportPdfMutation.isPending || customerReportXlsxMutation.isPending}
+                onClick={() => customerReportXlsxMutation.mutate(reportInput)}
+              >
+                {customerReportXlsxMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                Excel interno
+              </Button>
+              <Button
+                className="bg-[#2D5A27] text-white hover:bg-[#254a20]"
+                disabled={!customerReportFrom || !customerReportTo || customerReportPdfMutation.isPending || customerReportXlsxMutation.isPending}
+                onClick={() => customerReportPdfMutation.mutate(reportInput)}
+              >
+                {customerReportPdfMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
+                PDF cliente
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
