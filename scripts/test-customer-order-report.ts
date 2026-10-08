@@ -1,4 +1,5 @@
 import { writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import postgres from "postgres";
 import { seedHotfixM13, TEST_IDS } from "./seed-hotfix-m13";
 
@@ -92,6 +93,7 @@ async function main() {
 
   const { getDb } = await import("../server/db");
   const {
+    aggregateItemsForCustomerPdf,
     generateCustomerOrderPdf,
     generateCustomerOrderXlsx,
     loadCustomerOrderReport,
@@ -155,6 +157,28 @@ async function main() {
   await writeFile("/tmp/customer-order-report-test.pdf", pdfBuffer);
   await writeFile("/tmp/customer-order-report-test.xlsx", xlsxBuffer);
 
+  const mergedPdfItems = aggregateItemsForCustomerPdf([
+    { id: "row-1", productName: "Base Pizza", quantity: 10, unitPriceFinal: 0, lineTotalNet: 0, creditCovered: 58.75 },
+    { id: "row-2", productName: "Base Pizza", quantity: 30, unitPriceFinal: 0, lineTotalNet: 0, creditCovered: 176.25 },
+    { id: "row-3", productName: "Base Pizza", quantity: 12, unitPriceFinal: 5.87, lineTotalNet: 70.44, creditCovered: 0 },
+  ]);
+  assert(mergedPdfItems.length === 2, "Il PDF deve unire righe dello stesso prodotto, prezzo e copertura.");
+  assert(mergedPdfItems.find((item) => item.creditCovered > 0)?.quantity === 40, "Le quantità coperte identiche devono essere sommate nel PDF.");
+  assert(mergedPdfItems.find((item) => item.creditCovered === 0)?.quantity === 12, "Le quote a pagamento devono restare separate nel PDF.");
+
+  const pdfText = execFileSync("pdftotext", ["/tmp/customer-order-report-test.pdf", "-"], { encoding: "utf8" });
+  assert(pdfText.includes("Società: TEST E-Keto Food · TEST SoKeto Srl"), "Il PDF deve usare l'intestazione società richiesta.");
+  assert(pdfText.includes("Coperto"), "Il PDF deve indicare le righe finanziate con la sola etichetta Coperto.");
+  assert(!pdfText.includes("Coperto credito"), "Il PDF non deve mostrare l'etichetta credito su due righe.");
+  assert(pdfText.includes("Le righe indicate come “Coperto” sono finanziate da credito."), "Il PDF deve mostrare la nota di copertura richiesta.");
+  const groupingPdf = Buffer.from(await generateCustomerOrderPdf({
+    ...report,
+    totals: { ...report.totals, creditCovered: 1995.36 },
+  }), "base64");
+  await writeFile("/tmp/customer-order-report-grouping-test.pdf", groupingPdf);
+  const groupingPdfText = execFileSync("pdftotext", ["/tmp/customer-order-report-grouping-test.pdf", "-"], { encoding: "utf8" });
+  assert(groupingPdfText.includes("1.995,36 €"), "Il PDF deve formattare gli importi con separatore delle migliaia italiano.");
+
   const evidence = {
     generatedAt: new Date().toISOString(),
     tests: {
@@ -165,6 +189,9 @@ async function main() {
       allowanceSummaryVisibleByType: "PASS",
       vatNumberDoesNotBypassCompanyScope: "PASS",
       staffProcedureRespectsCompanyAccess: "PASS",
+      pdfMergesEquivalentItemsAndPreservesPaymentSplit: "PASS",
+      pdfUsesRequestedCreditLabelsAndCompanyHeader: "PASS",
+      pdfUsesItalianThousandsSeparator: "PASS",
       pdfGenerated: "PASS",
       xlsxGenerated: "PASS",
     },

@@ -1,7 +1,7 @@
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import { sql } from "drizzle-orm";
-import { SOKETO_LOGO_PNG_BASE64 } from "../assets/soketoLogo";
+import { SOKETO_LOGO_BLACK_PNG_BASE64 } from "../assets/soketoLogoBlack";
 import { getDb } from "../db";
 
 export type CustomerOrderReportInput = {
@@ -58,7 +58,11 @@ export type CustomerOrderReport = {
 };
 
 const euro = (value: number) =>
-  new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(value);
+  `${new Intl.NumberFormat("it-IT", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+    useGrouping: true,
+  }).format(value)} €`;
 
 const dateIT = (date: string) => {
   const normalized = date.slice(0, 10);
@@ -82,6 +86,31 @@ const orderStatusLabel = (status: string) => ({
   delivered: "Consegnato",
   cancelled: "Annullato",
 }[status] ?? status);
+
+/**
+ * Il PDF destinato al cliente unisce soltanto le righe commercialmente
+ * identiche. Le quote coperte da credito restano distinte da quelle pagate.
+ * L'Excel interno conserva invece il dettaglio riga per riga.
+ */
+export function aggregateItemsForCustomerPdf(items: ReportItem[]): ReportItem[] {
+  const grouped = new Map<string, ReportItem>();
+
+  for (const item of items) {
+    const covered = item.creditCovered > 0;
+    const key = [item.productName, item.unitPriceFinal.toFixed(6), covered ? "covered" : "paid"].join("\u0000");
+    const existing = grouped.get(key);
+
+    if (existing) {
+      existing.quantity += item.quantity;
+      existing.lineTotalNet = Math.round((existing.lineTotalNet + item.lineTotalNet) * 100) / 100;
+      existing.creditCovered = Math.round((existing.creditCovered + item.creditCovered) * 100) / 100;
+    } else {
+      grouped.set(key, { ...item });
+    }
+  }
+
+  return Array.from(grouped.values());
+}
 
 function assertIsoDate(value: string, field: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00.000Z`))) {
@@ -328,7 +357,9 @@ export async function generateCustomerOrderPdf(report: CustomerOrderReport): Pro
     document.on("error", reject);
   });
 
-  const pageBottom = () => document.page.height - document.page.margins.bottom;
+  // Riserva la fascia footer su tutte le pagine: il numero non può sovrapporsi
+  // all'ultima riga di una tabella, nemmeno sulle pagine più dense.
+  const pageBottom = () => document.page.height - document.page.margins.bottom - 30;
   const ensureSpace = (height: number) => {
     if (document.y + height > pageBottom()) document.addPage();
   };
@@ -346,7 +377,7 @@ export async function generateCustomerOrderPdf(report: CustomerOrderReport): Pro
     document.moveDown(0.7);
   };
 
-  document.image(Buffer.from(SOKETO_LOGO_PNG_BASE64, "base64"), 42, 38, { fit: [130, 50] });
+  document.image(Buffer.from(SOKETO_LOGO_BLACK_PNG_BASE64, "base64"), 42, 38, { fit: [130, 50] });
   document.fillColor("#2D5A27").font("Helvetica-Bold").fontSize(10).text("RIEPILOGO ORDINI CLIENTE", 350, 42, { width: 203, align: "right" });
   document.fillColor("#52634D").font("Helvetica").fontSize(8).text(
     `Generato il ${dateIT(report.generatedAt)}`,
@@ -364,7 +395,7 @@ export async function generateCustomerOrderPdf(report: CustomerOrderReport): Pro
     { width: 511 },
   );
   document.fontSize(8).text(
-    `Società incluse: ${report.companies.join(" · ")}${report.customer.relatedProfilesIncluded ? " · anagrafiche collegate incluse" : ""}`,
+    `Società: ${report.companies.join(" · ")}`,
     42,
     document.y,
     { width: 511 },
@@ -420,15 +451,16 @@ export async function generateCustomerOrderPdf(report: CustomerOrderReport): Pro
   document.moveDown(0.35);
   for (const order of includedOrders) {
     const drawOrderHeader = (continues = false) => {
+      const titleY = document.y;
       document.fillColor("#2D5A27").font("Helvetica-Bold").fontSize(9).text(
         `${order.orderNumber} · ${dateIT(order.orderDate)} · ${order.companyName}${continues ? " (continua)" : ""}`,
         42,
-        document.y,
+        titleY,
         { width: 511 },
       );
-      document.fillColor("#52634D").font("Helvetica").fontSize(7).text(`Stato: ${orderStatusLabel(order.status)}`, 42, document.y, { width: 511 });
-      document.moveDown(0.25);
-      const detailHeaderY = document.y;
+      const statusY = titleY + 13;
+      document.fillColor("#52634D").font("Helvetica").fontSize(7).text(`Stato: ${orderStatusLabel(order.status)}`, 42, statusY, { width: 511 });
+      const detailHeaderY = statusY + 12;
       document.font("Helvetica-Bold").fontSize(7).fillColor("#52634D").text("Prodotto", 42, detailHeaderY, { width: 260 });
       document.text("Q.tà", 306, detailHeaderY, { width: 42, align: "right" });
       document.text("Prezzo unit.", 353, detailHeaderY, { width: 76, align: "right" });
@@ -437,10 +469,11 @@ export async function generateCustomerOrderPdf(report: CustomerOrderReport): Pro
       document.y = detailHeaderY + 13;
     };
     document.font("Helvetica").fontSize(7);
-    const firstItemHeight = Math.max(16, document.heightOfString(order.items[0]?.productName ?? "", { width: 260 }) + 2);
+    const printableItems = aggregateItemsForCustomerPdf(order.items);
+    const firstItemHeight = Math.max(16, document.heightOfString(printableItems[0]?.productName ?? "", { width: 260 }) + 2);
     ensureSpace(44 + firstItemHeight);
     drawOrderHeader();
-    for (const item of order.items) {
+    for (const item of printableItems) {
       document.font("Helvetica").fontSize(7);
       const itemHeight = Math.max(16, document.heightOfString(item.productName, { width: 260 }) + 2);
       if (document.y + itemHeight + 3 > pageBottom()) {
@@ -452,7 +485,7 @@ export async function generateCustomerOrderPdf(report: CustomerOrderReport): Pro
       document.text(String(item.quantity), 306, itemY, { width: 42, align: "right" });
       document.text(euro(item.unitPriceFinal), 353, itemY, { width: 76, align: "right" });
       document.text(euro(item.lineTotalNet), 432, itemY, { width: 60, align: "right" });
-      document.fillColor(item.creditCovered > 0 ? "#2D5A27" : "#52634D").text(item.creditCovered > 0 ? "Coperto\ncredito" : "—", 497, itemY, { width: 56, align: "center" });
+      document.fillColor(item.creditCovered > 0 ? "#2D5A27" : "#52634D").text(item.creditCovered > 0 ? "Coperto" : "—", 497, itemY, { width: 56, align: "center" });
       document.y = itemY + itemHeight;
     }
     drawRule();
@@ -477,7 +510,7 @@ export async function generateCustomerOrderPdf(report: CustomerOrderReport): Pro
 
   document.moveDown(1.2);
   document.fillColor("#52634D").font("Helvetica").fontSize(7).text(
-    "Le righe indicate come “Coperto credito” sono finanziate da credito. Gli ordini annullati non sono inclusi nel riepilogo né nei totali. Documento informativo generato dal gestionale SoKeto.",
+    "Le righe indicate come “Coperto” sono finanziate da credito. Gli ordini annullati non sono inclusi nel riepilogo né nei totali. Documento informativo generato dal gestionale SoKeto.",
     42,
     document.y,
     { width: 511 },
@@ -486,7 +519,12 @@ export async function generateCustomerOrderPdf(report: CustomerOrderReport): Pro
   const range = document.bufferedPageRange();
   for (let index = 0; index < range.count; index += 1) {
     document.switchToPage(index);
-    document.fillColor("#71806D").font("Helvetica").fontSize(7).text(`Pagina ${index + 1} di ${range.count}`, 42, 780, { width: 511, align: "right" });
+    document.fillColor("#71806D").font("Helvetica").fontSize(7).text(
+      `Pagina ${index + 1} di ${range.count}`,
+      42,
+      document.page.height - document.page.margins.bottom - 16,
+      { width: 511, align: "right" },
+    );
   }
   document.end();
   return (await done).toString("base64");
