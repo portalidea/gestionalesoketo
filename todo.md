@@ -278,7 +278,8 @@
 - [x] Aggiungere test isolato: ordine/modifica oltre giacenza, senza allocazione e senza variazione inventario
 - [x] Mantenere temporaneamente catalogPortal, retailerCheckout e retailerOrders per autorizzazione esplicita
 - [x] Aggiungere `console.warn("[LEGACY_CALL]", procedura, userId, retailerId, timestamp)` a ogni procedura legacy
-- [ ] Dopo 14 giorni dal deploy (**Vercel Success 2026-09-25; controllo dal 2026-10-09**), cercare `[LEGACY_CALL]` nei log Vercel: zero occorrenze → rimuovere catalogPortal, retailerCheckout e retailerOrders
+- [x] Aggiungere audit persistente best-effort `legacy_api_calls` a ogni procedura legacy e testare l'assenza di blocco dopo errore audit
+- [ ] Dopo 14 giorni dal deploy dell'audit persistente, eseguire: `SELECT procedure, count(*) FROM legacy_api_calls WHERE "createdAt" >= '<timestamp deploy>' GROUP BY procedure ORDER BY procedure;`. Zero righe → rimuovere catalogPortal, retailerCheckout e retailerOrders e migrare il test FEFO al router self-service.
 
 
 ## DDT — validazione derivata da dati correnti

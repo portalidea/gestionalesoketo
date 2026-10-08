@@ -792,6 +792,29 @@ export type SyncLog = typeof syncLogs.$inferSelect;
 export type InsertSyncLog = typeof syncLogs.$inferInsert;
 
 /**
+ * Audit persistente dei namespace tRPC deprecati.
+ * I riferimenti restano consultabili anche se utente o retailer vengono rimossi.
+ */
+export const legacyApiCalls = pgTable(
+  "legacy_api_calls",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    procedure: varchar("procedure", { length: 100 }).notNull(),
+    userId: uuid("userId").references(() => users.id, { onDelete: "set null" }),
+    retailerId: uuid("retailerId").references(() => retailers.id, { onDelete: "set null" }),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("legacy_api_calls_procedure_created_at_idx").on(t.procedure, t.createdAt),
+    index("legacy_api_calls_created_at_idx").on(t.createdAt),
+    check("legacy_api_calls_procedure_nonblank", sql`length(btrim(${t.procedure})) > 0`),
+  ],
+);
+
+export type LegacyApiCall = typeof legacyApiCalls.$inferSelect;
+export type InsertLegacyApiCall = typeof legacyApiCalls.$inferInsert;
+
+/**
  * Pricing packages — pacchetti commerciali (Phase B M3).
  * Ogni retailer è assegnato a un pacchetto che determina lo sconto fisso
  * applicato al prezzo base di tutti i prodotti per la generazione proforma.
