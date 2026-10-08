@@ -717,6 +717,25 @@ export default function RetailerDetail() {
           </Card>
         )}
 
+        {allowanceQuery.isSuccess && !allowanceQuery.data?.allowance && (
+          <Card className="border-dashed border-muted-foreground/30 bg-muted/20">
+            <CardHeader>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle>Plafond prodotti incluso</CardTitle>
+                <Badge variant="secondary">Non configurato</Badge>
+              </div>
+              <CardDescription>
+                Nessun plafond attivo o storico è associato a questo rivenditore.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                Gli ordini seguono il pacchetto commerciale assegnato finché non viene attivato un plafond.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Card Affiliato */}
         <Card className="border-border bg-card">
           <CardHeader>
