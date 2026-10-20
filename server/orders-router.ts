@@ -12,7 +12,7 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { staffProcedure, router } from "./_core/trpc";
+import { staffProcedure, writerProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
 import {
   orders,
@@ -26,9 +26,10 @@ import {
 import { eq, desc, and, gte, lte, sql, inArray, asc, gt } from "drizzle-orm";
 import { calculateOrderPricing, calculateEventOrderPricing, type PricingItemInput } from "./pricing";
 import { createFicProformaForCompany, getRetailerFicClientId } from "./fic-integration";
-import { transitionOrder, registerPayment, cancelPayment, modifyOrderItems, type OrderStatus, type PaymentStatus } from "./services/orderStateMachine";
+import { registerPayment, cancelPayment, modifyOrderItems, type OrderStatus } from "./services/orderStateMachine";
 import { getAvailableStock } from "./services/stockService";
 import { uuidSchema } from "../shared/schemas";
+import { SOKETO_SRL_INTERCOMPANY_RETAILER_ID } from "../shared/const";
 import { cancelOrderWithTransferReversal } from "./services/orderTransferReversal";
 import { sendOrderStatusEmail } from "./services/orderEmailService";
 import { voidCommissionForOrder } from "./services/commissionService";
@@ -45,6 +46,144 @@ import {
   getIntercompanySourceBatches,
   getManualIntercompanySourceBatches,
 } from "./services/intercompanyOrderTransfer";
+import {
+  executeOrderFulfillment,
+  previewOrderDelivery,
+  type FulfillmentTarget,
+} from "./services/orderConfirmDelivery";
+
+/**
+ * Effetti esterni post-commit della consegna: mai nella transazione di stock.
+ * Un errore FiC resta recuperabile tramite retry e non annulla stock/stati.
+ */
+async function ensureFicDocumentsAfterFulfillment(input: { orderId: string; companyId: string }) {
+  const db = await getDb();
+  if (!db) throw new Error("DB non disponibile");
+
+  const [order] = await db
+    .select({
+      id: orders.id,
+      companyId: orders.companyId,
+      retailerId: orders.retailerId,
+      orderNumber: orders.orderNumber,
+      status: orders.status,
+      paymentStatus: orders.paymentStatus,
+      ficProformaId: orders.ficProformaId,
+      ficInvoiceId: orders.ficInvoiceId,
+      notesInternal: orders.notesInternal,
+    })
+    .from(orders)
+    .where(and(eq(orders.id, input.orderId), eq(orders.companyId, input.companyId)))
+    .limit(1);
+  if (!order) throw new Error("Ordine non trovato dopo il commit");
+  if (!order.retailerId) return { attempted: false, proformaCreated: false, invoiceCreated: false, error: null as string | null };
+
+  try {
+    let ficProformaId = order.ficProformaId;
+    let proformaCreated = false;
+    if (!ficProformaId) {
+      const ficClientId = await getRetailerFicClientId(order.retailerId, order.companyId);
+      if (!ficClientId) throw new Error("Rivenditore non collegato a un cliente Fatture in Cloud per questa company.");
+      const items = await db
+        .select({
+          productName: orderItems.productName,
+          productSku: orderItems.productSku,
+          quantity: orderItems.quantity,
+          unitPriceFinal: orderItems.unitPriceFinal,
+          vatRate: orderItems.vatRate,
+        })
+        .from(orderItems)
+        .where(eq(orderItems.orderId, order.id));
+      const proforma = await createFicProformaForCompany(order.companyId, {
+        ficClientId,
+        date: new Date().toISOString().slice(0, 10),
+        orderNumber: order.orderNumber ?? undefined,
+        notesInternal: `Ordine ${order.orderNumber ?? order.id}${order.notesInternal ? ` — ${order.notesInternal}` : ""}`,
+        items: items.map((item) => ({
+          code: item.productSku,
+          name: item.productName,
+          description: item.productName,
+          qty: item.quantity,
+          unitPriceFinal: item.unitPriceFinal,
+          vatRate: item.vatRate,
+        })),
+      });
+      ficProformaId = proforma.id;
+      proformaCreated = true;
+      await db.update(orders).set({
+        ficProformaId: proforma.id,
+        ficProformaNumber: proforma.number,
+        updatedAt: new Date(),
+      }).where(eq(orders.id, order.id));
+    }
+
+    let invoiceCreated = false;
+    if (order.status === "delivered" && order.paymentStatus === "paid" && !order.ficInvoiceId && ficProformaId) {
+      const invoice = await ficDocService.transformProformaToInvoiceForCompany(order.companyId, ficProformaId);
+      invoiceCreated = true;
+      await db.update(orders).set({
+        ficInvoiceId: invoice.ficInvoiceId,
+        ficInvoiceNumber: invoice.ficInvoiceNumber,
+        updatedAt: new Date(),
+      }).where(eq(orders.id, order.id));
+    }
+    return { attempted: true, proformaCreated, invoiceCreated, error: null as string | null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Errore FiC non identificato";
+    console.error(`[orders.ensureFicDocumentsAfterFulfillment] order=${input.orderId}: ${message}`);
+    return { attempted: true, proformaCreated: false, invoiceCreated: false, error: message };
+  }
+}
+
+type FicDocumentAttempt = {
+  attempted: boolean;
+  proformaCreated: boolean;
+  invoiceCreated: boolean;
+  error: string | null;
+};
+
+type PostCommitDependencies = {
+  ensureFicDocuments?: (input: { orderId: string; companyId: string }) => Promise<FicDocumentAttempt>;
+  sendDeliveryEmail?: typeof sendOrderStatusEmail;
+};
+
+/**
+ * Orchestratore del percorso di evasione. Le dipendenze opzionali servono
+ * esclusivamente ai test isolati: la produzione usa sempre FiC ed email reali.
+ */
+export async function fulfillAndRunPostCommit(input: {
+  orderId: string;
+  companyId: string;
+  actorUserId: string;
+  targetStatus: FulfillmentTarget;
+  source: "manual_step" | "delivery_confirm";
+  requirePayment: boolean;
+}, dependencies: PostCommitDependencies = {}) {
+  const result = await executeOrderFulfillment(input);
+  const ensureFicDocuments = dependencies.ensureFicDocuments ?? ensureFicDocumentsAfterFulfillment;
+  const sendDeliveryEmail = dependencies.sendDeliveryEmail ?? sendOrderStatusEmail;
+  const fic = await ensureFicDocuments({ orderId: input.orderId, companyId: input.companyId });
+  if (!result.idempotent && result.newStatus === "delivered" && result.retailerId) {
+    sendDeliveryEmail({
+      orderId: result.orderId,
+      orderNumber: result.orderNumber ?? "",
+      retailerId: result.retailerId,
+      newStatus: "delivered",
+      previousStatus: result.previousStatus,
+      ficInvoiceNumber: undefined,
+    }).catch((error) => console.error(`[orders.confirmOrderDelivery] email failed: ${error.message}`));
+  }
+  return { ...result, fic };
+}
+
+/** Il retry è volutamente limitato ai documenti FiC: non tocca stock, stati o email. */
+export async function retryFicDocumentsAfterFulfillment(
+  input: { orderId: string; companyId: string },
+  dependencies: Pick<PostCommitDependencies, "ensureFicDocuments"> = {},
+) {
+  const ensureFicDocuments = dependencies.ensureFicDocuments ?? ensureFicDocumentsAfterFulfillment;
+  return ensureFicDocuments(input);
+}
 
 // --- Zod Schemas ---
 
@@ -63,8 +202,8 @@ const statusEnum = z.enum([
 
 const paymentStatusEnum = z.enum(["unpaid", "paid", "refunded"]);
 
-// FSM: actual state machine is in server/services/orderStateMachine.ts
-// Legacy updateStatus procedure removed — all transitions go through transitionOrder()
+// FSM: gli step di evasione passano da orderConfirmDelivery; payment e cancel
+// mantengono i rispettivi servizi dedicati.
 
 // --- Router ---
 
@@ -238,7 +377,11 @@ export const ordersRouter = router({
         .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
         .where(eq(orderItems.orderId, input.id))
         .orderBy(orderItems.createdAt);
-      return { ...order, items };
+      return {
+        ...order,
+        isInterCompanyOrder: order.retailerId === SOKETO_SRL_INTERCOMPANY_RETAILER_ID,
+        items,
+      };
     }),
 
   /**
@@ -752,7 +895,8 @@ export const ordersRouter = router({
     }),
 
   // [REMOVED] updateStatus — replaced by specific procedures (confirmPayment, approveForShipping, etc.)
-  // All transitions now go through transitionOrder() in orderStateMachine.ts
+  // Le transizioni di pagamento mantengono il servizio dedicato; gli step di
+  // evasione sono esposti più sotto dal percorso atomico comune.
 
   /**
    * 7. Genera proforma FiC e salva riferimento
@@ -1306,151 +1450,66 @@ export const ordersRouter = router({
       });
     }),
 
-  /**
-   * 11. Start transfer (pending → transferring)
-   * Validates all items have batch assigned.
-   * After transition, decrement stock + create TRANSFER movements.
-   */
-  startTransfer: staffProcedure
+  /** Preview read-only dei lotti che il percorso composto allocherebbe FEFO. */
+  previewOrderDelivery: staffProcedure
     .input(z.object({ orderId: uuidSchema }))
-    .mutation(async ({ input, ctx }) => {
-      // 1. Transition state (validates batch assignment)
-      const result = await transitionOrder({
-        orderId: input.orderId,
-        toStatus: "transferring",
-        actorUserId: ctx.user!.id,
-      });
-
-      // 2. Execute stock movements for each order item with batch
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
-
-      // Get order retailerId + orderNumber
-      const [order] = await db
-        .select({ retailerId: orders.retailerId, orderNumber: orders.orderNumber })
-        .from(orders)
-        .where(eq(orders.id, input.orderId))
-        .limit(1);
-
-      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
-
-      // Get all items with batch assigned + piecesPerUnit from products
-      const items = await db
-        .select({
-          id: orderItems.id,
-          productId: orderItems.productId,
-          batchId: orderItems.batchId,
-          quantity: orderItems.quantity,
-          productName: orderItems.productName,
-          piecesPerUnit: products.piecesPerUnit,
-        })
-        .from(orderItems)
-        .leftJoin(products, eq(orderItems.productId, products.id))
-        .where(eq(orderItems.orderId, input.orderId));
-
-      // Import transferBatchToRetailer from db.ts
-      const { transferBatchToRetailer } = await import("./db");
-
-      // Execute TRANSFER for each item with batch
-      const transferResults: string[] = [];
-      for (const item of items) {
-        if (!item.batchId) continue; // should not happen (validated by state machine)
-        // CRITICO: quantity è in confezioni, inventoryByBatch è in pezzi singoli
-        const ppu = item.piecesPerUnit ?? 1;
-        const piecesToTransfer = item.quantity * ppu;
-        try {
-          await transferBatchToRetailer({
-            productId: item.productId,
-            batchId: item.batchId,
-            retailerId: order.retailerId!,
-            quantity: piecesToTransfer,
-            notes: `Ordine ${input.orderId} — ${item.quantity} conf. × ${ppu} = ${piecesToTransfer} pezzi`,
-            createdBy: ctx.user!.id,
-            companyId: ctx.activeCompanyId, // M11.A
-            orderId: input.orderId,
-          });
-          transferResults.push(`${item.productName}: ${item.quantity} conf. (${piecesToTransfer} pezzi) trasferite`);
-        } catch (e: any) {
-          console.error(`[startTransfer] TRANSFER failed for item ${item.id}: ${e.message}`);
-          // Don't block the transition — log and continue
-          // Admin can manually fix stock later
-          transferResults.push(`${item.productName}: ERRORE — ${e.message}`);
-        }
-      }
-
-      console.log(`[startTransfer] orderId=${input.orderId} transfers completed:`, transferResults);
-
-      // ============= M11.D: Inter-company stock loading =============
-      // If this order targets retailer "Soketo Srl" (inter-company transfer),
-      // automatically load the same stock into SoKeto company's central warehouse.
-      const { isInterCompanyOrder, loadInterCompanyStock } = await import("./services/interCompanyTransfer");
-      let interCompanyResult: Awaited<ReturnType<typeof loadInterCompanyStock>> | null = null;
-
-      if (isInterCompanyOrder(order.retailerId)) {
-        const interCompanyItems = items
-          .filter((it) => it.batchId)
-          .map((it) => ({
-            productId: it.productId,
-            batchId: it.batchId!,
-            quantity: it.quantity * (it.piecesPerUnit ?? 1), // pieces
-            productName: it.productName ?? "Prodotto",
-          }));
-
-        try {
-          interCompanyResult = await loadInterCompanyStock({
-            orderId: input.orderId,
-            orderNumber: order.orderNumber,
-            items: interCompanyItems,
-            createdBy: ctx.user!.id,
-          });
-          console.log(
-            `[startTransfer][M11.D] Inter-company load completed:`,
-            interCompanyResult.loaded.map((l) => `${l.productName}: ${l.quantity} pz (batch ${l.batchNumber})`),
-          );
-          if (interCompanyResult.warnings.length > 0) {
-            console.warn(`[startTransfer][M11.D] Warnings:`, interCompanyResult.warnings);
-          }
-        } catch (e: any) {
-          // M11.D failure should NOT block the E-Keto transfer (already executed above)
-          // but we log prominently for manual reconciliation
-          console.error(`[startTransfer][M11.D] CRITICAL: Inter-company load FAILED for order ${input.orderId}: ${e.message}`);
-          console.error(e.stack);
-        }
-      }
-
-      return {
-        ...result,
-        transfers: transferResults,
-        ...(interCompanyResult && { interCompanyLoad: interCompanyResult }),
-      };
-    }),
+    .query(({ input, ctx }) => previewOrderDelivery({ orderId: input.orderId, companyId: ctx.activeCompanyId })),
 
   /**
-   * 12. Mark shipped (transferring → shipped)
+   * Percorso unico: trasferimento, eventuali etichette e consegna in una sola
+   * transazione. È volutamente escluso per l'ordine M11.D inter-company.
    */
-  markShipped: staffProcedure
+  confirmOrderDelivery: writerProcedure
     .input(z.object({ orderId: uuidSchema }))
-    .mutation(async ({ input, ctx }) => {
-      return transitionOrder({
-        orderId: input.orderId,
-        toStatus: "shipped",
-        actorUserId: ctx.user!.id,
-      });
-    }),
+    .mutation(({ input, ctx }) => fulfillAndRunPostCommit({
+      orderId: input.orderId,
+      companyId: ctx.activeCompanyId,
+      actorUserId: ctx.user!.id,
+      targetStatus: "delivered",
+      source: "delivery_confirm",
+      requirePayment: true,
+    })),
 
-  /**
-   * 13. Mark delivered (shipped → delivered)
-   * Triggers proforma → invoice transform on FiC.
-   */
-  markDelivered: staffProcedure
+  /** Step manuale, ora atomico come il percorso composto. */
+  startTransfer: writerProcedure
     .input(z.object({ orderId: uuidSchema }))
-    .mutation(async ({ input, ctx }) => {
-      return transitionOrder({
-        orderId: input.orderId,
-        toStatus: "delivered",
-        actorUserId: ctx.user!.id,
-      });
-    }),
+    .mutation(({ input, ctx }) => fulfillAndRunPostCommit({
+      orderId: input.orderId,
+      companyId: ctx.activeCompanyId,
+      actorUserId: ctx.user!.id,
+      targetStatus: "transferring",
+      source: "manual_step",
+      requirePayment: false,
+    })),
+
+  /** Step manuale, ora atomico anche per il consumo etichette. */
+  markShipped: writerProcedure
+    .input(z.object({ orderId: uuidSchema }))
+    .mutation(({ input, ctx }) => fulfillAndRunPostCommit({
+      orderId: input.orderId,
+      companyId: ctx.activeCompanyId,
+      actorUserId: ctx.user!.id,
+      targetStatus: "shipped",
+      source: "manual_step",
+      requirePayment: false,
+    })),
+
+  /** Step manuale di consegna; genera/riprova i documenti FiC dopo il commit. */
+  markDelivered: writerProcedure
+    .input(z.object({ orderId: uuidSchema }))
+    .mutation(({ input, ctx }) => fulfillAndRunPostCommit({
+      orderId: input.orderId,
+      companyId: ctx.activeCompanyId,
+      actorUserId: ctx.user!.id,
+      targetStatus: "delivered",
+      source: "manual_step",
+      requirePayment: false,
+    })),
+
+  /** Riprova il solo side effect FiC, senza toccare giacenze o stati. */
+  retryFicDocuments: writerProcedure
+    .input(z.object({ orderId: uuidSchema }))
+    .mutation(({ input, ctx }) => retryFicDocumentsAfterFulfillment({ orderId: input.orderId, companyId: ctx.activeCompanyId })),
 
   /**
    * 14. Cancel order (from pending/transferring)

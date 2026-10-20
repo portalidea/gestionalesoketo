@@ -11,6 +11,7 @@
  */
 import axios from "axios";
 import {
+  getActiveFicConnection,
   getValidFicAccessToken,
   getFicVatTypes,
   getFicPaymentMethods,
@@ -337,12 +338,35 @@ export async function modifyProforma(
 export async function transformProformaToInvoice(
   ficProformaId: number,
 ): Promise<TransformResult> {
+  const { accessToken, companyId } = await getValidFicAccessToken();
+  return transformProformaToInvoiceWithCredentials(ficProformaId, accessToken, companyId);
+}
+
+/**
+ * Variante multi-company. Il nuovo flusso di consegna la usa per evitare che
+ * la conversione di una proforma E-Keto ricada sulla connessione legacy SoKeto.
+ */
+export async function transformProformaToInvoiceForCompany(
+  companyId: string,
+  ficProformaId: number,
+): Promise<TransformResult> {
+  const connection = await getActiveFicConnection(companyId);
+  return transformProformaToInvoiceWithCredentials(
+    ficProformaId,
+    connection.accessToken,
+    connection.ficCompanyId,
+  );
+}
+
+async function transformProformaToInvoiceWithCredentials(
+  ficProformaId: number,
+  accessToken: string,
+  companyId: number,
+): Promise<TransformResult> {
   const t0 = Date.now();
   console.log(
     `[ficDocService.transformToInvoice] start proformaId=${ficProformaId}`,
   );
-
-  const { accessToken, companyId } = await getValidFicAccessToken();
 
   try {
     // Step 1: GET transform preview

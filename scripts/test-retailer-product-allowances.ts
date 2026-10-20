@@ -51,6 +51,7 @@ async function main() {
     WHERE "allowanceId" IN (${ids.allowance}, ${ids.investorAllowance})
        OR "orderId" IN (SELECT id FROM orders WHERE "createdBy" IN (${ids.portalUser}, ${ids.otherPortalUser}))
   `;
+  await sql`DELETE FROM order_status_events WHERE "orderId" IN (SELECT id FROM orders WHERE "createdBy" IN (${ids.portalUser}, ${ids.otherPortalUser}))`;
   await sql`DELETE FROM "orderItems" WHERE "orderId" IN (SELECT id FROM orders WHERE "createdBy" IN (${ids.portalUser}, ${ids.otherPortalUser}))`;
   await sql`DELETE FROM orders WHERE "createdBy" IN (${ids.portalUser}, ${ids.otherPortalUser})`;
   await sql`DELETE FROM retailer_allowances WHERE id IN (${ids.allowance}, ${ids.investorAllowance})`;
@@ -353,6 +354,7 @@ async function main() {
     WHERE "allowanceId" IN (${ids.allowance}, ${ids.investorAllowance})
        OR "orderId" IN (SELECT id FROM orders WHERE "createdBy" IN (${ids.portalUser}, ${ids.otherPortalUser}))
   `;
+  await sql`DELETE FROM order_status_events WHERE "orderId" IN (SELECT id FROM orders WHERE "createdBy" IN (${ids.portalUser}, ${ids.otherPortalUser}))`;
   await sql`DELETE FROM "orderItems" WHERE "orderId" IN (SELECT id FROM orders WHERE "createdBy" IN (${ids.portalUser}, ${ids.otherPortalUser}))`;
   await sql`DELETE FROM orders WHERE "createdBy" IN (${ids.portalUser}, ${ids.otherPortalUser})`;
   await sql`DELETE FROM retailer_allowances WHERE id IN (${ids.allowance}, ${ids.investorAllowance})`;

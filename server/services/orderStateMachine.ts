@@ -12,7 +12,7 @@
 import { TRPCError } from "@trpc/server";
 import { eq, and, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { orders, orderItems, retailers, products, productBatches } from "../../drizzle/schema";
+import { orders, orderItems, orderStatusEvents, retailers, products, productBatches } from "../../drizzle/schema";
 import * as ficDocService from "./ficDocumentService";
 import { sendOrderStatusEmail } from "./orderEmailService";
 import { allocateBatchesSelectively } from "./selectiveFefoAllocation";
@@ -302,6 +302,14 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
   }
 
   await db.update(orders).set(updateData).where(eq(orders.id, orderId));
+  await db.insert(orderStatusEvents).values({
+    orderId,
+    companyId: order.companyId,
+    fromStatus: currentStatus,
+    toStatus,
+    source: "manual_step",
+    actorUserId,
+  });
 
   // 5. Send email notification (async, don't block)
   sendOrderStatusEmail({
