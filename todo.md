@@ -313,3 +313,8 @@
 
 ## Backlog plafond
 - [ ] Rendere configurabile l'importo iniziale del `restaurant_package`, oggi fissato a € 1.000 nel servizio.
+
+## Ordini — consegna atomica e M11.D
+- [x] Sostituire `startTransfer` parziale con un servizio transazionale comune per allocazione FEFO, trasferimento, etichette e step di consegna.
+- [x] Aggiungere preview lotti e pulsante “Segna come consegnato” per ordini pagati, con storico append-only e retry FiC post-commit.
+- [ ] Rimuovere il codice morto M11.D (`isInterCompanyOrder` / `loadInterCompanyStock`) e il suo consumo etichette/carico scollegato; fino ad allora gli ordini inter-company restano esclusi fail-closed dalla consegna composta.

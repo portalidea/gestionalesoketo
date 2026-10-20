@@ -433,10 +433,15 @@ export default function OrderDetail() {
   const [editItems, setEditItems] = useState<Array<{ productId: string; quantity: number; unitPrice: number; vatRate: number }>>([]);
   const [releaseTermsOpen, setReleaseTermsOpen] = useState(false);
   const [releaseTermsReason, setReleaseTermsReason] = useState("");
+  const [confirmDeliveryOpen, setConfirmDeliveryOpen] = useState(false);
 
   const orderQuery = trpc.orders.getById.useQuery(
     { id: params.id ?? "" },
     { enabled: !!params.id }
+  );
+  const deliveryPreview = trpc.orders.previewOrderDelivery.useQuery(
+    { orderId: params.id ?? "" },
+    { enabled: confirmDeliveryOpen && !!params.id },
   );
 
   // Fulfillment mutations
@@ -460,6 +465,26 @@ export default function OrderDetail() {
   });
   const markDelivered = trpc.orders.markDelivered.useMutation({
     onSuccess: () => { toast.success("Ordine consegnato"); invalidateOrder(); },
+    onError: (err) => toast.error(err.message),
+  });
+  const confirmOrderDelivery = trpc.orders.confirmOrderDelivery.useMutation({
+    onSuccess: (data) => {
+      setConfirmDeliveryOpen(false);
+      if (data.fic.error) {
+        toast.warning("Consegna registrata, ma documento FiC non generato: usa Riprova.");
+      } else {
+        toast.success("Trasferimento, spedizione e consegna registrati.");
+      }
+      invalidateOrder();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const retryFicDocuments = trpc.orders.retryFicDocuments.useMutation({
+    onSuccess: (data) => {
+      if (data.error) toast.error(`Documento FiC non generato: ${data.error}`);
+      else toast.success("Documento FiC generato correttamente.");
+      invalidateOrder();
+    },
     onError: (err) => toast.error(err.message),
   });
   const cancelOrder = trpc.orders.cancelOrder.useMutation({
@@ -532,6 +557,8 @@ export default function OrderDetail() {
     startTransfer,
     markShipped,
     markDelivered,
+    confirmOrderDelivery,
+    retryFicDocuments,
     cancelOrder,
   };
 
@@ -580,6 +607,14 @@ export default function OrderDetail() {
   const isCancelled = order.status === "cancelled";
   const isDelivered = order.status === "delivered";
   const canEditBatches = !isCancelled && !isDelivered;
+  const canConfirmDelivery = !order.eventType
+    && !order.isInterCompanyOrder
+    && !isCancelled
+    && !isDelivered
+    && order.paymentStatus === "paid";
+  const ficDocumentMissing = isDelivered
+    && order.paymentStatus === "paid"
+    && (!order.ficProformaId || !order.ficInvoiceId);
   const hasLockedProspectCommercialTerms = Boolean(order.prospectCommercialTermsId && !order.prospectCommercialTermsReleasedAt);
   const canEditItems = order.status === "pending" && !hasLockedProspectCommercialTerms;
   const paymentStatus = (order as any).paymentStatus ?? "unpaid";
@@ -1128,6 +1163,106 @@ export default function OrderDetail() {
             <CardTitle className="text-base">Azioni</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
+            {ficDocumentMissing && (
+              <Alert variant="destructive" className="border-amber-400 bg-amber-50 text-amber-950">
+                <AlertTriangle className="h-4 w-4 text-amber-700" />
+                <AlertTitle>Documento FiC non generato</AlertTitle>
+                <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+                  <span>La consegna è registrata, ma proforma o fattura non risultano disponibili in Fatture in Cloud.</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={retryFicDocuments.isPending}
+                    onClick={() => retryFicDocuments.mutate({ orderId: order.id })}
+                  >
+                    {retryFicDocuments.isPending ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
+                    Riprova
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {canConfirmDelivery && (
+              <Dialog open={confirmDeliveryOpen} onOpenChange={setConfirmDeliveryOpen}>
+                <Button
+                  type="button"
+                  className="w-full justify-start gap-2 bg-emerald-700 text-white hover:bg-emerald-800"
+                  disabled={isAnyMutationPending}
+                  onClick={() => setConfirmDeliveryOpen(true)}
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  Segna come consegnato
+                </Button>
+                <DialogContent className="max-w-2xl">
+                  <DialogHeader>
+                    <DialogTitle>Confermi la consegna dell’ordine?</DialogTitle>
+                    <DialogDescription>
+                      Verranno registrati, in una sola operazione, trasferimento, spedizione e consegna. Gli step già completati saranno saltati.
+                    </DialogDescription>
+                  </DialogHeader>
+
+                  {deliveryPreview.isLoading && (
+                    <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Verifica lotti FEFO in corso…
+                    </div>
+                  )}
+                  {deliveryPreview.data?.canConfirm && (
+                    <div className="max-h-72 overflow-y-auto rounded-md border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Prodotto</TableHead>
+                            <TableHead>Lotto</TableHead>
+                            <TableHead>Scadenza</TableHead>
+                            <TableHead className="text-right">Quantità</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {deliveryPreview.data.allocations.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={4} className="py-4 text-center text-sm text-muted-foreground">
+                                Nessun lotto da allocare: il trasferimento è già stato registrato.
+                              </TableCell>
+                            </TableRow>
+                          ) : deliveryPreview.data.allocations.map((allocation) => (
+                            <TableRow key={`${allocation.sourceItemId}-${allocation.batchId}`}>
+                              <TableCell><span className="font-medium">{allocation.productName}</span><span className="ml-1 text-xs text-muted-foreground">{allocation.productSku}</span></TableCell>
+                              <TableCell className="font-mono text-xs">{allocation.batchNumber}</TableCell>
+                              <TableCell>{allocation.expirationDate}</TableCell>
+                              <TableCell className="text-right tabular-nums">{allocation.quantityPackages} conf. · {allocation.quantityPieces} pz</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                  {deliveryPreview.data && !deliveryPreview.data.canConfirm && (
+                    <Alert variant="destructive">
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertTitle>Consegna non disponibile</AlertTitle>
+                      <AlertDescription>{deliveryPreview.data.reason}</AlertDescription>
+                    </Alert>
+                  )}
+                  {deliveryPreview.isError && (
+                    <Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertDescription>{deliveryPreview.error.message}</AlertDescription></Alert>
+                  )}
+
+                  <DialogFooter>
+                    <Button type="button" variant="outline" onClick={() => setConfirmDeliveryOpen(false)}>Annulla</Button>
+                    <Button
+                      type="button"
+                      disabled={!deliveryPreview.data?.canConfirm || confirmOrderDelivery.isPending}
+                      onClick={() => confirmOrderDelivery.mutate({ orderId: order.id })}
+                    >
+                      {confirmOrderDelivery.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Procedi
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            )}
+
             {/* Transizioni status via state machine */}
             {transitions.map((t) => {
               if (t.mutation === "cancelOrder") {

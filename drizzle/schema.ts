@@ -1117,6 +1117,38 @@ export type Order = typeof orders.$inferSelect;
 export type InsertOrder = typeof orders.$inferInsert;
 
 /**
+ * Storico append-only delle transizioni di evasione. I timestamp correnti
+ * restano su orders; questa tabella attribuisce le nuove transizioni a utente
+ * e origine (passaggio manuale o consegna composta).
+ */
+export const orderStatusEvents = pgTable(
+  "order_status_events",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    orderId: uuid("orderId")
+      .notNull()
+      .references(() => orders.id, { onDelete: "restrict" }),
+    companyId: uuid("companyId")
+      .notNull()
+      .references(() => companies.id, { onDelete: "restrict" }),
+    fromStatus: varchar("fromStatus", { length: 20 }).notNull(),
+    toStatus: varchar("toStatus", { length: 20 }).notNull(),
+    source: varchar("source", { length: 32 }).notNull(),
+    actorUserId: uuid("actorUserId")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("order_status_events_order_created_idx").on(t.orderId, t.createdAt),
+    index("order_status_events_company_created_idx").on(t.companyId, t.createdAt),
+  ],
+);
+
+export type OrderStatusEvent = typeof orderStatusEvents.$inferSelect;
+export type InsertOrderStatusEvent = typeof orderStatusEvents.$inferInsert;
+
+/**
  * Order items — righe ordine (M6.1).
  * Snapshot di prezzo al momento dell'ordine per immutabilità.
  */

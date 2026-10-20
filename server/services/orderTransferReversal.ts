@@ -5,6 +5,7 @@ import {
   inventoryByBatch,
   locations,
   orderItems,
+  orderStatusEvents,
   orders,
   products,
   stockMovements,
@@ -269,6 +270,15 @@ export async function cancelOrderWithTransferReversal(input: {
         updatedAt: new Date(),
       })
       .where(eq(orders.id, order.id));
+
+    await tx.insert(orderStatusEvents).values({
+      orderId: order.id,
+      companyId: order.companyId,
+      fromStatus: previousStatus,
+      toStatus: "cancelled",
+      source: "manual_step",
+      actorUserId: input.actorUserId,
+    });
 
     return {
       orderId: order.id,

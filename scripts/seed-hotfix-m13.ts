@@ -39,6 +39,8 @@ export async function seedHotfixM13() {
     await sql.begin(async (tx) => {
       // The test namespace is deterministic. Removing it first makes the seed idempotent.
       await tx`DELETE FROM "stockMovements" WHERE "companyId" IN (${id.originCompany}, ${id.soketoCompany})`;
+      await tx`DELETE FROM order_status_events WHERE "companyId" IN (${id.originCompany}, ${id.soketoCompany})`;
+      await tx`DELETE FROM "labelMovements" WHERE "sourceOrderId" IN (SELECT id FROM orders WHERE "retailerId" IN (${id.normalRetailer}, ${id.interCompanyRetailer}))`;
       await tx`DELETE FROM "orderItems" WHERE "orderId" IN (SELECT id FROM orders WHERE "retailerId" IN (${id.normalRetailer}, ${id.interCompanyRetailer}))`;
       await tx`DELETE FROM orders WHERE "retailerId" IN (${id.normalRetailer}, ${id.interCompanyRetailer})`;
       await tx`DELETE FROM "orderItems" WHERE "orderId" IN (${id.orderIntact}, ${id.orderPartial}, ${id.orderDouble}, ${id.orderConcurrent}, ${id.orderIntercompany}, ${id.orderPreexistingStock})`;
