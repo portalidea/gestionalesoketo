@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import {
+  companies,
   inventoryByBatch,
   labelMovements,
   locations,
@@ -12,7 +13,11 @@ import {
   retailers,
   stockMovements,
 } from "../../drizzle/schema";
-import { SOKETO_SRL_INTERCOMPANY_RETAILER_ID } from "../../shared/const";
+import {
+  EKETO_COMPANY_ID,
+  SOKETO_COMPANY_ID,
+  SOKETO_SRL_INTERCOMPANY_RETAILER_ID,
+} from "../../shared/const";
 import { getDb } from "../db";
 import type { OrderStatus } from "./orderStateMachine";
 
@@ -79,6 +84,35 @@ function compareAllocations(a: TransferAllocation, b: TransferAllocation) {
     || a.sourceItemId.localeCompare(b.sourceItemId);
 }
 
+function getCounterpartyCompanyId(companyId: string) {
+  if (companyId === EKETO_COMPANY_ID) return SOKETO_COMPANY_ID;
+  if (companyId === SOKETO_COMPANY_ID) return EKETO_COMPANY_ID;
+  return null;
+}
+
+function availabilityError(input: {
+  productName: string;
+  requiredPieces: number;
+  availableCurrentCompanyPieces: number;
+  availableCounterpartyPieces: number;
+  companyName: string;
+}) {
+  const missingInCurrentCompany = Math.max(input.requiredPieces - input.availableCurrentCompanyPieces, 0);
+  if (missingInCurrentCompany > 0 && input.availableCounterpartyPieces >= missingInCurrentCompany) {
+    return fulfillmentError(
+      `Travaso necessario: ${input.productName}, mancano ${missingInCurrentCompany} pz su ${input.companyName}.`,
+    );
+  }
+
+  const totalShortage = Math.max(
+    input.requiredPieces - input.availableCurrentCompanyPieces - input.availableCounterpartyPieces,
+    0,
+  );
+  return fulfillmentError(
+    `Giacenza insufficiente: ${input.productName}, mancano ${totalShortage} pz complessivi tra E-Keto Food Srls e SoKeto Srl.`,
+  );
+}
+
 /**
  * Calcola le quote FEFO delle sole righe non ancora assegnate. La quantità
  * dell'ordine è in confezioni, mentre le giacenze sono in pezzi: il piano
@@ -88,6 +122,7 @@ function buildAllocationPlan(input: {
   items: OrderItemForFulfillment[];
   inventories: LockedInventory[];
   companyName: string;
+  counterpartyAvailablePiecesByProduct: Map<string, number>;
 }) {
   const inventoryByBatchId = new Map(input.inventories.map((row) => [row.batchId, row]));
   const availableByBatchId = new Map(input.inventories.map((row) => [row.batchId, row.quantity]));
@@ -110,9 +145,16 @@ function buildAllocationPlan(input: {
     }
     const available = availableByBatchId.get(inventory.batchId) ?? 0;
     if (available < pieces) {
-      throw fulfillmentError(
-        `Giacenza insufficiente nel centrale ${input.companyName}: ${item.productName}, mancano ${pieces - Math.max(available, 0)} pz.`,
-      );
+      const availableForProduct = input.inventories
+        .filter((row) => row.productId === item.productId)
+        .reduce((total, row) => total + (availableByBatchId.get(row.batchId) ?? 0), 0);
+      throw availabilityError({
+        productName: item.productName,
+        requiredPieces: pieces,
+        availableCurrentCompanyPieces: availableForProduct,
+        availableCounterpartyPieces: input.counterpartyAvailablePiecesByProduct.get(item.productId) ?? 0,
+        companyName: input.companyName,
+      });
     }
     availableByBatchId.set(inventory.batchId, available - pieces);
     allocations.set(item.id, [{
@@ -158,9 +200,15 @@ function buildAllocationPlan(input: {
     }
 
     if (remainingPackages > 0) {
-      throw fulfillmentError(
-        `Travaso necessario: ${item.productName}, mancano ${remainingPackages * item.piecesPerUnit} pz su ${input.companyName}.`,
-      );
+      const availableForProduct = candidates
+        .reduce((total, candidate) => total + (availableByBatchId.get(candidate.batchId) ?? 0), 0);
+      throw availabilityError({
+        productName: item.productName,
+        requiredPieces: remainingPackages * item.piecesPerUnit,
+        availableCurrentCompanyPieces: availableForProduct,
+        availableCounterpartyPieces: input.counterpartyAvailablePiecesByProduct.get(item.productId) ?? 0,
+        companyName: input.companyName,
+      });
     }
     allocations.set(item.id, itemAllocations);
   }
@@ -170,7 +218,7 @@ function buildAllocationPlan(input: {
 
 async function getWarehouseAndRetailerLocation(database: any, order: { retailerId: string | null; companyId: string }) {
   if (!order.retailerId) throw fulfillmentError("L'ordine non è associato a un rivenditore.");
-  const [[warehouse], [retailerLocation]] = await Promise.all([
+  const [[warehouse], [retailerLocation], [company]] = await Promise.all([
     database.select({ id: locations.id, name: locations.name })
       .from(locations)
       .where(and(eq(locations.type, "central_warehouse"), eq(locations.companyId, order.companyId)))
@@ -179,10 +227,15 @@ async function getWarehouseAndRetailerLocation(database: any, order: { retailerI
       .from(locations)
       .where(and(eq(locations.type, "retailer"), eq(locations.retailerId, order.retailerId), eq(locations.companyId, order.companyId)))
       .limit(1),
+    database.select({ name: companies.name })
+      .from(companies)
+      .where(eq(companies.id, order.companyId))
+      .limit(1),
   ]);
   if (!warehouse) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Magazzino centrale non configurato." });
   if (!retailerLocation) throw fulfillmentError("Il rivenditore non ha una location di magazzino nella company dell'ordine.");
-  return { warehouse, retailerLocation };
+  if (!company) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Company dell'ordine non trovata." });
+  return { warehouse, retailerLocation, companyName: company.name };
 }
 
 async function loadItems(database: any, orderId: string, lock = false): Promise<OrderItemForFulfillment[]> {
@@ -235,6 +288,34 @@ async function loadCentralInventory(database: any, companyId: string, warehouseI
     .orderBy(asc(productBatches.productId), asc(productBatches.expirationDate), asc(productBatches.id));
   if (lock) query = query.for("update");
   return await query;
+}
+
+async function loadCounterpartyCentralAvailability(
+  database: any,
+  companyId: string,
+  productIds: string[],
+): Promise<Map<string, number>> {
+  const counterpartyCompanyId = getCounterpartyCompanyId(companyId);
+  if (!counterpartyCompanyId || productIds.length === 0) return new Map();
+
+  const rows = await database
+    .select({
+      productId: productBatches.productId,
+      quantity: sql<number>`COALESCE(SUM(${inventoryByBatch.quantity}), 0)::int`,
+    })
+    .from(inventoryByBatch)
+    .innerJoin(productBatches, eq(inventoryByBatch.batchId, productBatches.id))
+    .innerJoin(locations, eq(inventoryByBatch.locationId, locations.id))
+    .where(and(
+      eq(locations.type, "central_warehouse"),
+      eq(locations.companyId, counterpartyCompanyId),
+      eq(inventoryByBatch.companyId, counterpartyCompanyId),
+      eq(productBatches.companyId, counterpartyCompanyId),
+      inArray(productBatches.productId, productIds),
+    ))
+    .groupBy(productBatches.productId);
+
+  return new Map(rows.map((row: any) => [row.productId, Number(row.quantity)]));
 }
 
 async function replaceUnassignedRows(database: any, items: OrderItemForFulfillment[], allocations: Map<string, TransferAllocation[]>) {
@@ -353,11 +434,20 @@ export async function previewOrderDelivery(input: { orderId: string; companyId: 
     return { canConfirm: false, reason: "Il pagamento deve essere confermato prima della consegna.", allocations: [] as TransferAllocation[] };
   }
 
-  const { warehouse } = await getWarehouseAndRetailerLocation(database, order);
+  const { warehouse, companyName } = await getWarehouseAndRetailerLocation(database, order);
   const items = await loadItems(database, order.id);
   try {
-    const inventory = await loadCentralInventory(database, order.companyId, warehouse.id, Array.from(new Set(items.map((item) => item.productId))));
-    const plan = buildAllocationPlan({ items, inventories: inventory, companyName: warehouse.name });
+    const productIds = Array.from(new Set(items.map((item) => item.productId)));
+    const [inventory, counterpartyAvailablePiecesByProduct] = await Promise.all([
+      loadCentralInventory(database, order.companyId, warehouse.id, productIds),
+      loadCounterpartyCentralAvailability(database, order.companyId, productIds),
+    ]);
+    const plan = buildAllocationPlan({
+      items,
+      inventories: inventory,
+      companyName,
+      counterpartyAvailablePiecesByProduct,
+    });
     return {
       canConfirm: true,
       reason: null,
@@ -434,9 +524,18 @@ export async function executeOrderFulfillment(input: {
     // Il trasferimento fisico avviene una sola volta, all'uscita da pending.
     // Gli step successivi riusano lo stesso service ma non ri-scaricano stock.
     if (currentStatus === "pending") {
-      const { warehouse, retailerLocation } = await getWarehouseAndRetailerLocation(tx, order);
-      const inventory = await loadCentralInventory(tx, order.companyId, warehouse.id, Array.from(new Set(items.map((item) => item.productId))), true);
-      const plan = buildAllocationPlan({ items, inventories: inventory, companyName: warehouse.name });
+      const { warehouse, retailerLocation, companyName } = await getWarehouseAndRetailerLocation(tx, order);
+      const productIds = Array.from(new Set(items.map((item) => item.productId)));
+      const [inventory, counterpartyAvailablePiecesByProduct] = await Promise.all([
+        loadCentralInventory(tx, order.companyId, warehouse.id, productIds, true),
+        loadCounterpartyCentralAvailability(tx, order.companyId, productIds),
+      ]);
+      const plan = buildAllocationPlan({
+        items,
+        inventories: inventory,
+        companyName,
+        counterpartyAvailablePiecesByProduct,
+      });
       await replaceUnassignedRows(tx, items, plan.allocations);
 
       effectiveTransfers = Array.from(plan.allocations.values()).flat().sort(compareAllocations);

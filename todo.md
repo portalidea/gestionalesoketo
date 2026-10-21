@@ -318,3 +318,10 @@
 - [x] Sostituire `startTransfer` parziale con un servizio transazionale comune per allocazione FEFO, trasferimento, etichette e step di consegna.
 - [x] Aggiungere preview lotti e pulsante “Segna come consegnato” per ordini pagati, con storico append-only e retry FiC post-commit.
 - [ ] Rimuovere il codice morto M11.D (`isInterCompanyOrder` / `loadInterCompanyStock`) e il suo consumo etichette/carico scollegato; fino ad allora gli ordini inter-company restano esclusi fail-closed dalla consegna composta.
+
+
+## Hotfix — messaggio disponibilità consegna atomica
+- [x] Allineare preview dialog e validazione server sul messaggio “Travaso necessario” quando l’altra company copre i pezzi mancanti
+- [x] Mostrare “Giacenza insufficiente” soltanto quando E-Keto e SoKeto insieme non coprono la richiesta
+- [x] Eseguire test isolati per entrambi i casi, regressione completa, build e revisione diff
+- [ ] Committare il branch `fix/delivery-transfer-message`; merge e deploy solo dopo autorizzazione esplicita
