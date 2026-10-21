@@ -151,9 +151,11 @@ async function main() {
   assert(await stock(TEST_IDS.originCentral, TEST_IDS.batchFourMonths) === transferredBefore, "T3: uno step già transferring non deve riscaricare il centrale.");
   assert(transferMovementsBefore[0]?.count === transferMovementsAfter[0]?.count && resultTransferred.allocations.length === 0, "T3: non devono comparire ulteriori movimenti TRANSFER.");
 
-  // T4: stock insufficiente → rollback integrale, stato e movimenti invariati.
+  // T4: se E-Keto e SoKeto insieme non bastano, preview e server devono
+  // segnalare la giacenza complessiva insufficiente senza scritture.
   await createOrder({ id: IDS.insufficient, batchId: null, quantity: 40 });
   const insufficientBefore = await stock(TEST_IDS.originCentral, TEST_IDS.batchSoon);
+  const insufficientPreview = await previewOrderDelivery({ orderId: IDS.insufficient, companyId: TEST_IDS.originCompany });
   let insufficientError = "";
   try {
     await executeOrderFulfillment({ ...common, orderId: IDS.insufficient, targetStatus: "delivered", requirePayment: true });
@@ -162,7 +164,11 @@ async function main() {
   }
   const insufficientState = await sql<{ status: string }[]>`SELECT status FROM orders WHERE id = ${IDS.insufficient}`;
   const insufficientMovements = await sql<{ count: number }[]>`SELECT count(*)::int AS count FROM "stockMovements" WHERE "sourceDocument" = ${IDS.insufficient}`;
-  assert(insufficientError.includes("Travaso necessario"), "T4: insufficienza deve indicare che serve un travaso.");
+  assert(
+    insufficientPreview.reason?.startsWith("Giacenza insufficiente:")
+      && insufficientError.startsWith("Giacenza insufficiente:"),
+    "T4: quando le due company insieme non bastano, preview e server devono indicare giacenza insufficiente.",
+  );
   assert(insufficientState[0]?.status === "pending" && insufficientMovements[0]?.count === 0 && await stock(TEST_IDS.originCentral, TEST_IDS.batchSoon) === insufficientBefore, "T4: insufficienza non deve lasciare scritture parziali.");
 
   // T5: insufficienza etichette → stesso rollback atomico di stock e stati.
@@ -262,7 +268,8 @@ async function main() {
   `;
   assert(ficRetryResult.error === null && afterFicRetry?.ficProformaId === 7001 && afterFicRetry?.ficInvoiceId === 7002 && sentEmails.length === 1, "T10: Riprova deve recuperare i documenti senza mutare evasione o inviare una seconda email.");
 
-  // T11: scorta disponibile solo nell'altra company -> messaggio Travasso necessario e nessuna scrittura.
+  // T11: scorta disponibile solo nell'altra company -> preview e server
+  // devono indicare il travaso necessario e non effettuare scritture.
   await sql`DELETE FROM "inventoryByBatch" WHERE "batchId" = ${TEST_IDS.batchExpired}`;
   await sql`
     INSERT INTO "productBatches" (id, "productId", "batchNumber", "expirationDate", "initialQuantity", "costPrice", "companyId")
@@ -273,6 +280,7 @@ async function main() {
     VALUES (${TEST_IDS.soketoCentral}, ${IDS.soketoOnlyBatch}, 50, ${TEST_IDS.soketoCompany})
   `;
   await createOrder({ id: IDS.otherCompanyOnly, productId: TEST_IDS.productPieces, batchId: null, quantity: 1 });
+  const otherCompanyPreview = await previewOrderDelivery({ orderId: IDS.otherCompanyOnly, companyId: TEST_IDS.originCompany });
   let otherCompanyError = "";
   try {
     await executeOrderFulfillment({ ...common, orderId: IDS.otherCompanyOnly, targetStatus: "delivered", requirePayment: true });
@@ -283,7 +291,11 @@ async function main() {
     SELECT count(*)::int AS count FROM "stockMovements" WHERE "sourceDocument" = ${IDS.otherCompanyOnly}
   `;
   const otherCompanyState = await sql<{ status: string }[]>`SELECT status FROM orders WHERE id = ${IDS.otherCompanyOnly}`;
-  assert(otherCompanyError.includes("Travaso necessario") && otherCompanyError.includes("TEST Magazzino Centrale E-Keto"), "T11: disponibilità solo nell'altra company deve chiedere il travaso dal centrale dell'ordine.");
+  const expectedTransferMessage = "Travaso necessario: TEST Prodotto Pezzo Singolo, mancano 1 pz su TEST E-Keto Food.";
+  assert(
+    otherCompanyPreview.reason === expectedTransferMessage && otherCompanyError === expectedTransferMessage,
+    "T11: disponibilità solo nell'altra company deve allineare preview e server sul messaggio di travaso richiesto.",
+  );
   assert(otherCompanyMovements[0]?.count === 0 && otherCompanyState[0]?.status === "pending" && await stock(TEST_IDS.soketoCentral, IDS.soketoOnlyBatch) === 50, "T11: nessuna scrittura deve interessare stock, movimenti o stato quando serve un travaso.");
 
   console.log(JSON.stringify({
@@ -304,6 +316,7 @@ async function main() {
     raw: {
       complete: { result: resultComplete, items: completeItems, events: completeEvents, movements: completeMovements, labels: completeLabels },
       preview,
+      insufficientPreview,
       transferred: resultTransferred,
       insufficientError,
       labelsError,
@@ -312,6 +325,7 @@ async function main() {
       concurrent: concurrentResults.map((result) => ({ idempotent: result.idempotent, status: result.newStatus })),
       fic: { firstAttempt: ficFailureResult.fic, retry: ficRetryResult, sentEmails },
       otherCompanyError,
+      otherCompanyPreview,
     },
   }, null, 2));
 }
