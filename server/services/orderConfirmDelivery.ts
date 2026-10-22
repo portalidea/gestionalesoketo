@@ -377,10 +377,8 @@ async function consumeLabelsAtomically(database: any, input: {
   for (const productId of productIds) {
     const requirement = byProduct.get(productId)!;
     const product = productById.get(productId);
-    if (!product || product.labelStock < requirement.quantity) {
-      throw fulfillmentError(
-        `Etichette insufficienti per ${requirement.productName}: disponibili ${product?.labelStock ?? 0}, richieste ${requirement.quantity}.`,
-      );
+    if (!product) {
+      throw fulfillmentError(`Prodotto non trovato per il consumo etichette: ${requirement.productName}.`);
     }
   }
 
@@ -430,9 +428,6 @@ export async function previewOrderDelivery(input: { orderId: string; companyId: 
   if (order.status === "cancelled" || order.status === "delivered") {
     return { canConfirm: false, reason: "L'ordine non è confermabile nello stato attuale.", allocations: [] as TransferAllocation[] };
   }
-  if (order.paymentStatus !== "paid") {
-    return { canConfirm: false, reason: "Il pagamento deve essere confermato prima della consegna.", allocations: [] as TransferAllocation[] };
-  }
 
   const { warehouse, companyName } = await getWarehouseAndRetailerLocation(database, order);
   const items = await loadItems(database, order.id);
@@ -468,7 +463,6 @@ export async function executeOrderFulfillment(input: {
   actorUserId: string;
   targetStatus: FulfillmentTarget;
   source: FulfillmentSource;
-  requirePayment: boolean;
 }) {
   const database = await getDb();
   if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
@@ -509,9 +503,6 @@ export async function executeOrderFulfillment(input: {
         needsProforma: false,
         needsInvoice: false,
       };
-    }
-    if (input.requirePayment && order.paymentStatus !== "paid") {
-      throw fulfillmentError("Il pagamento deve essere confermato prima di segnare l'ordine come consegnato.");
     }
     if (STATUS_INDEX[currentStatus] > STATUS_INDEX[input.targetStatus]) {
       throw fulfillmentError(`L'ordine è già oltre lo step richiesto (${currentStatus}).`);

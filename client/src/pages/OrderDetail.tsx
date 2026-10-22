@@ -449,19 +449,12 @@ export default function OrderDetail() {
     onSuccess: () => { toast.success("Trasferimento avviato"); invalidateOrder(); },
     onError: (err) => toast.error(err.message),
   });
-  const [labelErrorMsg, setLabelErrorMsg] = useState<string | null>(null);
   const markShipped = trpc.orders.markShipped.useMutation({
     onSuccess: () => {
-      toast.success("Ordine spedito — etichette scalate dal magazzino");
+      toast.success("Ordine spedito — consumo etichette registrato");
       invalidateOrder();
     },
-    onError: (err) => {
-      if (err.data?.code === 'PRECONDITION_FAILED' && err.message.includes('Etichette insufficienti')) {
-        setLabelErrorMsg(err.message);
-      } else {
-        toast.error(err.message);
-      }
-    },
+    onError: (err) => toast.error(err.message),
   });
   const markDelivered = trpc.orders.markDelivered.useMutation({
     onSuccess: () => { toast.success("Ordine consegnato"); invalidateOrder(); },
@@ -610,16 +603,18 @@ export default function OrderDetail() {
   const canConfirmDelivery = !order.eventType
     && !order.isInterCompanyOrder
     && !isCancelled
-    && !isDelivered
-    && order.paymentStatus === "paid";
+    && !isDelivered;
   const ficDocumentMissing = isDelivered
-    && order.paymentStatus === "paid"
-    && (!order.ficProformaId || !order.ficInvoiceId);
+    && (!order.ficProformaId || (order.paymentStatus === "paid" && !order.ficInvoiceId));
   const hasLockedProspectCommercialTerms = Boolean(order.prospectCommercialTermsId && !order.prospectCommercialTermsReleasedAt);
   const canEditItems = order.status === "pending" && !hasLockedProspectCommercialTerms;
   const paymentStatus = (order as any).paymentStatus ?? "unpaid";
   const paymentMethod = (order as any).paymentMethod ?? null;
-  const paymentStatusCfg = PAYMENT_STATUS_CONFIG[paymentStatus] ?? PAYMENT_STATUS_CONFIG.unpaid;
+  const isDeliveredUnpaid = isDelivered && paymentStatus === "unpaid";
+  const paymentStatusCfg = isDeliveredUnpaid
+    ? { label: "Da incassare", variant: "outline" as const, color: "text-amber-600" }
+    : (PAYMENT_STATUS_CONFIG[paymentStatus] ?? PAYMENT_STATUS_CONFIG.unpaid);
+  const labelWarnings = (order as any).labelWarnings as Array<{ productId: string; productName: string; labelStock: number }> ?? [];
   const hasPromotionalLinePricing = order.items.some(
     (item) => parseFloat(item.discountPercent) > parseFloat(order.discountPercent ?? "0"),
   );
@@ -1163,6 +1158,15 @@ export default function OrderDetail() {
             <CardTitle className="text-base">Azioni</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
+            {labelWarnings.length > 0 && (
+              <Alert variant="destructive" className="border-amber-400 bg-amber-50 text-amber-950">
+                <AlertTriangle className="h-4 w-4 text-amber-700" />
+                <AlertTitle>Giacenza etichette da aggiornare</AlertTitle>
+                <AlertDescription>
+                  {labelWarnings.map((warning) => `Etichette sotto zero per ${warning.productName}: aggiornare la giacenza`).join(" · ")}
+                </AlertDescription>
+              </Alert>
+            )}
             {ficDocumentMissing && (
               <Alert variant="destructive" className="border-amber-400 bg-amber-50 text-amber-950">
                 <AlertTriangle className="h-4 w-4 text-amber-700" />
@@ -1553,26 +1557,6 @@ export default function OrderDetail() {
             <AlertDialogCancel disabled={releaseTermsMutation.isPending}>Annulla</AlertDialogCancel>
             <AlertDialogAction disabled={!releaseTermsReason.trim() || releaseTermsMutation.isPending} onClick={(event) => { event.preventDefault(); releaseTermsMutation.mutate({ orderId: order.id, reason: releaseTermsReason.trim() }); }}>
               {releaseTermsMutation.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}Conferma rinuncia
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-      {/* M12: Label insufficiency error dialog */}
-      <AlertDialog open={!!labelErrorMsg} onOpenChange={(open) => { if (!open) setLabelErrorMsg(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-5 w-5" />
-              Etichette insufficienti
-            </AlertDialogTitle>
-            <AlertDialogDescription className="text-base">
-              {labelErrorMsg}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="flex-col sm:flex-row gap-2">
-            <AlertDialogCancel onClick={() => setLabelErrorMsg(null)}>Chiudi</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { setLabelErrorMsg(null); window.open('/labels', '_blank'); }}>
-              Vai a Gestione Etichette
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

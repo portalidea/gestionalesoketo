@@ -218,13 +218,6 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
           const currentLabelStock = product.labelStock;
           const newLabelStock = currentLabelStock - item.quantity;
 
-          if (newLabelStock < 0) {
-            throw new TRPCError({
-              code: 'PRECONDITION_FAILED',
-              message: `Etichette insufficienti per ${item.productName || product.name}: disponibili ${currentLabelStock}, richieste ${item.quantity}.`,
-            });
-          }
-
           await db.update(products)
             .set({ labelStock: newLabelStock })
             .where(eq(products.id, item.productId));
@@ -356,7 +349,16 @@ export interface RegisterPaymentResult {
   ficInvoiceNumber?: string;
 }
 
-export async function registerPayment(input: RegisterPaymentInput): Promise<RegisterPaymentResult> {
+type RegisterPaymentDependencies = {
+  calculateCommission?: (orderId: string) => Promise<unknown>;
+  transformProformaToInvoice?: (companyId: string, proformaId: number) => Promise<{ ficInvoiceId: number; ficInvoiceNumber: string }>;
+  sendPaymentEmail?: typeof sendOrderStatusEmail;
+};
+
+export async function registerPayment(
+  input: RegisterPaymentInput,
+  dependencies: RegisterPaymentDependencies = {},
+): Promise<RegisterPaymentResult> {
   const t0 = Date.now();
   console.log(`[orderStateMachine] registerPayment orderId=${input.orderId}`);
 
@@ -371,6 +373,7 @@ export async function registerPayment(input: RegisterPaymentInput): Promise<Regi
       paymentTerms: orders.paymentTerms,
       retailerId: orders.retailerId,
       orderNumber: orders.orderNumber,
+      companyId: orders.companyId,
       ficProformaId: orders.ficProformaId,
       totalGross: orders.totalGross,
     })
@@ -413,8 +416,8 @@ export async function registerPayment(input: RegisterPaymentInput): Promise<Regi
 
   // M7-A: Calculate commission
   try {
-    const { calculateCommissionForOrder } = await import("./commissionService");
-    await calculateCommissionForOrder(input.orderId);
+    const calculateCommission = dependencies.calculateCommission ?? (await import("./commissionService")).calculateCommissionForOrder;
+    await calculateCommission(input.orderId);
   } catch (e: any) {
     console.error(`[orderStateMachine] commission calculate failed: ${e.message}`);
   }
@@ -424,7 +427,9 @@ export async function registerPayment(input: RegisterPaymentInput): Promise<Regi
   let ficInvoiceNumber: string | undefined;
   if (order.ficProformaId && order.status === "delivered") {
     try {
-      const invoice = await ficDocService.transformProformaToInvoice(order.ficProformaId);
+      const transformProformaToInvoice = dependencies.transformProformaToInvoice
+        ?? ((companyId: string, proformaId: number) => ficDocService.transformProformaToInvoiceForCompany(companyId, proformaId));
+      const invoice = await transformProformaToInvoice(order.companyId, order.ficProformaId);
       ficInvoiceId = invoice.ficInvoiceId;
       ficInvoiceNumber = invoice.ficInvoiceNumber;
       await db.update(orders).set({ ficInvoiceId, ficInvoiceNumber }).where(eq(orders.id, input.orderId));
@@ -435,7 +440,8 @@ export async function registerPayment(input: RegisterPaymentInput): Promise<Regi
 
   // Send email "Pagamento ricevuto"
   if (order.retailerId) {
-    sendOrderStatusEmail({
+    const sendPaymentEmail = dependencies.sendPaymentEmail ?? sendOrderStatusEmail;
+    sendPaymentEmail({
       orderId: input.orderId,
       orderNumber: order.orderNumber ?? "",
       retailerId: order.retailerId,

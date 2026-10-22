@@ -78,6 +78,8 @@ async function main() {
   await sql`
     ALTER TABLE orders
       ADD COLUMN IF NOT EXISTS "paymentStatus" varchar(20) DEFAULT 'unpaid',
+      ADD COLUMN IF NOT EXISTS "paymentMethod" varchar(50),
+      ADD COLUMN IF NOT EXISTS "paidAt" timestamptz,
       ADD COLUMN IF NOT EXISTS "transferringAt" timestamptz,
       ADD COLUMN IF NOT EXISTS "shippedAt" timestamptz,
       ADD COLUMN IF NOT EXISTS "deliveredAt" timestamptz,
@@ -91,6 +93,7 @@ async function main() {
   await sql`UPDATE products SET "labelStock" = 40 WHERE id = ${TEST_IDS.productBoxes}`;
 
   const { executeOrderFulfillment, previewOrderDelivery } = await import("../server/services/orderConfirmDelivery");
+  const { registerPayment } = await import("../server/services/orderStateMachine");
   const { fulfillAndRunPostCommit, retryFicDocumentsAfterFulfillment } = await import("../server/orders-router");
   const common = {
     companyId: TEST_IDS.originCompany,
@@ -102,7 +105,7 @@ async function main() {
   await createOrder({ id: IDS.complete, batchId: null, quantity: 15 });
   const beforeSoon = await stock(TEST_IDS.originCentral, TEST_IDS.batchSoon);
   const beforeFourMonths = await stock(TEST_IDS.originCentral, TEST_IDS.batchFourMonths);
-  const resultComplete = await executeOrderFulfillment({ ...common, orderId: IDS.complete, targetStatus: "delivered", requirePayment: true });
+  const resultComplete = await executeOrderFulfillment({ ...common, orderId: IDS.complete, targetStatus: "delivered" });
   const completeItems = await sql<{ batchId: string; quantity: number }[]>`
     SELECT "batchId", quantity FROM "orderItems" WHERE "orderId" = ${IDS.complete} ORDER BY "batchId"
   `;
@@ -144,7 +147,7 @@ async function main() {
   const transferMovementsBefore = await sql<{ count: number }[]>`
     SELECT count(*)::int AS count FROM "stockMovements" WHERE "sourceDocument" = ${IDS.transferred}
   `;
-  const resultTransferred = await executeOrderFulfillment({ ...common, orderId: IDS.transferred, targetStatus: "delivered", requirePayment: true });
+  const resultTransferred = await executeOrderFulfillment({ ...common, orderId: IDS.transferred, targetStatus: "delivered" });
   const transferMovementsAfter = await sql<{ count: number }[]>`
     SELECT count(*)::int AS count FROM "stockMovements" WHERE "sourceDocument" = ${IDS.transferred}
   `;
@@ -158,7 +161,7 @@ async function main() {
   const insufficientPreview = await previewOrderDelivery({ orderId: IDS.insufficient, companyId: TEST_IDS.originCompany });
   let insufficientError = "";
   try {
-    await executeOrderFulfillment({ ...common, orderId: IDS.insufficient, targetStatus: "delivered", requirePayment: true });
+    await executeOrderFulfillment({ ...common, orderId: IDS.insufficient, targetStatus: "delivered" });
   } catch (error) {
     insufficientError = error instanceof Error ? error.message : String(error);
   }
@@ -171,52 +174,84 @@ async function main() {
   );
   assert(insufficientState[0]?.status === "pending" && insufficientMovements[0]?.count === 0 && await stock(TEST_IDS.originCentral, TEST_IDS.batchSoon) === insufficientBefore, "T4: insufficienza non deve lasciare scritture parziali.");
 
-  // T5: insufficienza etichette → stesso rollback atomico di stock e stati.
+  // T5: etichette a zero non bloccano spedizione/consegna; il saldo può diventare negativo.
   await createOrder({ id: IDS.labels, batchId: null, quantity: 1 });
   await sql`UPDATE products SET "labelStock" = 0 WHERE id = ${TEST_IDS.productBoxes}`;
-  const labelsStockBefore = await stock(TEST_IDS.originCentral, TEST_IDS.batchSoon);
-  let labelsError = "";
-  try {
-    await executeOrderFulfillment({ ...common, orderId: IDS.labels, targetStatus: "delivered", requirePayment: true });
-  } catch (error) {
-    labelsError = error instanceof Error ? error.message : String(error);
-  }
-  const labelsState = await sql<{ status: string }[]>`SELECT status FROM orders WHERE id = ${IDS.labels}`;
-  assert(labelsError.includes("Etichette insufficienti") && labelsState[0]?.status === "pending" && await stock(TEST_IDS.originCentral, TEST_IDS.batchSoon) === labelsStockBefore, "T5: errore etichette deve fare rollback completo.");
+  await executeOrderFulfillment({ ...common, orderId: IDS.labels, targetStatus: "delivered" });
+  const labelsState = await sql<{ status: string; labelStock: number; movementCount: number }[]>`
+    SELECT o.status, p."labelStock", count(lm.id)::int AS "movementCount"
+    FROM orders o
+    JOIN "orderItems" oi ON oi."orderId" = o.id
+    JOIN products p ON p.id = oi."productId"
+    LEFT JOIN "labelMovements" lm ON lm."sourceOrderId" = o.id
+    WHERE o.id = ${IDS.labels}
+    GROUP BY o.status, p."labelStock"
+  `;
+  assert(labelsState[0]?.status === "delivered" && labelsState[0]?.labelStock === -1 && labelsState[0]?.movementCount === 1, "T5: etichette a zero devono consentire consegna e registrare saldo negativo.");
 
-  // T6: ordine non pagato → rifiutato dal server, anche senza UI.
+  // T6: ordine non pagato → consegna consentita, proforma da creare/conservare e badge Da incassare lato UI.
   await sql`UPDATE products SET "labelStock" = 40 WHERE id = ${TEST_IDS.productBoxes}`;
   await createOrder({ id: IDS.unpaid, paymentStatus: "unpaid", batchId: null, quantity: 1 });
-  let unpaidError = "";
-  try {
-    await executeOrderFulfillment({ ...common, orderId: IDS.unpaid, targetStatus: "delivered", requirePayment: true });
-  } catch (error) {
-    unpaidError = error instanceof Error ? error.message : String(error);
-  }
-  assert(unpaidError.includes("pagamento"), "T6: ordine non pagato deve essere bloccato lato server.");
+  const deliveryEmails: string[] = [];
+  const unpaidDelivery = await fulfillAndRunPostCommit({
+    ...common,
+    orderId: IDS.unpaid,
+    targetStatus: "delivered",
+  }, {
+    ensureFicDocuments: async ({ orderId }) => {
+      await sql`UPDATE orders SET "ficProformaId" = 6001, "ficProformaNumber" = 'PRO-6001' WHERE id = ${orderId}`;
+      return { attempted: true, proformaCreated: true, invoiceCreated: false, error: null };
+    },
+    sendDeliveryEmail: async (input) => { deliveryEmails.push(input.newStatus); },
+  });
+  const unpaidState = await sql<{ status: string; paymentStatus: string; ficProformaId: number | null; ficInvoiceId: number | null }[]>`
+    SELECT status, "paymentStatus", "ficProformaId", "ficInvoiceId" FROM orders WHERE id = ${IDS.unpaid}
+  `;
+  assert(unpaidDelivery.fic.proformaCreated && unpaidState[0]?.status === "delivered" && unpaidState[0]?.paymentStatus === "unpaid" && unpaidState[0]?.ficProformaId === 6001 && !unpaidState[0]?.ficInvoiceId && deliveryEmails.join(",") === "delivered", "T6: ordine non pagato deve essere consegnabile, generare la sola proforma e restare Da incassare.");
 
-  // T7: M11.D inter-company è fail-closed per entrambi i percorsi.
+  // T7: pagamento successivo su ordine consegnato → fattura FiC e provvigione, senza mutare l'evasione.
+  let commissionCalls = 0;
+  let invoiceCalls = 0;
+  const paymentEmails: string[] = [];
+  const paymentResult = await registerPayment({
+    orderId: IDS.unpaid,
+    actorUserId: TEST_IDS.adminUser,
+    paidAt: new Date("2026-10-21T10:00:00.000Z"),
+    paymentMethod: "manual",
+  }, {
+    calculateCommission: async () => { commissionCalls += 1; },
+    transformProformaToInvoice: async (companyId, proformaId) => {
+      invoiceCalls += 1;
+      assert(companyId === TEST_IDS.originCompany && proformaId === 6001, "T7: fattura FiC deve usare company e proforma dell'ordine consegnato.");
+      return { ficInvoiceId: 6002, ficInvoiceNumber: "FAT-6002" };
+    },
+    sendPaymentEmail: async (input) => { paymentEmails.push(input.newStatus); },
+  });
+  const paidState = await sql<{ status: string; paymentStatus: string; ficInvoiceId: number | null }[]>`SELECT status, "paymentStatus", "ficInvoiceId" FROM orders WHERE id = ${IDS.unpaid}`;
+  assert(paymentResult.ficInvoiceId === 6002 && paidState[0]?.status === "delivered" && paidState[0]?.paymentStatus === "paid" && paidState[0]?.ficInvoiceId === 6002 && commissionCalls === 1 && invoiceCalls === 1 && paymentEmails.join(",") === "payment_received", "T7: pagamento post-consegna deve generare fattura e calcolare la provvigione senza riaprire l'evasione.");
+
+  // T8: M11.D inter-company è fail-closed per entrambi i percorsi.
   let intercompanyError = "";
   try {
-    await executeOrderFulfillment({ ...common, orderId: TEST_IDS.orderIntercompany, targetStatus: "delivered", requirePayment: true });
+    await executeOrderFulfillment({ ...common, orderId: TEST_IDS.orderIntercompany, targetStatus: "delivered" });
   } catch (error) {
     intercompanyError = error instanceof Error ? error.message : String(error);
   }
-  assert(intercompanyError.includes("inter-company"), "T7: ordine M11.D deve essere esplicitamente escluso.");
+  assert(intercompanyError.includes("inter-company"), "T8: ordine M11.D deve essere esplicitamente escluso.");
 
-  // T8: evento storico manuale della sola transizione (annullamento è coperto dal service dedicato) non è duplicato dal percorso composto.
+  // T9: evento storico manuale della sola transizione (annullamento è coperto dal service dedicato) non è duplicato dal percorso composto.
   const eventCount = await sql<{ count: number }[]>`
     SELECT count(*)::int AS count FROM order_status_events WHERE "orderId" = ${IDS.complete}
   `;
-  assert(eventCount[0]?.count === 3, "T8: il percorso composto deve registrare una sola volta ogni passaggio di stato.");
+  assert(eventCount[0]?.count === 3, "T9: il percorso composto deve registrare una sola volta ogni passaggio di stato.");
 
-  // T9: due conferme concorrenti sulla STESSA riga producono una sola consegna e un solo scarico.
+  // T10: due conferme concorrenti sulla STESSA riga producono una sola consegna e un solo scarico.
   await createOrder({ id: IDS.concurrent, batchId: null, quantity: 1 });
   const concurrentBefore = (await stock(TEST_IDS.originCentral, TEST_IDS.batchSoon))
     + (await stock(TEST_IDS.originCentral, TEST_IDS.batchFourMonths));
   const concurrentResults = await Promise.all([
-    executeOrderFulfillment({ ...common, orderId: IDS.concurrent, targetStatus: "delivered", requirePayment: true }),
-    executeOrderFulfillment({ ...common, orderId: IDS.concurrent, targetStatus: "delivered", requirePayment: true }),
+    executeOrderFulfillment({ ...common, orderId: IDS.concurrent, targetStatus: "delivered" }),
+    executeOrderFulfillment({ ...common, orderId: IDS.concurrent, targetStatus: "delivered" }),
   ]);
   const concurrentMovements = await sql<{ count: number }[]>`
     SELECT count(*)::int AS count FROM "stockMovements" WHERE "sourceDocument" = ${IDS.concurrent}
@@ -224,12 +259,12 @@ async function main() {
   const concurrentLabels = await sql<{ count: number }[]>`
     SELECT count(*)::int AS count FROM "labelMovements" WHERE "sourceOrderId" = ${IDS.concurrent}
   `;
-  assert(concurrentResults.filter((result) => !result.idempotent).length === 1 && concurrentResults.filter((result) => result.idempotent).length === 1, "T9: una sola richiesta concorrente deve eseguire la consegna.");
+  assert(concurrentResults.filter((result) => !result.idempotent).length === 1 && concurrentResults.filter((result) => result.idempotent).length === 1, "T10: una sola richiesta concorrente deve eseguire la consegna.");
   const concurrentAfter = (await stock(TEST_IDS.originCentral, TEST_IDS.batchSoon))
     + (await stock(TEST_IDS.originCentral, TEST_IDS.batchFourMonths));
-  assert(concurrentAfter === concurrentBefore - 6 && concurrentMovements[0]?.count === 1 && concurrentLabels[0]?.count === 1, "T9: stock, movimento ed etichette devono essere registrati una sola volta.");
+  assert(concurrentAfter === concurrentBefore - 6 && concurrentMovements[0]?.count === 1 && concurrentLabels[0]?.count === 1, "T10: stock, movimento ed etichette devono essere registrati una sola volta.");
 
-  // T10: errore FiC post-commit non annulla la consegna; Riprova recupera i documenti senza generare una seconda email.
+  // T11: errore FiC post-commit non annulla la consegna; Riprova recupera i documenti senza generare una seconda email.
   await createOrder({ id: IDS.ficFailure, batchId: null, quantity: 1 });
   let ficAttempts = 0;
   const sentEmails: Array<{ newStatus: string; orderId: string }> = [];
@@ -249,7 +284,6 @@ async function main() {
     ...common,
     orderId: IDS.ficFailure,
     targetStatus: "delivered",
-    requirePayment: true,
   }, {
     ensureFicDocuments: simulatedFic,
     sendDeliveryEmail: async (input) => { sentEmails.push({ newStatus: input.newStatus, orderId: input.orderId }); },
@@ -260,15 +294,15 @@ async function main() {
   const ficAlertVisible = afterFicFailure?.status === "delivered"
     && afterFicFailure.paymentStatus === "paid"
     && (!afterFicFailure.ficProformaId || !afterFicFailure.ficInvoiceId);
-  assert(ficFailureResult.fic.error === "FiC simulato non disponibile" && ficAlertVisible, "T10: errore FiC deve lasciare l'ordine consegnato e rendere visibile l'avviso Documento FiC non generato.");
-  assert(sentEmails.length === 1 && sentEmails[0]?.newStatus === "delivered" && sentEmails[0]?.orderId === IDS.ficFailure, "T10: il percorso composto deve inviare una sola email Consegnato, senza email intermedie.");
+  assert(ficFailureResult.fic.error === "FiC simulato non disponibile" && ficAlertVisible, "T11: errore FiC deve lasciare l'ordine consegnato e rendere visibile l'avviso Documento FiC non generato.");
+  assert(sentEmails.length === 1 && sentEmails[0]?.newStatus === "delivered" && sentEmails[0]?.orderId === IDS.ficFailure, "T11: il percorso composto deve inviare una sola email Consegnato, senza email intermedie.");
   const ficRetryResult = await retryFicDocumentsAfterFulfillment({ orderId: IDS.ficFailure, companyId: TEST_IDS.originCompany }, { ensureFicDocuments: simulatedFic });
   const [afterFicRetry] = await sql<{ ficProformaId: number | null; ficInvoiceId: number | null }[]>`
     SELECT "ficProformaId", "ficInvoiceId" FROM orders WHERE id = ${IDS.ficFailure}
   `;
-  assert(ficRetryResult.error === null && afterFicRetry?.ficProformaId === 7001 && afterFicRetry?.ficInvoiceId === 7002 && sentEmails.length === 1, "T10: Riprova deve recuperare i documenti senza mutare evasione o inviare una seconda email.");
+  assert(ficRetryResult.error === null && afterFicRetry?.ficProformaId === 7001 && afterFicRetry?.ficInvoiceId === 7002 && sentEmails.length === 1, "T11: Riprova deve recuperare i documenti senza mutare evasione o inviare una seconda email.");
 
-  // T11: scorta disponibile solo nell'altra company -> preview e server
+  // T12: scorta disponibile solo nell'altra company -> preview e server
   // devono indicare il travaso necessario e non effettuare scritture.
   await sql`DELETE FROM "inventoryByBatch" WHERE "batchId" = ${TEST_IDS.batchExpired}`;
   await sql`
@@ -283,7 +317,7 @@ async function main() {
   const otherCompanyPreview = await previewOrderDelivery({ orderId: IDS.otherCompanyOnly, companyId: TEST_IDS.originCompany });
   let otherCompanyError = "";
   try {
-    await executeOrderFulfillment({ ...common, orderId: IDS.otherCompanyOnly, targetStatus: "delivered", requirePayment: true });
+    await executeOrderFulfillment({ ...common, orderId: IDS.otherCompanyOnly, targetStatus: "delivered" });
   } catch (error) {
     otherCompanyError = error instanceof Error ? error.message : String(error);
   }
@@ -294,9 +328,9 @@ async function main() {
   const expectedTransferMessage = "Travaso necessario: TEST Prodotto Pezzo Singolo, mancano 1 pz su TEST E-Keto Food.";
   assert(
     otherCompanyPreview.reason === expectedTransferMessage && otherCompanyError === expectedTransferMessage,
-    "T11: disponibilità solo nell'altra company deve allineare preview e server sul messaggio di travaso richiesto.",
+    "T12: disponibilità solo nell'altra company deve allineare preview e server sul messaggio di travaso richiesto.",
   );
-  assert(otherCompanyMovements[0]?.count === 0 && otherCompanyState[0]?.status === "pending" && await stock(TEST_IDS.soketoCentral, IDS.soketoOnlyBatch) === 50, "T11: nessuna scrittura deve interessare stock, movimenti o stato quando serve un travaso.");
+  assert(otherCompanyMovements[0]?.count === 0 && otherCompanyState[0]?.status === "pending" && await stock(TEST_IDS.soketoCentral, IDS.soketoOnlyBatch) === 50, "T12: nessuna scrittura deve interessare stock, movimenti o stato quando serve un travaso.");
 
   console.log(JSON.stringify({
     generatedAt: new Date().toISOString(),
@@ -305,8 +339,9 @@ async function main() {
       previewReadOnly: "PASS",
       alreadyTransferredNoDoubleStock: "PASS",
       insufficientStockRollback: "PASS",
-      labelFailureRollback: "PASS",
-      unpaidServerBlocked: "PASS",
+      labelsNegativeNonBlocking: "PASS",
+      unpaidDeliveryAndPaymentInvoice: "PASS",
+      paymentAfterDeliveryInvoiceAndCommission: "PASS",
       intercompanyFailClosed: "PASS",
       statusHistoryNoDuplicates: "PASS",
       concurrentSameOrderOneDelivery: "PASS",
@@ -319,8 +354,9 @@ async function main() {
       insufficientPreview,
       transferred: resultTransferred,
       insufficientError,
-      labelsError,
-      unpaidError,
+      labelsState,
+      unpaidState,
+      paymentResult,
       intercompanyError,
       concurrent: concurrentResults.map((result) => ({ idempotent: result.idempotent, status: result.newStatus })),
       fic: { firstAttempt: ficFailureResult.fic, retry: ficRetryResult, sentEmails },

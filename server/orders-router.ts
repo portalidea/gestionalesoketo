@@ -23,7 +23,7 @@ import {
   inventoryByBatch,
   locations,
 } from "../drizzle/schema";
-import { eq, desc, and, gte, lte, sql, inArray, asc, gt } from "drizzle-orm";
+import { eq, desc, and, gte, lte, sql, inArray, asc, gt, lt } from "drizzle-orm";
 import { calculateOrderPricing, calculateEventOrderPricing, type PricingItemInput } from "./pricing";
 import { createFicProformaForCompany, getRetailerFicClientId } from "./fic-integration";
 import { registerPayment, cancelPayment, modifyOrderItems, type OrderStatus } from "./services/orderStateMachine";
@@ -157,7 +157,6 @@ export async function fulfillAndRunPostCommit(input: {
   actorUserId: string;
   targetStatus: FulfillmentTarget;
   source: "manual_step" | "delivery_confirm";
-  requirePayment: boolean;
 }, dependencies: PostCommitDependencies = {}) {
   const result = await executeOrderFulfillment(input);
   const ensureFicDocuments = dependencies.ensureFicDocuments ?? ensureFicDocumentsAfterFulfillment;
@@ -377,10 +376,18 @@ export const ordersRouter = router({
         .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
         .where(eq(orderItems.orderId, input.id))
         .orderBy(orderItems.createdAt);
+      const productIds = Array.from(new Set(items.map((item) => item.productId)));
+      const labelWarnings = productIds.length === 0
+        ? []
+        : await db
+          .select({ productId: products.id, productName: products.name, labelStock: products.labelStock })
+          .from(products)
+          .where(and(inArray(products.id, productIds), lt(products.labelStock, 0)));
       return {
         ...order,
         isInterCompanyOrder: order.retailerId === SOKETO_SRL_INTERCOMPANY_RETAILER_ID,
         items,
+        labelWarnings,
       };
     }),
 
@@ -1467,7 +1474,6 @@ export const ordersRouter = router({
       actorUserId: ctx.user!.id,
       targetStatus: "delivered",
       source: "delivery_confirm",
-      requirePayment: true,
     })),
 
   /** Step manuale, ora atomico come il percorso composto. */
@@ -1479,7 +1485,6 @@ export const ordersRouter = router({
       actorUserId: ctx.user!.id,
       targetStatus: "transferring",
       source: "manual_step",
-      requirePayment: false,
     })),
 
   /** Step manuale, ora atomico anche per il consumo etichette. */
@@ -1491,7 +1496,6 @@ export const ordersRouter = router({
       actorUserId: ctx.user!.id,
       targetStatus: "shipped",
       source: "manual_step",
-      requirePayment: false,
     })),
 
   /** Step manuale di consegna; genera/riprova i documenti FiC dopo il commit. */
@@ -1503,7 +1507,6 @@ export const ordersRouter = router({
       actorUserId: ctx.user!.id,
       targetStatus: "delivered",
       source: "manual_step",
-      requirePayment: false,
     })),
 
   /** Riprova il solo side effect FiC, senza toccare giacenze o stati. */
