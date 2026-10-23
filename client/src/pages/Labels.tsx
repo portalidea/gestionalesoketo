@@ -37,7 +37,7 @@ type LabelProduct = {
   sku: string;
   labelStock: number;
   labelReorderThreshold: number;
-  status: "normal" | "low" | "critical";
+  status: "normal" | "low" | "critical" | "negative";
 };
 
 export default function Labels() {
@@ -100,6 +100,10 @@ export default function Labels() {
     }
     return list;
   }, [overview, filterStatus, search]);
+  const negativeProducts = useMemo(
+    () => (overview ?? []).filter((product) => product.labelStock < 0),
+    [overview],
+  );
 
   const handleOpenLoad = (product: LabelProduct) => {
     setSelectedProduct(product);
@@ -147,6 +151,8 @@ export default function Labels() {
 
   const statusBadge = (status: string) => {
     switch (status) {
+      case "negative":
+        return <Badge variant="destructive">Sotto zero</Badge>;
       case "critical":
         return <Badge variant="destructive">Critico</Badge>;
       case "low":
@@ -170,6 +176,12 @@ export default function Labels() {
           </p>
         </div>
       </div>
+
+      {negativeProducts.length > 0 && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          {negativeProducts.map((product) => `Etichette sotto zero per ${product.name}: aggiornare la giacenza`).join(" · ")}
+        </div>
+      )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

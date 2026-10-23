@@ -325,3 +325,12 @@
 - [x] Mostrare “Giacenza insufficiente” soltanto quando E-Keto e SoKeto insieme non coprono la richiesta
 - [x] Eseguire test isolati per entrambi i casi, regressione completa, build e revisione diff
 - [ ] Committare il branch `fix/delivery-transfer-message`; merge e deploy solo dopo autorizzazione esplicita
+
+
+## Hotfix — consegna senza blocchi etichette/pagamento (2026-10-21)
+
+- [x] Consentita la spedizione anche con etichette a zero: il consumo resta tracciato e `products.labelStock` può diventare negativo; nessun CHECK di produzione impedisce i valori negativi, quindi nessuna migration necessaria.
+- [x] Avviso non bloccante in Gestione Etichette e nel dettaglio ordine: `Etichette sotto zero per <prodotto>: aggiornare la giacenza`.
+- [x] Rimosso il gate pagamento nel servizio e nella UI del percorso composto: un ordine consegnato non pagato è marcato `Da incassare`.
+- [x] Alla consegna non pagata il post-commit conserva/genera solo la proforma; alla registrazione del pagamento genera la fattura FiC con la company dell'ordine e calcola le provvigioni.
+- [x] Test isolato: saldo etichette negativo non bloccante, consegna non pagata con proforma, pagamento successivo con fattura FiC e provvigione, più la suite atomica preesistente.

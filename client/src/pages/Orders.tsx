@@ -267,7 +267,9 @@ export default function Orders() {
                           </TableCell>
                           <TableCell>
                             {(() => {
-                              const ps = PAYMENT_STATUS_LABELS[(order as any).paymentStatus] ?? { label: (order as any).paymentStatus ?? "—", variant: "outline" as const };
+                              const ps = order.status === "delivered" && (order as any).paymentStatus === "unpaid"
+                                ? { label: "Da incassare", variant: "outline" as const }
+                                : (PAYMENT_STATUS_LABELS[(order as any).paymentStatus] ?? { label: (order as any).paymentStatus ?? "—", variant: "outline" as const });
                               return <Badge variant={ps.variant}>{ps.label}</Badge>;
                             })()}
                           </TableCell>

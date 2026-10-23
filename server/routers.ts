@@ -1645,8 +1645,9 @@ export const appRouter = router({
       return (rows as any[]).map((r: any) => {
         const stock = Number(r.labelStock || 0);
         const threshold = Number(r.labelReorderThreshold || 100);
-        let status: 'normal' | 'low' | 'critical' = 'normal';
-        if (stock < threshold * 0.5) status = 'critical';
+        let status: 'normal' | 'low' | 'critical' | 'negative' = 'normal';
+        if (stock < 0) status = 'negative';
+        else if (stock < threshold * 0.5) status = 'critical';
         else if (stock < threshold) status = 'low';
         return {
           productId: r.productId,
