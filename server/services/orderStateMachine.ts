@@ -12,7 +12,7 @@
 import { TRPCError } from "@trpc/server";
 import { eq, and, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { orders, orderItems, orderStatusEvents, retailers, products, productBatches } from "../../drizzle/schema";
+import { orders, orderItems, orderServiceLines, orderStatusEvents, retailers, products, productBatches } from "../../drizzle/schema";
 import * as ficDocService from "./ficDocumentService";
 import { sendOrderStatusEmail } from "./orderEmailService";
 import { allocateBatchesSelectively } from "./selectiveFefoAllocation";
@@ -145,35 +145,55 @@ export async function transitionOrder(input: TransitionInput): Promise<Transitio
         const retailerFicClientId = await getRetailerFicClientId(order.retailerId, order.companyId);
 
         if (retailerFicClientId) {
-          const ficItems = await db
-            .select({
-              productName: orderItems.productName,
-              productSku: orderItems.productSku,
-              quantity: orderItems.quantity,
-              unitPriceFinal: orderItems.unitPriceFinal,
-              vatRate: orderItems.vatRate,
-              batchId: orderItems.batchId,
-              batchNumber: productBatches.batchNumber,
-              expirationDate: productBatches.expirationDate,
-            })
-            .from(orderItems)
-            .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
-            .where(eq(orderItems.orderId, orderId));
+          const [ficItems, serviceLines] = await Promise.all([
+            db
+              .select({
+                productName: orderItems.productName,
+                productSku: orderItems.productSku,
+                quantity: orderItems.quantity,
+                unitPriceFinal: orderItems.unitPriceFinal,
+                vatRate: orderItems.vatRate,
+                batchId: orderItems.batchId,
+                batchNumber: productBatches.batchNumber,
+                expirationDate: productBatches.expirationDate,
+              })
+              .from(orderItems)
+              .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
+              .where(eq(orderItems.orderId, orderId)),
+            db
+              .select({
+                serviceName: orderServiceLines.serviceName,
+                quantity: orderServiceLines.quantity,
+                unitPriceNet: orderServiceLines.unitPriceNet,
+                vatRate: orderServiceLines.vatRate,
+              })
+              .from(orderServiceLines)
+              .where(eq(orderServiceLines.orderId, orderId)),
+          ]);
 
           try {
             const proforma = await ficDocService.createProforma({
               orderId,
               orderNumber: order.orderNumber ?? "",
               retailerFicClientId,
-              items: ficItems.map((it) => ({
-                productName: it.productName,
-                quantity: it.quantity,
-                unitPrice: parseFloat(it.unitPriceFinal),
-                vatRate: parseFloat(it.vatRate),
-                batchNumber: it.batchNumber ?? undefined,
-                expiryDate: it.expirationDate ?? undefined,
-                sku: it.productSku ?? undefined,
-              })),
+              items: [
+                ...ficItems.map((it) => ({
+                  productName: it.productName,
+                  quantity: it.quantity,
+                  unitPrice: parseFloat(it.unitPriceFinal),
+                  vatRate: parseFloat(it.vatRate),
+                  batchNumber: it.batchNumber ?? undefined,
+                  expiryDate: it.expirationDate ?? undefined,
+                  sku: it.productSku ?? undefined,
+                })),
+                ...serviceLines.map((line) => ({
+                  kind: "service" as const,
+                  serviceName: line.serviceName,
+                  quantity: Number(line.quantity),
+                  unitPrice: Number(line.unitPriceNet),
+                  vatRate: Number(line.vatRate),
+                })),
+              ],
               paymentTerms,
               totalGross: order.totalGross ? parseFloat(order.totalGross) : undefined,
               notes: order.notesInternal ?? undefined,
@@ -365,54 +385,54 @@ export async function registerPayment(
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
-  const [order] = await db
-    .select({
-      id: orders.id,
-      status: orders.status,
-      paymentStatus: orders.paymentStatus,
-      paymentTerms: orders.paymentTerms,
-      retailerId: orders.retailerId,
-      orderNumber: orders.orderNumber,
-      companyId: orders.companyId,
-      ficProformaId: orders.ficProformaId,
-      totalGross: orders.totalGross,
-    })
-    .from(orders)
-    .where(eq(orders.id, input.orderId))
-    .limit(1);
-
-  if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
-
-  if (order.paymentStatus !== "unpaid") {
-    throw new TRPCError({ code: "BAD_REQUEST", message: `Pagamento già registrato (stato: ${order.paymentStatus})` });
-  }
-  if (order.status === "cancelled") {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Impossibile registrare pagamento su ordine annullato" });
-  }
-
-  // Update payment fields
-  const updateData: Record<string, any> = {
-    paymentStatus: "paid",
-    paidAt: input.paidAt,
-    paymentMethod: input.paymentMethod,
-    updatedAt: new Date(),
-  };
-
-  // If note provided, append to notesInternal
-  if (input.note) {
-    const existingNotes = order.orderNumber; // we'll read notesInternal separately
-    const [orderFull] = await db
-      .select({ notesInternal: orders.notesInternal })
+  const order = await db.transaction(async (tx) => {
+    const [lockedOrder] = await tx
+      .select({
+        id: orders.id,
+        status: orders.status,
+        paymentStatus: orders.paymentStatus,
+        paymentTerms: orders.paymentTerms,
+        retailerId: orders.retailerId,
+        orderNumber: orders.orderNumber,
+        companyId: orders.companyId,
+        ficProformaId: orders.ficProformaId,
+        totalGross: orders.totalGross,
+        notesInternal: orders.notesInternal,
+      })
       .from(orders)
       .where(eq(orders.id, input.orderId))
+      .for("update")
       .limit(1);
-    const existing = orderFull?.notesInternal ?? "";
-    updateData.notesInternal = existing
-      ? `${existing}\n[Pagamento] ${input.note}`
-      : `[Pagamento] ${input.note}`;
-  }
 
-  await db.update(orders).set(updateData).where(eq(orders.id, input.orderId));
+    if (!lockedOrder) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
+    if (lockedOrder.paymentStatus !== "unpaid") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: `Pagamento già registrato (stato: ${lockedOrder.paymentStatus})` });
+    }
+    if (lockedOrder.status === "cancelled") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Impossibile registrare pagamento su ordine annullato" });
+    }
+
+    const updateData: Record<string, any> = {
+      paymentStatus: "paid",
+      paidAt: input.paidAt,
+      paymentMethod: input.paymentMethod,
+      updatedAt: new Date(),
+    };
+    if (input.note) {
+      updateData.notesInternal = lockedOrder.notesInternal
+        ? `${lockedOrder.notesInternal}\n[Pagamento] ${input.note}`
+        : `[Pagamento] ${input.note}`;
+    }
+    await tx.update(orders).set(updateData).where(eq(orders.id, input.orderId));
+
+    const { evaluatePromotionBonusForPayment } = await import("./orderPromotionBonusService");
+    await evaluatePromotionBonusForPayment(tx, {
+      orderId: input.orderId,
+      actorUserId: input.actorUserId,
+      paidAt: input.paidAt,
+    });
+    return lockedOrder;
+  });
 
   // M7-A: Calculate commission
   try {
@@ -477,35 +497,28 @@ export async function cancelPayment(input: CancelPaymentInput): Promise<{ paymen
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
-  const [order] = await db
-    .select({
-      id: orders.id,
-      paymentStatus: orders.paymentStatus,
-      orderNumber: orders.orderNumber,
-      notesInternal: orders.notesInternal,
-    })
-    .from(orders)
-    .where(eq(orders.id, input.orderId))
-    .limit(1);
-
-  if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
-
-  if (order.paymentStatus !== "paid") {
-    throw new TRPCError({ code: "BAD_REQUEST", message: `Pagamento non annullabile (stato: ${order.paymentStatus})` });
-  }
-
-  const existingNotes = order.notesInternal ?? "";
-  const newNotes = existingNotes
-    ? `${existingNotes}\n[Annullo pagamento] ${input.reason}`
-    : `[Annullo pagamento] ${input.reason}`;
-
-  await db.update(orders).set({
-    paymentStatus: "unpaid",
-    paidAt: null,
-    paymentMethod: null,
-    notesInternal: newNotes,
-    updatedAt: new Date(),
-  }).where(eq(orders.id, input.orderId));
+  await db.transaction(async (tx) => {
+    const [order] = await tx
+      .select({ id: orders.id, paymentStatus: orders.paymentStatus, notesInternal: orders.notesInternal })
+      .from(orders)
+      .where(eq(orders.id, input.orderId))
+      .for("update")
+      .limit(1);
+    if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
+    if (order.paymentStatus !== "paid") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: `Pagamento non annullabile (stato: ${order.paymentStatus})` });
+    }
+    const existingNotes = order.notesInternal ?? "";
+    await tx.update(orders).set({
+      paymentStatus: "unpaid",
+      paidAt: null,
+      paymentMethod: null,
+      notesInternal: existingNotes ? `${existingNotes}\n[Annullo pagamento] ${input.reason}` : `[Annullo pagamento] ${input.reason}`,
+      updatedAt: new Date(),
+    }).where(eq(orders.id, input.orderId));
+    const { revokePromotionBonusForOrder } = await import("./orderPromotionBonusService");
+    await revokePromotionBonusForOrder(tx, { orderId: input.orderId, actorUserId: input.actorUserId });
+  });
 
   // Void commission
   try {
@@ -733,13 +746,14 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
       }
     }
 
-    await tx.insert(orderItems).values(itemValues);
+    const insertedItems = await tx.insert(orderItems).values(itemValues).returning({ id: orderItems.id });
 
     if (!isEventOrder) {
       await persistAllowanceConsumptions(tx, {
         orderId: input.orderId,
         createdBy: input.actorUserId,
         pricing: pricing as AllowancePricingResult,
+        orderItemIdsByPricingLine: insertedItems.map((item) => item.id),
       });
     }
 
@@ -765,34 +779,54 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
     const retailerFicClientId = await getRetailerFicClientId(order.retailerId, order.companyId);
 
     if (retailerFicClientId) {
-      const updatedItems = await db
-        .select({
-          productName: orderItems.productName,
-          productSku: orderItems.productSku,
-          quantity: orderItems.quantity,
-          unitPriceFinal: orderItems.unitPriceFinal,
-          vatRate: orderItems.vatRate,
-          batchNumber: productBatches.batchNumber,
-          expirationDate: productBatches.expirationDate,
-        })
-        .from(orderItems)
-        .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
-        .where(eq(orderItems.orderId, input.orderId));
+      const [updatedItems, serviceLines] = await Promise.all([
+        db
+          .select({
+            productName: orderItems.productName,
+            productSku: orderItems.productSku,
+            quantity: orderItems.quantity,
+            unitPriceFinal: orderItems.unitPriceFinal,
+            vatRate: orderItems.vatRate,
+            batchNumber: productBatches.batchNumber,
+            expirationDate: productBatches.expirationDate,
+          })
+          .from(orderItems)
+          .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
+          .where(eq(orderItems.orderId, input.orderId)),
+        db
+          .select({
+            serviceName: orderServiceLines.serviceName,
+            quantity: orderServiceLines.quantity,
+            unitPriceNet: orderServiceLines.unitPriceNet,
+            vatRate: orderServiceLines.vatRate,
+          })
+          .from(orderServiceLines)
+          .where(eq(orderServiceLines.orderId, input.orderId)),
+      ]);
 
       try {
         await ficDocService.modifyProforma(order.ficProformaId, {
           orderId: input.orderId,
           orderNumber: order.orderNumber ?? "",
           retailerFicClientId,
-          items: updatedItems.map((it) => ({
-            productName: it.productName,
-            quantity: it.quantity,
-            unitPrice: parseFloat(it.unitPriceFinal),
-            vatRate: parseFloat(it.vatRate),
-            batchNumber: it.batchNumber ?? undefined,
-            expiryDate: it.expirationDate ?? undefined,
-            sku: it.productSku ?? undefined,
-          })),
+          items: [
+            ...updatedItems.map((it) => ({
+              productName: it.productName,
+              quantity: it.quantity,
+              unitPrice: parseFloat(it.unitPriceFinal),
+              vatRate: parseFloat(it.vatRate),
+              batchNumber: it.batchNumber ?? undefined,
+              expiryDate: it.expirationDate ?? undefined,
+              sku: it.productSku ?? undefined,
+            })),
+            ...serviceLines.map((line) => ({
+              kind: "service" as const,
+              serviceName: line.serviceName,
+              quantity: Number(line.quantity),
+              unitPrice: Number(line.unitPriceNet),
+              vatRate: Number(line.vatRate),
+            })),
+          ],
           paymentTerms: order.paymentTerms as PaymentTerms,
           totalGross: parseFloat(pricing.totalGross),
           notes: order.notesInternal ?? undefined,

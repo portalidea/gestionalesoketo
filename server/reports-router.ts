@@ -377,14 +377,24 @@ const salesRouter = router({
       const prev = getPreviousPeriod(dateFrom, dateTo);
 
       // Revenue current period
-      const [revCurrent] = await db.execute<{ grossTotal: number; netTotal: number; vatTotal: number; orderCount: number; avgOrderValue: number }>(sql`
+      const [revCurrent] = await db.execute<{ grossTotal: number; netTotal: number; merchandiseNetTotal: number; serviceNetTotal: number; serviceGrossTotal: number; vatTotal: number; orderCount: number; avgOrderValue: number }>(sql`
         SELECT
           COALESCE(SUM(o."totalGross"::float), 0) AS "grossTotal",
           COALESCE(SUM(o."subtotalNet"::float), 0) AS "netTotal",
+          COALESCE(SUM(o."subtotalNet"::float), 0) - COALESCE(SUM(service_totals."serviceNet"), 0) AS "merchandiseNetTotal",
+          COALESCE(SUM(service_totals."serviceNet"), 0) AS "serviceNetTotal",
+          COALESCE(SUM(service_totals."serviceGross"), 0) AS "serviceGrossTotal",
           COALESCE(SUM(o."vatAmount"::float), 0) AS "vatTotal",
           COUNT(*)::int AS "orderCount",
           CASE WHEN COUNT(*) > 0 THEN COALESCE(SUM(o."totalGross"::float), 0) / COUNT(*) ELSE 0 END AS "avgOrderValue"
         FROM "orders" o
+        LEFT JOIN LATERAL (
+          SELECT
+            COALESCE(SUM(osl.line_total_net::float), 0) AS "serviceNet",
+            COALESCE(SUM(osl.line_total_gross::float), 0) AS "serviceGross"
+          FROM order_service_lines osl
+          WHERE osl."orderId" = o.id
+        ) service_totals ON true
         WHERE o."createdAt" >= ${dateFrom.toISOString()}::timestamptz
           AND o."createdAt" <= ${dateTo.toISOString()}::timestamptz
           AND o."status" NOT IN ('cancelled')
@@ -392,14 +402,24 @@ const salesRouter = router({
       `);
 
       // Revenue previous period
-      const [revPrev] = await db.execute<{ grossTotal: number; netTotal: number; vatTotal: number; orderCount: number; avgOrderValue: number }>(sql`
+      const [revPrev] = await db.execute<{ grossTotal: number; netTotal: number; merchandiseNetTotal: number; serviceNetTotal: number; serviceGrossTotal: number; vatTotal: number; orderCount: number; avgOrderValue: number }>(sql`
         SELECT
           COALESCE(SUM(o."totalGross"::float), 0) AS "grossTotal",
           COALESCE(SUM(o."subtotalNet"::float), 0) AS "netTotal",
+          COALESCE(SUM(o."subtotalNet"::float), 0) - COALESCE(SUM(service_totals."serviceNet"), 0) AS "merchandiseNetTotal",
+          COALESCE(SUM(service_totals."serviceNet"), 0) AS "serviceNetTotal",
+          COALESCE(SUM(service_totals."serviceGross"), 0) AS "serviceGrossTotal",
           COALESCE(SUM(o."vatAmount"::float), 0) AS "vatTotal",
           COUNT(*)::int AS "orderCount",
           CASE WHEN COUNT(*) > 0 THEN COALESCE(SUM(o."totalGross"::float), 0) / COUNT(*) ELSE 0 END AS "avgOrderValue"
         FROM "orders" o
+        LEFT JOIN LATERAL (
+          SELECT
+            COALESCE(SUM(osl.line_total_net::float), 0) AS "serviceNet",
+            COALESCE(SUM(osl.line_total_gross::float), 0) AS "serviceGross"
+          FROM order_service_lines osl
+          WHERE osl."orderId" = o.id
+        ) service_totals ON true
         WHERE o."createdAt" >= ${prev.dateFrom.toISOString()}::timestamptz
           AND o."createdAt" <= ${prev.dateTo.toISOString()}::timestamptz
           AND o."status" NOT IN ('cancelled')
@@ -452,13 +472,23 @@ const salesRouter = router({
       `);
 
       // Revenue time series
-      const revenueTs = await db.execute<{ date: string; gross: number; net: number; orders: number }>(sql`
+      const revenueTs = await db.execute<{ date: string; gross: number; net: number; merchandiseNet: number; serviceNet: number; serviceGross: number; orders: number }>(sql`
         SELECT
           DATE(o."createdAt") AS "date",
           COALESCE(SUM(o."totalGross"::float), 0) AS "gross",
           COALESCE(SUM(o."subtotalNet"::float), 0) AS "net",
+          COALESCE(SUM(o."subtotalNet"::float), 0) - COALESCE(SUM(service_totals."serviceNet"), 0) AS "merchandiseNet",
+          COALESCE(SUM(service_totals."serviceNet"), 0) AS "serviceNet",
+          COALESCE(SUM(service_totals."serviceGross"), 0) AS "serviceGross",
           COUNT(*)::int AS "orders"
         FROM "orders" o
+        LEFT JOIN LATERAL (
+          SELECT
+            COALESCE(SUM(osl.line_total_net::float), 0) AS "serviceNet",
+            COALESCE(SUM(osl.line_total_gross::float), 0) AS "serviceGross"
+          FROM order_service_lines osl
+          WHERE osl."orderId" = o.id
+        ) service_totals ON true
         WHERE o."createdAt" >= ${dateFrom.toISOString()}::timestamptz
           AND o."createdAt" <= ${dateTo.toISOString()}::timestamptz
           AND o."status" NOT IN ('cancelled')
@@ -511,10 +541,16 @@ const salesRouter = router({
         revenue: {
           grossTotal: currentRev.grossTotal,
           netTotal: currentRev.netTotal,
+          merchandiseNetTotal: currentRev.merchandiseNetTotal,
+          serviceNetTotal: currentRev.serviceNetTotal,
+          serviceGrossTotal: currentRev.serviceGrossTotal,
           vatTotal: currentRev.vatTotal,
           previousPeriod: {
             grossTotal: prevRev.grossTotal,
             netTotal: prevRev.netTotal,
+            merchandiseNetTotal: prevRev.merchandiseNetTotal,
+            serviceNetTotal: prevRev.serviceNetTotal,
+            serviceGrossTotal: prevRev.serviceGrossTotal,
             vatTotal: prevRev.vatTotal,
           },
         },
@@ -529,7 +565,7 @@ const salesRouter = router({
           },
         },
         topRetailers: topRetailers as unknown as Array<{ retailerId: string; name: string; revenue: number; orderCount: number }>,
-        revenueTimeSeries: revenueTs as unknown as Array<{ date: string; gross: number; net: number; orders: number }>,
+        revenueTimeSeries: revenueTs as unknown as Array<{ date: string; gross: number; net: number; merchandiseNet: number; serviceNet: number; serviceGross: number; orders: number }>,
         topProductsByRevenue: topByRevenue as unknown as Array<{ productId: string; name: string; revenue: number; units: number }>,
         topProductsByUnits: topByUnits as unknown as Array<{ productId: string; name: string; units: number; revenue: number }>,
         statusDistribution: statusRows as unknown as Array<{ status: string; count: number; value: number }>,
@@ -576,11 +612,21 @@ const salesRouter = router({
             r."name" AS "retailerName",
             o."subtotalNet"::float AS "subtotalNet",
             o."totalGross"::float AS "totalGross",
+            COALESCE(service_totals."serviceNet", 0) AS "serviceNet",
+            COALESCE(service_totals."serviceGross", 0) AS "serviceGross",
+            o."subtotalNet"::float - COALESCE(service_totals."serviceNet", 0) AS "merchandiseNet",
             o."createdAt",
             o."eventType",
             o."eventName"
           FROM "orders" o
           LEFT JOIN "retailers" r ON r."id" = o."retailerId"
+          LEFT JOIN LATERAL (
+            SELECT
+              COALESCE(SUM(osl.line_total_net::float), 0) AS "serviceNet",
+              COALESCE(SUM(osl.line_total_gross::float), 0) AS "serviceGross"
+            FROM order_service_lines osl
+            WHERE osl."orderId" = o.id
+          ) service_totals ON true
           WHERE ${whereClause}
           ORDER BY o."createdAt" DESC
           LIMIT ${input.limit} OFFSET ${input.offset}

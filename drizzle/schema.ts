@@ -272,6 +272,7 @@ export const prospectPromotions = pgTable("prospect_promotions", {
   validFrom: timestamp("valid_from", { withTimezone: true }).notNull(),
   validTo: timestamp("valid_to", { withTimezone: true }).notNull(),
   isActive: boolean("is_active").default(true).notNull(),
+  ruleType: varchar("rule_type", { length: 32 }).default("tier_upgrade").notNull(),
   createdBy: uuid("created_by").notNull().references(() => users.id, { onDelete: "restrict" }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "restrict" }),
@@ -336,6 +337,25 @@ export const prospectPromotionBenefits = pgTable("prospect_promotion_benefits", 
 ]);
 
 export type ProspectPromotionBenefit = typeof prospectPromotionBenefits.$inferSelect;
+
+export const prospectPromotionServicePackages = pgTable("prospect_promotion_service_packages", {
+  promotionId: uuid("promotion_id").primaryKey().references(() => prospectPromotions.id, { onDelete: "cascade" }),
+  companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  assignedTierCode: varchar("assigned_tier_code", { length: 50 }).notNull(),
+  serviceCode: varchar("service_code", { length: 100 }).default("PROSPECT_SERVICE").notNull(),
+  serviceName: text("service_name").notNull(),
+  serviceNet: numeric("service_net", { precision: 12, scale: 2 }).notNull(),
+  serviceVatRate: numeric("service_vat_rate", { precision: 5, scale: 2 }).default("22.00").notNull(),
+  minimumMerchandiseNet: numeric("minimum_merchandise_net", { precision: 12, scale: 2 }).notNull(),
+  bonusAmount: numeric("bonus_amount", { precision: 12, scale: 2 }),
+  bonusPaymentDeadline: date("bonus_payment_deadline"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  foreignKey({ columns: [t.promotionId, t.companyId], foreignColumns: [prospectPromotions.id, prospectPromotions.companyId], name: "prospect_service_package_promotion_company_fkey" }).onDelete("cascade"),
+  index("idx_prospect_service_packages_company").on(t.companyId, t.promotionId),
+]);
+export type ProspectPromotionServicePackage = typeof prospectPromotionServicePackages.$inferSelect;
 
 /** Invito individuale e revocabile al modulo ordine prospect. */
 export const prospectInvitations = pgTable("prospect_invitations", {
@@ -453,6 +473,12 @@ export const prospectOrderCommercialTerms = pgTable("prospect_order_commercial_t
   freeShippingApplied: boolean("free_shipping_applied").default(false).notNull(),
   vatAmount: numeric("vat_amount", { precision: 10, scale: 2 }).notNull(),
   totalGross: numeric("total_gross", { precision: 10, scale: 2 }).notNull(),
+  ruleType: varchar("rule_type", { length: 32 }).default("tier_upgrade").notNull(),
+  serviceLineSnapshot: jsonb("service_line_snapshot"),
+  bonusSnapshot: jsonb("bonus_snapshot"),
+  serviceNet: numeric("service_net", { precision: 12, scale: 2 }).default("0").notNull(),
+  serviceVatRate: numeric("service_vat_rate", { precision: 5, scale: 2 }),
+  serviceVatAmount: numeric("service_vat_amount", { precision: 12, scale: 2 }).default("0").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   unique("prospect_order_terms_simulation_unique").on(t.simulationId),
@@ -1189,6 +1215,22 @@ export const orderItems = pgTable(
 export type OrderItem = typeof orderItems.$inferSelect;
 export type InsertOrderItem = typeof orderItems.$inferInsert;
 
+export const orderServiceLines = pgTable("order_service_lines", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  orderId: uuid("orderId").notNull().references(() => orders.id, { onDelete: "cascade" }),
+  companyId: uuid("companyId").notNull().references(() => companies.id, { onDelete: "restrict" }),
+  sourcePromotionId: uuid("sourcePromotionId").references(() => prospectPromotions.id, { onDelete: "restrict" }),
+  serviceCode: varchar("service_code", { length: 100 }).notNull(),
+  serviceName: text("service_name").notNull(),
+  quantity: numeric("quantity", { precision: 12, scale: 3 }).default("1").notNull(),
+  unitPriceNet: numeric("unit_price_net", { precision: 12, scale: 2 }).notNull(),
+  vatRate: numeric("vat_rate", { precision: 5, scale: 2 }).notNull(),
+  lineTotalNet: numeric("line_total_net", { precision: 12, scale: 2 }).notNull(),
+  lineTotalGross: numeric("line_total_gross", { precision: 12, scale: 2 }).notNull(),
+  createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index("idx_order_service_lines_order").on(t.orderId), index("idx_order_service_lines_company").on(t.companyId, t.createdAt)]);
+export type OrderServiceLine = typeof orderServiceLines.$inferSelect;
+
 /**
  * Plafond prodotti inclusi, appartenente a una singola anagrafica retailer.
  * Il riferimento fattura può essere nullo solo per un credito concordato.
@@ -1242,6 +1284,29 @@ export const retailerAllowanceConsumptions = pgTable("retailer_allowance_consump
 
 export type RetailerAllowanceConsumption = typeof retailerAllowanceConsumptions.$inferSelect;
 export type InsertRetailerAllowanceConsumption = typeof retailerAllowanceConsumptions.$inferInsert;
+
+export const orderPromotionBonuses = pgTable("order_promotion_bonuses", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  orderId: uuid("orderId").notNull().unique().references(() => orders.id, { onDelete: "restrict" }),
+  retailerId: uuid("retailerId").notNull().references(() => retailers.id, { onDelete: "restrict" }),
+  companyId: uuid("companyId").notNull().references(() => companies.id, { onDelete: "restrict" }),
+  promotionId: uuid("promotionId").notNull().references(() => prospectPromotions.id, { onDelete: "restrict" }),
+  allowanceId: uuid("allowanceId").unique().references(() => retailerAllowances.id, { onDelete: "restrict" }),
+  bonusAmount: numeric("bonus_amount", { precision: 12, scale: 2 }).notNull(),
+  valuationDiscountPercent: numeric("valuation_discount_percent", { precision: 5, scale: 2 }).default("0").notNull(),
+  paymentDeadline: date("payment_deadline").notNull(),
+  paymentPaidAt: timestamp("paymentPaidAt", { withTimezone: true }),
+  status: varchar("status", { length: 32 }).default("pending").notNull(),
+  evaluatedAt: timestamp("evaluatedAt", { withTimezone: true }),
+  grantedAt: timestamp("grantedAt", { withTimezone: true }),
+  revokedAt: timestamp("revokedAt", { withTimezone: true }),
+  reviewRequiredAt: timestamp("reviewRequiredAt", { withTimezone: true }),
+  createdBy: uuid("createdBy").references(() => users.id, { onDelete: "set null" }),
+  updatedBy: uuid("updatedBy").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index("idx_order_promotion_bonuses_company_status").on(t.companyId, t.status, t.createdAt), index("idx_order_promotion_bonuses_retailer").on(t.retailerId, t.createdAt)]);
+export type OrderPromotionBonus = typeof orderPromotionBonuses.$inferSelect;
 
 // M7-A — Affiliates module
 export const affiliateStatusEnum = pgEnum("affiliate_status", ["active", "inactive"]);

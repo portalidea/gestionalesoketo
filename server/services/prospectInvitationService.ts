@@ -14,7 +14,7 @@ import {
 } from "../../drizzle/schema";
 import { calculateProspectSimulation, getPublicProspectCatalog, normalizeProspectTiers, type ProspectCartItemInput } from "./prospectSimulationService";
 import { sendProspectSimulationNotification } from "./prospectNotificationService";
-import { buildProspectTierUpgradeTerms, getActiveProspectTierUpgradePromotion } from "./prospectPromotionService";
+import { buildProspectPromotionTerms, getActiveProspectPromotion } from "./prospectPromotionService";
 
 type Database = any;
 
@@ -149,7 +149,7 @@ export async function saveProspectCompositionSession(
       eq(prospectCompositionSessions.submitted, false),
     )).limit(1);
     if (!session) return { persisted: false as const, sessionId: null };
-    const tierUpgradePromotion = await getActiveProspectTierUpgradePromotion(tx, invitation.companyId, now);
+    const activePromotion = await getActiveProspectPromotion(tx, invitation.companyId, now);
     const metrics = input.items.length === 0
       ? emptyCompositionMetrics()
       : compositionMetrics(calculateProspectSimulation(
@@ -157,7 +157,7 @@ export async function saveProspectCompositionSession(
           ?? (() => { throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Modulo non disponibile" }); })(),
         await getPublicProspectCatalog(tx),
         input.items,
-        tierUpgradePromotion,
+        activePromotion,
       ));
     const values = { lastActivityAt: now, ...metrics };
     if (sessionIsInactive(session.lastActivityAt, now)) {
@@ -423,8 +423,14 @@ export async function submitInvitedProspectOrder(
     if (!config) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Modulo non disponibile" });
     normalizeProspectTiers(config.tiers);
     const catalog = await getPublicProspectCatalog(tx);
-    const tierUpgradePromotion = await getActiveProspectTierUpgradePromotion(tx, lockedInvitation.companyId);
-    const calculation = calculateProspectSimulation(config, catalog, input.items, tierUpgradePromotion);
+    const activePromotion = await getActiveProspectPromotion(tx, lockedInvitation.companyId);
+    const calculation = calculateProspectSimulation(config, catalog, input.items, activePromotion);
+    if (calculation.appliedServicePackage && !calculation.meetsMinimumOrder) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: `Per questo pacchetto servono almeno € ${calculation.appliedServicePackage.minimumMerchandiseNet} di prodotti al netto del pacchetto.`,
+      });
+    }
     const [alreadySubmitted] = await tx.select({ id: prospectSimulations.id }).from(prospectSimulations).where(eq(prospectSimulations.invitationId, lockedInvitation.id)).limit(1);
     if (alreadySubmitted) throw new TRPCError({ code: "CONFLICT", message: "Questo invito ha già prodotto un ordine" });
     const [created] = await tx.insert(prospectSimulations).values({
@@ -441,7 +447,7 @@ export async function submitInvitedProspectOrder(
       quantity: item.quantity, piecesPerUnitSnapshot: item.piecesPerUnit, unitListNetSnapshot: item.unitListNet,
       vatRateSnapshot: item.vatRate, lineListNet: item.lineListNet, sortOrder,
     })));
-    const commercialTerms = buildProspectTierUpgradeTerms(calculation);
+    const commercialTerms = buildProspectPromotionTerms(calculation);
     if (commercialTerms) {
       await tx.insert(prospectOrderCommercialTerms).values({
         companyId: lockedInvitation.companyId,
@@ -459,6 +465,12 @@ export async function submitInvitedProspectOrder(
         freeShippingApplied: commercialTerms.freeShippingApplied,
         vatAmount: commercialTerms.vatAmount,
         totalGross: commercialTerms.totalGross,
+        ruleType: commercialTerms.ruleType,
+        serviceLineSnapshot: commercialTerms.serviceLineSnapshot,
+        bonusSnapshot: commercialTerms.bonusSnapshot,
+        serviceNet: commercialTerms.serviceNet,
+        serviceVatRate: commercialTerms.serviceVatRate,
+        serviceVatAmount: commercialTerms.serviceVatAmount,
       });
     }
     // Il riferimento è opzionale e non può bloccare l'ordine esistente: viene

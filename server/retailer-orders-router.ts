@@ -18,10 +18,12 @@ import {
   inventoryByBatch,
   locations,
   orderItems,
+  orderServiceLines,
   orders,
   pricingPackages,
   productBatches,
   products,
+  prospectOrderCommercialTerms,
   retailerAllowances,
   retailers,
 } from "../drizzle/schema";
@@ -105,6 +107,16 @@ export const retailerOrdersRouter = router({
           subtotalNet: orders.subtotalNet,
           vatAmount: orders.vatAmount,
           totalGross: orders.totalGross,
+          serviceNet: sql<string>`COALESCE((
+            SELECT SUM(osl.line_total_net)
+            FROM order_service_lines osl
+            WHERE osl."orderId" = ${orders.id}
+          ), 0)`,
+          serviceGross: sql<string>`COALESCE((
+            SELECT SUM(osl.line_total_gross)
+            FROM order_service_lines osl
+            WHERE osl."orderId" = ${orders.id}
+          ), 0)`,
           discountPercent: orders.discountPercent,
           ficProformaNumber: orders.ficProformaNumber,
           createdAt: orders.createdAt,
@@ -188,6 +200,22 @@ export const retailerOrdersRouter = router({
         .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
         .where(eq(orderItems.orderId, input.id))
         .orderBy(asc(orderItems.productName));
+      const serviceLines = await db
+        .select({
+          id: orderServiceLines.id,
+          serviceCode: orderServiceLines.serviceCode,
+          serviceName: orderServiceLines.serviceName,
+          quantity: orderServiceLines.quantity,
+          unitPriceNet: orderServiceLines.unitPriceNet,
+          vatRate: orderServiceLines.vatRate,
+          lineTotalNet: orderServiceLines.lineTotalNet,
+          lineTotalGross: orderServiceLines.lineTotalGross,
+        })
+        .from(orderServiceLines)
+        .where(eq(orderServiceLines.orderId, input.id))
+        .orderBy(asc(orderServiceLines.createdAt));
+      const serviceNet = serviceLines.reduce((sum, line) => sum + Number(line.lineTotalNet), 0);
+      const serviceGross = serviceLines.reduce((sum, line) => sum + Number(line.lineTotalGross), 0);
 
       // Timeline (fulfillment only)
       const timeline = [
@@ -201,8 +229,19 @@ export const retailerOrdersRouter = router({
       }
 
       return {
-        order,
+        order: {
+          ...order,
+          totals: {
+            merchandiseNet: (Number(order.subtotalNet) - serviceNet).toFixed(2),
+            serviceNet: serviceNet.toFixed(2),
+            serviceGross: serviceGross.toFixed(2),
+            subtotalNet: order.subtotalNet,
+            vatAmount: order.vatAmount,
+            totalGross: order.totalGross,
+          },
+        },
         items,
+        serviceLines,
         timeline,
       };
     }),
@@ -241,6 +280,19 @@ export const retailerOrdersRouter = router({
       }
       if (order.status !== "pending") {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Solo ordini in stato 'pending' possono essere modificati" });
+      }
+      if (order.prospectCommercialTermsId && !order.prospectCommercialTermsReleasedAt) {
+        const [terms] = await db
+          .select({ ruleType: prospectOrderCommercialTerms.ruleType })
+          .from(prospectOrderCommercialTerms)
+          .where(eq(prospectOrderCommercialTerms.id, order.prospectCommercialTermsId))
+          .limit(1);
+        if (terms?.ruleType === "service_package") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Questo ordine conserva un pacchetto servizio prospect congelato e non può essere modificato dal portale. Contatta SoKeto per una variazione auditata.",
+          });
+        }
       }
 
       // Ricalcola pricing

@@ -21,7 +21,9 @@ import {
   pricingPackages,
   orders,
   orderItems,
+  orderServiceLines,
   productBatches,
+  prospectOrderCommercialTerms,
 } from "../drizzle/schema";
 import { calculateOrderPricing } from "./pricing";
 import {
@@ -397,14 +399,15 @@ export const retailerSelfServiceRouter = router({
           batchId: null,
         }));
 
-        if (itemValues.length > 0) {
-          await tx.insert(orderItems).values(itemValues);
-        }
+        const insertedItems = itemValues.length > 0
+          ? await tx.insert(orderItems).values(itemValues).returning({ id: orderItems.id })
+          : [];
 
         await persistAllowanceConsumptions(tx, {
           orderId: order.id,
           createdBy: ctx.user.id,
           pricing,
+          orderItemIdsByPricingLine: insertedItems.map((item) => item.id),
         });
 
         return { order, pricing };
@@ -520,6 +523,16 @@ export const retailerSelfServiceRouter = router({
           paymentTerms: orders.paymentTerms,
           paymentStatus: orders.paymentStatus,
           totalGross: orders.totalGross,
+          serviceNet: sql<string>`COALESCE((
+            SELECT SUM(osl.line_total_net)
+            FROM order_service_lines osl
+            WHERE osl."orderId" = ${orders.id}
+          ), 0)`,
+          serviceGross: sql<string>`COALESCE((
+            SELECT SUM(osl.line_total_gross)
+            FROM order_service_lines osl
+            WHERE osl."orderId" = ${orders.id}
+          ), 0)`,
           paidAt: orders.paidAt,
         })
         .from(orders)
@@ -556,6 +569,8 @@ export const retailerSelfServiceRouter = router({
           status: o.status,
           paymentStatus: paymentStatusLabel,
           totalAmount: o.totalGross,
+          serviceNet: o.serviceNet,
+          serviceGross: o.serviceGross,
           itemCount: itemCounts.get(o.id) ?? 0,
         };
       });
@@ -604,6 +619,36 @@ export const retailerSelfServiceRouter = router({
         .from(orderItems)
         .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
         .where(eq(orderItems.orderId, input.orderId));
+      const [serviceLines, commercialTerms] = await Promise.all([
+        database
+          .select({
+            id: orderServiceLines.id,
+            serviceCode: orderServiceLines.serviceCode,
+            serviceName: orderServiceLines.serviceName,
+            quantity: orderServiceLines.quantity,
+            unitPriceNet: orderServiceLines.unitPriceNet,
+            vatRate: orderServiceLines.vatRate,
+            lineTotalNet: orderServiceLines.lineTotalNet,
+            lineTotalGross: orderServiceLines.lineTotalGross,
+          })
+          .from(orderServiceLines)
+          .where(eq(orderServiceLines.orderId, input.orderId))
+          .orderBy(orderServiceLines.createdAt),
+        order.prospectCommercialTermsId
+          ? database
+            .select({ ruleType: prospectOrderCommercialTerms.ruleType })
+            .from(prospectOrderCommercialTerms)
+            .where(eq(prospectOrderCommercialTerms.id, order.prospectCommercialTermsId))
+            .limit(1)
+          : Promise.resolve([]),
+      ]);
+      const serviceNet = serviceLines.reduce((sum, line) => sum + Number(line.lineTotalNet), 0);
+      const serviceGross = serviceLines.reduce((sum, line) => sum + Number(line.lineTotalGross), 0);
+      const hasFrozenServicePackage = Boolean(
+        order.prospectCommercialTermsId
+        && !order.prospectCommercialTermsReleasedAt
+        && commercialTerms[0]?.ruleType === "service_package",
+      );
 
       // Build status history from timestamps
       const statusHistory: Array<{ status: string; timestamp: Date | null }> = [];
@@ -635,14 +680,23 @@ export const retailerSelfServiceRouter = router({
           deliveredAt: order.deliveredAt,
           cancelledAt: order.cancelledAt,
           cancelledReason: order.cancelledReason,
+          totals: {
+            merchandiseNet: (Number(order.subtotalNet) - serviceNet).toFixed(2),
+            serviceNet: serviceNet.toFixed(2),
+            serviceGross: serviceGross.toFixed(2),
+            subtotalNet: order.subtotalNet,
+            vatAmount: order.vatAmount,
+            totalGross: order.totalGross,
+          },
         },
         items: items.map((it) => ({
           ...it,
           batchNumber: showBatchInfo ? it.batchNumber : null,
           expirationDate: showBatchInfo ? it.expirationDate : null,
         })),
+        serviceLines,
         statusHistory,
-        canModify: order.status === "pending",
+        canModify: order.status === "pending" && !hasFrozenServicePackage,
         canCancel: order.status === "pending",
       };
     }),
@@ -665,7 +719,13 @@ export const retailerSelfServiceRouter = router({
 
       // Verify ownership + status
       const [order] = await database
-        .select({ id: orders.id, status: orders.status, retailerId: orders.retailerId })
+        .select({
+          id: orders.id,
+          status: orders.status,
+          retailerId: orders.retailerId,
+          prospectCommercialTermsId: orders.prospectCommercialTermsId,
+          prospectCommercialTermsReleasedAt: orders.prospectCommercialTermsReleasedAt,
+        })
         .from(orders)
         .where(and(eq(orders.id, input.orderId), eq(orders.retailerId, ctx.retailerId)))
         .limit(1);
@@ -673,6 +733,19 @@ export const retailerSelfServiceRouter = router({
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
       if (order.status !== "pending") {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Solo ordini in stato 'pending' possono essere modificati" });
+      }
+      if (order.prospectCommercialTermsId && !order.prospectCommercialTermsReleasedAt) {
+        const [terms] = await database
+          .select({ ruleType: prospectOrderCommercialTerms.ruleType })
+          .from(prospectOrderCommercialTerms)
+          .where(eq(prospectOrderCommercialTerms.id, order.prospectCommercialTermsId))
+          .limit(1);
+        if (terms?.ruleType === "service_package") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Questo ordine conserva un pacchetto servizio prospect congelato e non può essere modificato dal portale. Contatta SoKeto per una variazione auditata.",
+          });
+        }
       }
 
       // Update in transaction
@@ -715,11 +788,12 @@ export const retailerSelfServiceRouter = router({
           productName: pi.productName,
           batchId: null,
         }));
-        await tx.insert(orderItems).values(itemValues);
+        const insertedItems = await tx.insert(orderItems).values(itemValues).returning({ id: orderItems.id });
         await persistAllowanceConsumptions(tx, {
           orderId: input.orderId,
           createdBy: ctx.user.id,
           pricing: nextPricing,
+          orderItemIdsByPricingLine: insertedItems.map((item) => item.id),
         });
         return nextPricing;
       });

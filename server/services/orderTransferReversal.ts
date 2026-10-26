@@ -11,6 +11,7 @@ import {
   stockMovements,
 } from "../../drizzle/schema";
 import { reverseAllowanceConsumptionsForOrder } from "./retailerAllowanceService";
+import { revokePromotionBonusForOrder } from "./orderPromotionBonusService";
 
 export const ORDER_TRANSFER_SOURCE_TYPE = "order_transfer";
 export const ORDER_CANCELLATION_REVERSAL_SOURCE_TYPE = "order_cancellation_reversal";
@@ -258,6 +259,7 @@ export async function cancelOrderWithTransferReversal(input: {
       createdBy: input.actorUserId,
       reason: "Ordine annullato",
     });
+    await revokePromotionBonusForOrder(tx, { orderId: order.id, actorUserId: input.actorUserId });
 
     await tx
       .update(orders)
