@@ -55,15 +55,9 @@ export type ProspectCatalogProduct = {
 export type ProspectCartItemInput = { productId: string; quantity: number };
 
 /** Campagna tier upgrade già risolta server-side per company e finestra temporale. */
-export type ProspectTierUpgradePromotion = {
-  promotionId: string;
-  title: string;
-  publicDescription: string;
-  validFrom: Date;
-  validTo: Date;
-  qualifyingTierCode: string;
-  grantedTierCode: string;
-};
+export type ProspectTierUpgradePromotion = { ruleType?: "tier_upgrade"; promotionId: string; title: string; publicDescription: string; validFrom: Date; validTo: Date; qualifyingTierCode: string; grantedTierCode: string; };
+export type ProspectServicePackagePromotion = { ruleType: "service_package"; promotionId: string; title: string; publicDescription: string; validFrom: Date; validTo: Date; assignedTierCode: string; serviceCode: string; serviceName: string; serviceNet: string; serviceVatRate: string; minimumMerchandiseNet: string; bonusAmount: string | null; bonusPaymentDeadline: Date | null; };
+export type ProspectActivePromotion = (ProspectTierUpgradePromotion & { ruleType?: "tier_upgrade" }) | ProspectServicePackagePromotion;
 
 export type ProspectSimulationCalculation = {
   listSubtotalNet: string;
@@ -73,11 +67,18 @@ export type ProspectSimulationCalculation = {
   pricingTier: ProspectTier;
   realTierMerchandiseNet: string;
   appliedTierUpgrade: ProspectTierUpgradePromotion | null;
+  appliedServicePackage: ProspectServicePackagePromotion | null;
+  serviceLine: { serviceCode: string; serviceName: string; net: string; vatRate: string; vatAmount: string; gross: string } | null;
+  totalNet: string;
+  vatAmount: string;
+  totalGross: string;
   nextTier: (ProspectTier & { additionalMerchandiseNet: string }) | null;
   currentTierMerchandiseNet: string;
   minimumOrderNet: string;
   meetsMinimumOrder: boolean;
   shippingNet: string;
+  shippingVatRate: string | null;
+  shippingVatAmount: string;
   freeShippingApplied: boolean;
   displayStandUnlocked: boolean;
   displayStandThreshold: string;
@@ -112,7 +113,7 @@ export function calculateProspectSimulation(
   config: ProspectConfig,
   catalog: ProspectCatalogProduct[],
   requestedItems: ProspectCartItemInput[],
-  tierUpgrade?: ProspectTierUpgradePromotion | null,
+  promotion?: ProspectActivePromotion | null,
 ): ProspectSimulationCalculation {
   if (requestedItems.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Inserisci almeno un prodotto" });
   const quantities = new Map<string, number>();
@@ -174,18 +175,18 @@ export function calculateProspectSimulation(
   const reachedTierIndex = tiers.findIndex((tier) => tier.code === reachedTier.code);
   let pricingTier = reachedTier;
   let appliedTierUpgrade: ProspectTierUpgradePromotion | null = null;
-  if (tierUpgrade) {
+  let appliedServicePackage: ProspectServicePackagePromotion | null = null;
+  if (promotion?.ruleType === "service_package") {
+    const assignedTier = tiers.find((tier) => tier.code === promotion.assignedTierCode);
+    if (!assignedTier) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Pacchetto promozionale non risolto" });
+    pricingTier = assignedTier;
+    appliedServicePackage = promotion;
+  } else if (promotion) {
+    const tierUpgrade = promotion as ProspectTierUpgradePromotion;
     const qualifyingTierIndex = tiers.findIndex((tier) => tier.code === tierUpgrade.qualifyingTierCode);
     const grantedTierIndex = tiers.findIndex((tier) => tier.code === tierUpgrade.grantedTierCode);
-    if (qualifyingTierIndex < 0 || grantedTierIndex < 0 || grantedTierIndex <= qualifyingTierIndex) {
-      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Configurazione promozione prospect non valida" });
-    }
-    // Il beneficio vale da una fascia qualificante in su, senza mai degradare
-    // chi ha già raggiunto una fascia più favorevole di quella concessa.
-    if (reachedTierIndex >= qualifyingTierIndex && reachedTierIndex < grantedTierIndex) {
-      pricingTier = tiers[grantedTierIndex]!;
-      appliedTierUpgrade = tierUpgrade;
-    }
+    if (qualifyingTierIndex < 0 || grantedTierIndex < 0 || grantedTierIndex <= qualifyingTierIndex) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Configurazione promozione prospect non valida" });
+    if (reachedTierIndex >= qualifyingTierIndex && reachedTierIndex < grantedTierIndex) { pricingTier = tiers[grantedTierIndex]!; appliedTierUpgrade = tierUpgrade; }
   }
   const nextTier = tiers[reachedTierIndex + 1] ?? null;
   const realTierMerchandiseCents = tierTotals.get(reachedTier.code)!.merchandiseNetCents;
@@ -194,6 +195,24 @@ export function calculateProspectSimulation(
   const freeShippingThresholdCents = toCents(config.freeShippingThresholdNet);
   const freeShippingApplied = currentMerchandiseCents > freeShippingThresholdCents;
   const shippingCents = freeShippingApplied ? 0 : toCents(config.shippingFeeNet);
+  const serviceNetCents = appliedServicePackage ? toCents(appliedServicePackage.serviceNet) : 0;
+  const serviceVatRate = appliedServicePackage ? Number(appliedServicePackage.serviceVatRate) : 0;
+  const serviceVatCents = Math.round(serviceNetCents * serviceVatRate / 100);
+  const merchandiseVatCents = catalogItems.reduce((sum, item) => {
+    const unitNetCents = applyPercent(
+      item.unitListNetCents,
+      10_000 - percentToBasisPoints(pricingTier.discount_percent),
+    );
+    return sum + Math.round(unitNetCents * item.quantity * Number(item.product.vatRate) / 100);
+  }, 0);
+  // La configurazione attuale non espone un'aliquota spedizione: quella
+  // contrattuale del checkout prospect è 22%, mentre zero spedizione resta
+  // senza aliquota. È congelata nei termini e quindi non dipende da UI.
+  const shippingVatRate = shippingCents > 0 ? 22 : null;
+  const shippingVatCents = shippingVatRate == null ? 0 : Math.round(shippingCents * shippingVatRate / 100);
+  const totalNetCents = currentMerchandiseCents + serviceNetCents + shippingCents;
+  const vatCents = merchandiseVatCents + serviceVatCents + shippingVatCents;
+  const minimumEligible = !appliedServicePackage || currentMerchandiseCents >= toCents(appliedServicePackage.minimumMerchandiseNet);
 
   return {
     listSubtotalNet: money(listSubtotalCents),
@@ -201,6 +220,11 @@ export function calculateProspectSimulation(
     pricingTier,
     realTierMerchandiseNet: money(realTierMerchandiseCents),
     appliedTierUpgrade,
+    appliedServicePackage,
+    serviceLine: appliedServicePackage ? { serviceCode: appliedServicePackage.serviceCode, serviceName: appliedServicePackage.serviceName, net: money(serviceNetCents), vatRate: serviceVatRate.toFixed(2), vatAmount: money(serviceVatCents), gross: money(serviceNetCents + serviceVatCents) } : null,
+    totalNet: money(totalNetCents),
+    vatAmount: money(vatCents),
+    totalGross: money(totalNetCents + vatCents),
     nextTier: nextTier
       ? {
         ...nextTier,
@@ -212,8 +236,10 @@ export function calculateProspectSimulation(
       : null,
     currentTierMerchandiseNet: money(currentMerchandiseCents),
     minimumOrderNet: money(minimumOrderCents),
-    meetsMinimumOrder: currentMerchandiseCents >= minimumOrderCents,
+    meetsMinimumOrder: currentMerchandiseCents >= minimumOrderCents && minimumEligible,
     shippingNet: money(shippingCents),
+    shippingVatRate: shippingVatRate == null ? null : shippingVatRate.toFixed(2),
+    shippingVatAmount: money(shippingVatCents),
     freeShippingApplied,
     displayStandUnlocked: currentMerchandiseCents > toCents(config.displayStandThreshold),
     displayStandThreshold: money(toCents(config.displayStandThreshold)),

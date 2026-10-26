@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 import {
-  orderItems,
+  orderPromotionBonuses,
   pricingPackages,
   retailerAllowanceConsumptions,
   retailerAllowances,
@@ -19,7 +19,7 @@ type Database = PricingDatabase;
 export const EKETO_COMPANY_ID = "00000000-0000-0000-0000-000000000001";
 export const SOKETO_COMPANY_ID = "00000000-0000-0000-0000-000000000002";
 
-export type AllowanceType = "restaurant_package" | "investor_benefit";
+export type AllowanceType = "restaurant_package" | "investor_benefit" | "promo_bonus";
 
 export type AllowanceActivationInput = {
   retailerId: string;
@@ -32,11 +32,39 @@ export type AllowanceActivationInput = {
   packageInvoiceReference?: string | null;
   notes?: string | null;
   createdBy?: string | null;
+  initialAmountOverride?: number;
+  valuationDiscountPercentOverride?: number;
+  postExhaustionPricingPackageIdOverride?: string;
 };
 
 export type AllowancePricingLine = PricingItemOutput & {
   allowanceCovered: boolean;
   allowanceConsumptionAmount: string | null;
+  /** Plafond che finanzia la riga gratuita, mai dedotto a posteriori. */
+  allowanceId: string | null;
+  allowanceValuationDiscountPercent: string | null;
+};
+
+export type AllowanceConsumptionPlan = {
+  /** Chiave deterministica scelta durante il pricing e scritta nel ledger. */
+  allowanceId: string;
+  /** Indice della riga pricing generata nello stesso passaggio del piano. */
+  pricingLineIndex: number;
+  productId: string;
+  quantity: number;
+  listUnitPrice: string;
+  valuationDiscountPercent: string;
+  consumptionAmount: string;
+};
+
+export type AllowancePricingAllowance = {
+  id: string;
+  initialAmount: string;
+  consumedAmount: string;
+  remainingBefore: string;
+  remainingAfter: string;
+  valuationDiscountPercent: string;
+  postExhaustionPackageName: string;
 };
 
 export type AllowancePricingResult = Omit<PricingResult, "items" | "subtotalNet" | "vatAmount" | "totalGross"> & {
@@ -44,15 +72,12 @@ export type AllowancePricingResult = Omit<PricingResult, "items" | "subtotalNet"
   subtotalNet: string;
   vatAmount: string;
   totalGross: string;
-  allowance: {
-    id: string;
-    initialAmount: string;
-    consumedAmount: string;
-    remainingBefore: string;
-    remainingAfter: string;
-    valuationDiscountPercent: string;
-    postExhaustionPackageName: string;
-  } | null;
+  /** Compatibilità con i chiamanti monoplafond: è il primo plafond in priorità. */
+  allowance: AllowancePricingAllowance | null;
+  /** Tutti i plafond eleggibili, nell'ordine effettivo di consumo. */
+  allowances: AllowancePricingAllowance[];
+  /** Piano autorevole di scrittura del ledger; non viene ricostruito dalle righe ordine. */
+  allowanceConsumptionPlan: AllowanceConsumptionPlan[];
 };
 
 export type PersistedAllowanceConsumption = {
@@ -64,6 +89,45 @@ export type PersistedAllowanceConsumption = {
   listUnitPrice: string;
   valuationDiscountPercent: string;
   consumptionAmount: string;
+};
+
+type AllowanceRecord = {
+  id: string;
+  initialAmount: string;
+  valuationDiscountPercent: string;
+  postExhaustionPricingPackageId: string;
+  postExhaustionPackageName: string;
+  allowanceType: string;
+  sourceAmount: string;
+  sourceReference: string;
+  sourceReceivedAt: Date;
+  activatedAt: Date;
+  status: string;
+};
+
+export type AllowanceSummary = {
+  id: string;
+  status: string;
+  initialAmount: string;
+  consumedAmount: string;
+  remainingAmount: string;
+  valuationDiscountPercent: string;
+  postExhaustionPackageName: string;
+  allowanceType: AllowanceType;
+  sourceAmount: string;
+  sourceReference: string;
+  sourceReceivedAt: Date;
+};
+
+export type RetailerAllowanceSummary = AllowanceSummary & {
+  /** Il plafond prioritario che mantiene il contratto storico dei campi root. */
+  primaryAllowanceId: string;
+  /** Totali aggregati, utili alle card che visualizzano un solo importo. */
+  totalInitialAmount: string;
+  totalConsumedAmount: string;
+  totalRemainingAmount: string;
+  /** Dettaglio completo dei plafond attivi/eleggibili in ordine di consumo. */
+  allowances: AllowanceSummary[];
 };
 
 const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
@@ -102,24 +166,17 @@ export async function prepareAllowanceActivation(
   if (!premium) throw new Error("Pacchetto Premium non configurato.");
 
   if (input.allowanceType === "restaurant_package") {
-    if (input.companyId !== EKETO_COMPANY_ID) {
-      throw new Error("Il credito pacchetto ristoratore può appartenere solo a E-Keto Food Srls.");
-    }
-    return {
-      initialAmount: "1000.00",
-      valuationDiscountPercent: premium.discountPercent,
-      postExhaustionPricingPackageId: premium.id,
-    };
+    if (input.companyId !== EKETO_COMPANY_ID) throw new Error("Il credito pacchetto ristoratore può appartenere solo a E-Keto Food Srls.");
+    return { initialAmount: "1000.00", valuationDiscountPercent: premium.discountPercent, postExhaustionPricingPackageId: premium.id };
   }
-
-  if (input.companyId !== SOKETO_COMPANY_ID) {
-    throw new Error("Il beneficio investitore può appartenere solo a SoKeto Srl.");
+  if (input.allowanceType === "promo_bonus") {
+    if (!Number.isFinite(input.initialAmountOverride) || (input.initialAmountOverride ?? 0) <= 0) throw new Error("L'importo del bonus promozionale è obbligatorio.");
+    if (input.valuationDiscountPercentOverride !== 0) throw new Error("Il bonus promozionale deve essere valorizzato a prezzo al pubblico.");
+    if (!input.postExhaustionPricingPackageIdOverride) throw new Error("Il pacchetto post-esaurimento del bonus è obbligatorio.");
+    return { initialAmount: money(input.initialAmountOverride!), valuationDiscountPercent: "0.00", postExhaustionPricingPackageId: input.postExhaustionPricingPackageIdOverride };
   }
-  return {
-    initialAmount: money(input.sourceAmount * 0.05),
-    valuationDiscountPercent: "0.00",
-    postExhaustionPricingPackageId: premium.id,
-  };
+  if (input.companyId !== SOKETO_COMPANY_ID) throw new Error("Il beneficio investitore può appartenere solo a SoKeto Srl.");
+  return { initialAmount: money(input.sourceAmount * 0.05), valuationDiscountPercent: "0.00", postExhaustionPricingPackageId: premium.id };
 }
 
 /** Crea un plafond applicando sempre le regole di tipo centralizzate. */
@@ -150,12 +207,20 @@ export async function createRetailerAllowance(
   return { id: allowance!.id, ...prepared };
 }
 
-async function getActiveAllowance(
+/**
+ * Plafond utilizzabili nell'ordine di consumo.
+ *
+ * I bonus promo vengono prima, in attivazione crescente; il plafond base è
+ * quindi il fallback. Un bonus è fail-closed: oltre allo stato active del
+ * plafond richiede il record bonus ancora granted. Così exhausted, cancelled,
+ * review_required/revoked e record non auditati non concedono merce gratuita.
+ */
+async function getActiveAllowances(
   database: Database,
   retailerId: string,
   companyId: string,
   forUpdate = false,
-) {
+): Promise<AllowanceRecord[]> {
   const query = database
     .select({
       id: retailerAllowances.id,
@@ -167,22 +232,67 @@ async function getActiveAllowance(
       sourceAmount: retailerAllowances.sourceAmount,
       sourceReference: retailerAllowances.sourceReference,
       sourceReceivedAt: retailerAllowances.sourceReceivedAt,
+      activatedAt: retailerAllowances.activatedAt,
+      status: retailerAllowances.status,
     })
     .from(retailerAllowances)
-    .innerJoin(
-      pricingPackages,
-      eq(pricingPackages.id, retailerAllowances.postExhaustionPricingPackageId),
-    )
-    .where(
-      and(
-        eq(retailerAllowances.retailerId, retailerId),
-        eq(retailerAllowances.billingCompanyId, companyId),
-        eq(retailerAllowances.status, "active"),
-      ),
-    )
-    .limit(1);
+    .innerJoin(pricingPackages, eq(pricingPackages.id, retailerAllowances.postExhaustionPricingPackageId))
+    .where(and(
+      eq(retailerAllowances.retailerId, retailerId),
+      eq(retailerAllowances.billingCompanyId, companyId),
+      eq(retailerAllowances.status, "active"),
+      sql`(
+        ${retailerAllowances.allowanceType} <> 'promo_bonus'
+        OR EXISTS (
+          SELECT 1
+          FROM order_promotion_bonuses bonus_audit
+          WHERE bonus_audit."allowanceId" = ${retailerAllowances.id}
+            AND bonus_audit.status = 'granted'
+        )
+      )`,
+    ))
+    .orderBy(
+      sql`CASE WHEN ${retailerAllowances.allowanceType} = 'promo_bonus' THEN 0 ELSE 1 END`,
+      retailerAllowances.activatedAt,
+      retailerAllowances.createdAt,
+      retailerAllowances.id,
+    );
+  return (forUpdate ? query.for("update") : query) as Promise<AllowanceRecord[]>;
+}
 
-  return forUpdate ? query.for("update") : query;
+/** Tutti i plafond della scheda retailer, inclusi quelli non più utilizzabili. */
+async function getRetailerAllowances(
+  database: Database,
+  retailerId: string,
+  companyId: string,
+): Promise<AllowanceRecord[]> {
+  return database
+    .select({
+      id: retailerAllowances.id,
+      initialAmount: retailerAllowances.initialAmount,
+      valuationDiscountPercent: retailerAllowances.valuationDiscountPercent,
+      postExhaustionPricingPackageId: retailerAllowances.postExhaustionPricingPackageId,
+      postExhaustionPackageName: pricingPackages.name,
+      allowanceType: retailerAllowances.allowanceType,
+      sourceAmount: retailerAllowances.sourceAmount,
+      sourceReference: retailerAllowances.sourceReference,
+      sourceReceivedAt: retailerAllowances.sourceReceivedAt,
+      activatedAt: retailerAllowances.activatedAt,
+      status: retailerAllowances.status,
+    })
+    .from(retailerAllowances)
+    .innerJoin(pricingPackages, eq(pricingPackages.id, retailerAllowances.postExhaustionPricingPackageId))
+    .where(and(
+      eq(retailerAllowances.retailerId, retailerId),
+      eq(retailerAllowances.billingCompanyId, companyId),
+    ))
+    .orderBy(
+      sql`CASE WHEN ${retailerAllowances.status} = 'active' THEN 0 ELSE 1 END`,
+      sql`CASE WHEN ${retailerAllowances.allowanceType} = 'promo_bonus' THEN 0 ELSE 1 END`,
+      retailerAllowances.activatedAt,
+      retailerAllowances.createdAt,
+      retailerAllowances.id,
+    ) as Promise<AllowanceRecord[]>;
 }
 
 async function getConsumedAmount(database: Database, allowanceId: string) {
@@ -195,43 +305,10 @@ async function getConsumedAmount(database: Database, allowanceId: string) {
   return parseFloat(row?.amount ?? "0");
 }
 
-async function getLatestAllowance(
-  database: Database,
-  retailerId: string,
-  companyId: string,
-) {
-  return database
-    .select({
-      id: retailerAllowances.id,
-      initialAmount: retailerAllowances.initialAmount,
-      valuationDiscountPercent: retailerAllowances.valuationDiscountPercent,
-      postExhaustionPricingPackageId: retailerAllowances.postExhaustionPricingPackageId,
-      postExhaustionPackageName: pricingPackages.name,
-      allowanceType: retailerAllowances.allowanceType,
-      sourceAmount: retailerAllowances.sourceAmount,
-      sourceReference: retailerAllowances.sourceReference,
-      sourceReceivedAt: retailerAllowances.sourceReceivedAt,
-      status: retailerAllowances.status,
-    })
-    .from(retailerAllowances)
-    .innerJoin(
-      pricingPackages,
-      eq(pricingPackages.id, retailerAllowances.postExhaustionPricingPackageId),
-    )
-    .where(
-      and(
-        eq(retailerAllowances.retailerId, retailerId),
-        eq(retailerAllowances.billingCompanyId, companyId),
-      ),
-    )
-    .orderBy(desc(retailerAllowances.activatedAt), desc(retailerAllowances.createdAt))
-    .limit(1);
-}
-
 async function formatAllowanceSummary(
   database: Database,
-  allowance: Awaited<ReturnType<typeof getLatestAllowance>>[number],
-) {
+  allowance: AllowanceRecord,
+): Promise<AllowanceSummary> {
   const consumedAmount = await getConsumedAmount(database, allowance.id);
   return {
     id: allowance.id,
@@ -248,6 +325,26 @@ async function formatAllowanceSummary(
   };
 }
 
+async function formatAllowanceSummaries(database: Database, allowances: AllowanceRecord[]) {
+  return Promise.all(allowances.map((allowance) => formatAllowanceSummary(database, allowance)));
+}
+
+function aggregateAllowanceSummary(allowances: AllowanceSummary[]): RetailerAllowanceSummary | null {
+  const primary = allowances[0];
+  if (!primary) return null;
+  const initialAmount = allowances.reduce((sum, allowance) => sum + parseFloat(allowance.initialAmount), 0);
+  const consumedAmount = allowances.reduce((sum, allowance) => sum + parseFloat(allowance.consumedAmount), 0);
+  const remainingAmount = allowances.reduce((sum, allowance) => sum + parseFloat(allowance.remainingAmount), 0);
+  return {
+    ...primary,
+    primaryAllowanceId: primary.id,
+    totalInitialAmount: money(initialAmount),
+    totalConsumedAmount: money(consumedAmount),
+    totalRemainingAmount: money(remainingAmount),
+    allowances,
+  };
+}
+
 function recalculateResult(base: PricingResult, items: AllowancePricingLine[]): AllowancePricingResult {
   const subtotalNet = round2(items.reduce((sum, item) => sum + parseFloat(item.lineTotalNet), 0));
   const totalGross = round2(items.reduce((sum, item) => sum + parseFloat(item.lineTotalGross), 0));
@@ -258,14 +355,16 @@ function recalculateResult(base: PricingResult, items: AllowancePricingLine[]): 
     vatAmount: money(totalGross - subtotalNet),
     totalGross: money(totalGross),
     allowance: null,
+    allowances: [],
+    allowanceConsumptionPlan: [],
   };
 }
 
 /**
- * Calcola prezzi e plafond in modo autorevole. Quando esiste un plafond attivo,
- * il prezzo della quota non coperta deriva dal package post-esaurimento,
- * mentre ogni confezione coperta conserva un consumo a prezzo listino scontato
- * con percentuale congelata sull'attivazione.
+ * Calcola prezzi e plafond in modo autorevole. I bonus promo sono consumati
+ * prima (activatedAt crescente), poi l'unico plafond base attivo. Il prezzo
+ * della quota non coperta è calcolato con il package post-esaurimento del
+ * plafond che chiude la catena, non con quello del primo bonus.
  */
 export async function calculateOrderPricingWithAllowance(input: {
   database?: Database;
@@ -278,14 +377,14 @@ export async function calculateOrderPricingWithAllowance(input: {
   const database = input.database ?? await getDb();
   if (!database) throw new Error("Database non disponibile");
 
-  const [allowance] = await getActiveAllowance(
+  const allowances = await getActiveAllowances(
     database,
     input.retailerId,
     input.companyId,
     Boolean(input.lockAllowance),
   );
 
-  if (!allowance) {
+  if (allowances.length === 0) {
     const pricing = await calculateOrderPricing({
       retailerId: input.retailerId,
       companyId: input.companyId,
@@ -299,36 +398,55 @@ export async function calculateOrderPricingWithAllowance(input: {
         ...item,
         allowanceCovered: false,
         allowanceConsumptionAmount: null,
+        allowanceId: null,
+        allowanceValuationDiscountPercent: null,
       })),
     );
   }
 
-  const basePricing = await calculateOrderPricing({
+  // Dopo l'ultimo plafond in priorità il prezzo deve essere quello del suo
+  // package post-esaurimento. È fondamentale quando bonus e plafond base hanno
+  // package differenti: usare il primo bonus renderebbe errata la quota pagata.
+  const postExhaustionAllowance = allowances[allowances.length - 1]!;
+  const paidPricing = await calculateOrderPricing({
     companyId: input.companyId,
     items: input.items,
-    pricingPackageIdOverride: allowance.postExhaustionPricingPackageId,
+    pricingPackageIdOverride: postExhaustionAllowance.postExhaustionPricingPackageId,
     database,
   });
-  const consumedAmount = await getConsumedAmount(database, allowance.id);
-  const remainingBefore = Math.max(0, round2(parseFloat(allowance.initialAmount) - consumedAmount));
-  let remaining = remainingBefore;
-  const valuationDiscount = parseFloat(allowance.valuationDiscountPercent);
+  const states = await Promise.all(allowances.map(async (allowance) => {
+    const consumed = await getConsumedAmount(database, allowance.id);
+    const remainingBefore = Math.max(0, round2(parseFloat(allowance.initialAmount) - consumed));
+    return { allowance, consumed, remainingBefore, remaining: remainingBefore };
+  }));
+
   const pricedItems: AllowancePricingLine[] = [];
+  const allowanceConsumptionPlan: AllowanceConsumptionPlan[] = [];
+  for (const item of paidPricing.items) {
+    let remainingQuantity = item.quantity;
+    for (const state of states) {
+      const consumptionPerUnit = parseFloat(item.unitPriceBase)
+        * (1 - parseFloat(state.allowance.valuationDiscountPercent) / 100);
+      // Le quantità ordine sono confezioni intere; un residuo minore del costo
+      // di una confezione non finanzia quote frazionarie di merce.
+      const coveredQuantity = consumptionPerUnit > 0
+        ? Math.min(remainingQuantity, Math.floor((state.remaining + 0.000001) / consumptionPerUnit))
+        : 0;
+      if (coveredQuantity <= 0) continue;
 
-  for (const item of basePricing.items) {
-    const listUnitPrice = parseFloat(item.unitPriceBase);
-    // Il consumo segue la formula contrattuale su listino × quantità e viene
-    // arrotondato solo sul totale riga, mai su ciascuna confezione.
-    const consumptionPerUnit = listUnitPrice * (1 - valuationDiscount / 100);
-    // La quantità ordine è intera: il plafond copre solo confezioni intere.
-    // Un eventuale residuo inferiore al consumo di una confezione resta visibile.
-    const coveredQuantity = consumptionPerUnit > 0
-      ? Math.min(item.quantity, Math.floor((remaining + 0.000001) / consumptionPerUnit))
-      : 0;
-
-    if (coveredQuantity > 0) {
       const consumptionAmount = round2(consumptionPerUnit * coveredQuantity);
-      remaining = Math.max(0, round2(remaining - consumptionAmount));
+      state.remaining = Math.max(0, round2(state.remaining - consumptionAmount));
+      remainingQuantity -= coveredQuantity;
+      const plan: AllowanceConsumptionPlan = {
+        allowanceId: state.allowance.id,
+        pricingLineIndex: pricedItems.length,
+        productId: item.productId,
+        quantity: coveredQuantity,
+        listUnitPrice: item.unitPriceBase,
+        valuationDiscountPercent: state.allowance.valuationDiscountPercent,
+        consumptionAmount: money(consumptionAmount),
+      };
+      allowanceConsumptionPlan.push(plan);
       pricedItems.push({
         ...item,
         quantity: coveredQuantity,
@@ -337,87 +455,82 @@ export async function calculateOrderPricingWithAllowance(input: {
         lineTotalNet: "0.00",
         lineTotalGross: "0.00",
         allowanceCovered: true,
-        allowanceConsumptionAmount: money(consumptionAmount),
+        allowanceConsumptionAmount: plan.consumptionAmount,
+        allowanceId: plan.allowanceId,
+        allowanceValuationDiscountPercent: plan.valuationDiscountPercent,
       });
     }
-
-    const paidQuantity = item.quantity - coveredQuantity;
-    if (paidQuantity > 0) {
-      const lineTotalNet = round2(parseFloat(item.unitPriceFinal) * paidQuantity);
-      const lineTotalGross = round2(lineTotalNet * (1 + parseFloat(item.vatRate) / 100));
+    if (remainingQuantity > 0) {
+      const lineTotalNet = round2(parseFloat(item.unitPriceFinal) * remainingQuantity);
       pricedItems.push({
         ...item,
-        quantity: paidQuantity,
+        quantity: remainingQuantity,
         lineTotalNet: money(lineTotalNet),
-        lineTotalGross: money(lineTotalGross),
+        lineTotalGross: money(lineTotalNet * (1 + parseFloat(item.vatRate) / 100)),
         allowanceCovered: false,
         allowanceConsumptionAmount: null,
+        allowanceId: null,
+        allowanceValuationDiscountPercent: null,
       });
     }
   }
 
-  const result = recalculateResult(basePricing, pricedItems);
-  result.allowance = {
-    id: allowance.id,
-    initialAmount: allowance.initialAmount,
-    consumedAmount: money(consumedAmount),
-    remainingBefore: money(remainingBefore),
-    remainingAfter: money(remaining),
-    valuationDiscountPercent: allowance.valuationDiscountPercent,
-    postExhaustionPackageName: allowance.postExhaustionPackageName,
-  };
+  const result = recalculateResult(paidPricing, pricedItems);
+  result.allowances = states.map((state) => ({
+    id: state.allowance.id,
+    initialAmount: state.allowance.initialAmount,
+    consumedAmount: money(state.consumed),
+    remainingBefore: money(state.remainingBefore),
+    remainingAfter: money(state.remaining),
+    valuationDiscountPercent: state.allowance.valuationDiscountPercent,
+    postExhaustionPackageName: state.allowance.postExhaustionPackageName,
+  }));
+  result.allowance = result.allowances[0] ?? null;
+  result.allowanceConsumptionPlan = allowanceConsumptionPlan;
   return result;
 }
 
-/** Registra nel ledger le sole quote gratuite appena scritte sull'ordine. */
+/**
+ * Registra nel ledger le quote gratuite pianificate dal pricing. L'ordine dei
+ * writer può spezzare le righe per FEFO e l'INSERT non restituisce i loro ID;
+   * per questo non si tenta mai un match post-hoc prodotto/quantità. I writer
+   * passano gli ID restituiti dall'INSERT nella stessa sequenza delle righe
+   * pricing: il piano conserva il relativo indice, quindi ogni entry punta in
+   * modo esplicito alla sua orderItem senza matching ambiguo.
+ */
 export async function persistAllowanceConsumptions(
   database: Database,
   input: {
     orderId: string;
     createdBy: string;
     pricing: AllowancePricingResult;
+    orderItemIdsByPricingLine?: Array<string | null>;
   },
 ) {
-  if (!input.pricing.allowance) return;
+  const plans = input.pricing.allowanceConsumptionPlan;
+  if (plans.length === 0) return;
+  if (plans.some((plan) => !plan.allowanceId || plan.quantity <= 0 || parseFloat(plan.consumptionAmount) <= 0)) {
+    throw new Error("Piano consumo plafond non valido.");
+  }
+  if (input.orderItemIdsByPricingLine && plans.some((plan) => !input.orderItemIdsByPricingLine?.[plan.pricingLineIndex])) {
+    throw new Error("Riga ordine plafond non trovata dopo la creazione dell'ordine.");
+  }
 
-  // Le righe possono essere ulteriormente spezzate dal FEFO; si leggono dopo
-  // l'INSERT per collegare ogni consumo alla riga reale, non a una bozza.
-  const coveredRows = await database
-    .select({
-      id: orderItems.id,
-      productId: orderItems.productId,
-      quantity: orderItems.quantity,
-      unitPriceBase: orderItems.unitPriceBase,
-    })
-    .from(orderItems)
-    .where(
-      and(
-        eq(orderItems.orderId, input.orderId),
-        eq(orderItems.unitPriceFinal, "0"),
-      ),
-    );
+  const rows = plans.map((plan) => ({
+    allowanceId: plan.allowanceId,
+    orderId: input.orderId,
+    orderItemId: input.orderItemIdsByPricingLine?.[plan.pricingLineIndex] ?? null,
+    entryType: "consumption" as const,
+    reversesConsumptionId: null,
+    coveredQuantity: plan.quantity.toFixed(6),
+    listUnitPriceSnapshot: plan.listUnitPrice,
+    valuationDiscountPercentSnapshot: plan.valuationDiscountPercent,
+    consumptionAmount: plan.consumptionAmount,
+    createdBy: input.createdBy,
+    reversalReason: null,
+  }));
 
-  const valuationDiscount = parseFloat(input.pricing.allowance.valuationDiscountPercent);
-  const rows = coveredRows.map((item) => {
-    const consumptionAmount = round2(
-      parseFloat(item.unitPriceBase) * item.quantity * (1 - valuationDiscount / 100),
-    );
-    return {
-      allowanceId: input.pricing.allowance!.id,
-      orderId: input.orderId,
-      orderItemId: item.id,
-      entryType: "consumption",
-      reversesConsumptionId: null,
-      coveredQuantity: item.quantity.toFixed(6),
-      listUnitPriceSnapshot: item.unitPriceBase,
-      valuationDiscountPercentSnapshot: input.pricing.allowance!.valuationDiscountPercent,
-      consumptionAmount: money(consumptionAmount),
-      createdBy: input.createdBy,
-      reversalReason: null,
-    };
-  });
-
-  if (rows.length > 0) await database.insert(retailerAllowanceConsumptions).values(rows);
+  await database.insert(retailerAllowanceConsumptions).values(rows);
 }
 
 /**
@@ -463,7 +576,7 @@ export async function reverseAllowanceConsumptionsForOrder(
       allowanceId: original.allowanceId,
       orderId: input.orderId,
       orderItemId: original.orderItemId,
-      entryType: "reversal",
+      entryType: "reversal" as const,
       reversesConsumptionId: original.id,
       coveredQuantity: (-parseFloat(original.coveredQuantity)).toFixed(6),
       listUnitPriceSnapshot: original.listUnitPriceSnapshot,
@@ -476,47 +589,57 @@ export async function reverseAllowanceConsumptionsForOrder(
   return rows.length;
 }
 
-/** Restituisce il riepilogo adatto a card admin e portale retailer. */
+/**
+ * Restituisce tutti i plafond attivi/eleggibili per card admin e portale.
+ * I campi storici root descrivono il primo plafond prioritario; `allowances`
+ * espone il dettaglio completo e i campi total* permettono una card aggregata.
+ */
 export async function getRetailerAllowanceSummary(
   database: Database,
   retailerId: string,
   companyId: string,
-) {
-  const [allowance] = await getActiveAllowance(database, retailerId, companyId);
-  if (!allowance) return null;
-  return formatAllowanceSummary(database, { ...allowance, status: "active" });
+): Promise<RetailerAllowanceSummary | null> {
+  const allowances = await getActiveAllowances(database, retailerId, companyId);
+  return aggregateAllowanceSummary(await formatAllowanceSummaries(database, allowances));
 }
 
-/** Riepiloghi attivi per la lista rivenditori della company. */
+/** Riepiloghi attivi, uno per retailer, per la lista rivenditori della company. */
 export async function getCompanyAllowanceSummaries(database: Database, companyId: string) {
-  const allowances = await database
+  const rows = await database
     .select({ retailerId: retailerAllowances.retailerId })
     .from(retailerAllowances)
-    .where(
-      and(
-        eq(retailerAllowances.billingCompanyId, companyId),
-        eq(retailerAllowances.status, "active"),
+    .leftJoin(orderPromotionBonuses, eq(orderPromotionBonuses.allowanceId, retailerAllowances.id))
+    .where(and(
+      eq(retailerAllowances.billingCompanyId, companyId),
+      eq(retailerAllowances.status, "active"),
+      or(
+        ne(retailerAllowances.allowanceType, "promo_bonus"),
+        eq(orderPromotionBonuses.status, "granted"),
       ),
-    );
-  return Promise.all(
-    allowances.map(async ({ retailerId }) => ({
-      retailerId,
-      ...(await getRetailerAllowanceSummary(database, retailerId, companyId))!,
-    })),
-  );
+    ));
+  const retailerIds = Array.from(new Set(rows.map((row) => row.retailerId)));
+  const summaries = await Promise.all(retailerIds.map(async (retailerId) => ({
+    retailerId,
+    summary: await getRetailerAllowanceSummary(database, retailerId, companyId),
+  })));
+  return summaries.flatMap(({ retailerId, summary }) => summary ? [{ retailerId, ...summary }] : []);
 }
 
-/** Storico consumi per la scheda amministrativa; i reversal restano visibili. */
+/** Storico completo dei plafond e dei loro consumi per la scheda amministrativa. */
 export async function getRetailerAllowanceLedger(
   database: Database,
   retailerId: string,
   companyId: string,
 ) {
-  const [allowance] = await getLatestAllowance(database, retailerId, companyId);
-  if (!allowance) return { allowance: null, entries: [] };
+  const allowanceRows = await getRetailerAllowances(database, retailerId, companyId);
+  if (allowanceRows.length === 0) return { allowance: null, allowances: [], entries: [] };
+
+  const allowances = await formatAllowanceSummaries(database, allowanceRows);
+  const allowanceIds = allowances.map((allowance) => allowance.id);
   const entries = await database
     .select({
       id: retailerAllowanceConsumptions.id,
+      allowanceId: retailerAllowanceConsumptions.allowanceId,
       entryType: retailerAllowanceConsumptions.entryType,
       coveredQuantity: retailerAllowanceConsumptions.coveredQuantity,
       consumptionAmount: retailerAllowanceConsumptions.consumptionAmount,
@@ -525,8 +648,9 @@ export async function getRetailerAllowanceLedger(
       orderId: retailerAllowanceConsumptions.orderId,
     })
     .from(retailerAllowanceConsumptions)
-    .where(eq(retailerAllowanceConsumptions.allowanceId, allowance.id));
-  return { allowance: await formatAllowanceSummary(database, allowance), entries };
+    .where(inArray(retailerAllowanceConsumptions.allowanceId, allowanceIds))
+    .orderBy(desc(retailerAllowanceConsumptions.createdAt), retailerAllowanceConsumptions.id);
+  return { allowance: allowances[0] ?? null, allowances, entries };
 }
 
 /**

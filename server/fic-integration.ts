@@ -867,14 +867,25 @@ export async function createFicProformaForCompany(
     date: string;
     notesInternal: string;
     orderNumber?: string;
-    items: Array<{
-      code?: string;
-      name: string;
-      description: string;
-      qty: number;
-      unitPriceFinal: string;
-      vatRate: string;
-    }>;
+    items: Array<
+      {
+        kind?: "merchandise";
+        code?: string;
+        name: string;
+        description: string;
+        qty: number;
+        unitPriceFinal: string;
+        vatRate: string;
+      }
+      | {
+        kind: "service";
+        name: string;
+        description: string;
+        qty: number;
+        unitPriceFinal: string;
+        vatRate: string;
+      }
+    >;
   },
 ): Promise<{ id: number; number: string }> {
   const { accessToken, ficCompanyId } = await getActiveFicConnection(companyId);
@@ -891,9 +902,12 @@ export async function createFicProformaForCompany(
     const vatId = findVatTypeId(vatTypes, vatRateNum);
     return {
       product_id: 0,
-      ...(it.code ? { code: it.code } : {}),
+      // Una prestazione non è una referenza di catalogo: nessun SKU/FIC code
+      // può essere attribuito alla riga, anche se coincide nominalmente con una
+      // descrizione merceologica.
+      ...(it.kind !== "service" && it.code ? { code: it.code } : {}),
       name: it.name,
-      description: it.description,
+      description: it.kind === "service" ? "Servizio non inventariato" : it.description,
       qty: it.qty,
       net_price: parseFloat(it.unitPriceFinal),
       vat: { id: vatId },

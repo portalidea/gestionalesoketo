@@ -98,6 +98,50 @@ describe("calculateProspectSimulation", () => {
     ]);
   });
 
+  it("somma merce e servizio con IVA propria senza usare il servizio per il minimo", () => {
+    const product = { ...food, unitListNet: "1233.2440" };
+    const servicePackage = {
+      ruleType: "service_package" as const,
+      promotionId: "33333333-3333-3333-3333-333333333333",
+      title: "Pacchetto Pubblicità",
+      publicDescription: "Servizio fisso per il primo ordine.",
+      validFrom: new Date("2026-10-01T00:00:00.000Z"),
+      validTo: new Date("2026-11-01T00:00:00.000Z"),
+      assignedTierCode: "premium",
+      serviceCode: "ADV-200",
+      serviceName: "Pubblicità",
+      serviceNet: "200.00",
+      serviceVatRate: "22.00",
+      minimumMerchandiseNet: "690.00",
+      bonusAmount: "200.00",
+      bonusPaymentDeadline: new Date("2026-10-31T00:00:00.000Z"),
+    };
+    const result = calculateProspectSimulation(config, [product], [{ productId: product.id, quantity: 1 }], servicePackage);
+    expect(result.currentTierMerchandiseNet).toBe("690.00");
+    expect(result.meetsMinimumOrder).toBe(true);
+    expect(result.serviceLine).toMatchObject({ net: "200.00", vatRate: "22.00", vatAmount: "44.00", gross: "244.00" });
+    expect(result.totalNet).toBe("890.00");
+    expect(result.vatAmount).toBe("113.00");
+    expect(result.totalGross).toBe("1003.00");
+  });
+
+  it("rifiuta il minimo del pacchetto quando la sola merce non raggiunge la soglia", () => {
+    const product = { ...food, unitListNet: "1233.00" };
+    const servicePackage = {
+      ruleType: "service_package" as const,
+      promotionId: "33333333-3333-3333-3333-333333333333",
+      title: "Pacchetto Pubblicità", publicDescription: "Servizio fisso.",
+      validFrom: new Date("2026-10-01T00:00:00.000Z"), validTo: new Date("2026-11-01T00:00:00.000Z"),
+      assignedTierCode: "premium", serviceCode: "ADV-200", serviceName: "Pubblicità",
+      serviceNet: "200.00", serviceVatRate: "22.00", minimumMerchandiseNet: "690.00",
+      bonusAmount: null, bonusPaymentDeadline: null,
+    };
+    const result = calculateProspectSimulation(config, [product], [{ productId: product.id, quantity: 1 }], servicePackage);
+    expect(result.currentTierMerchandiseNet).toBe("689.86");
+    expect(result.meetsMinimumOrder).toBe(false);
+    expect(result.totalNet).toBe("889.86");
+  });
+
   it.each([0, -1, 1.5])("rifiuta quantità %s", (quantity) => {
     expect(() => calculateProspectSimulation(config, [food], [{ productId: food.id, quantity }])).toThrow("quantità");
   });

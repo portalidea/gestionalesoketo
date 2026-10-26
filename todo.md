@@ -334,3 +334,10 @@
 - [x] Rimosso il gate pagamento nel servizio e nella UI del percorso composto: un ordine consegnato non pagato è marcato `Da incassare`.
 - [x] Alla consegna non pagata il post-commit conserva/genera solo la proforma; alla registrazione del pagamento genera la fattura FiC con la company dell'ordine e calcola le provvigioni.
 - [x] Test isolato: saldo etichette negativo non bloccante, consegna non pagata con proforma, pagamento successivo con fattura FiC e provvigione, più la suite atomica preesistente.
+
+
+## Promozioni prospect — pacchetto con servizio e bonus
+- [x] Diagnosticare campagne attuali, contratti prospect, righe ordine, FiC, provvigioni e plafond senza modificare dati.
+- [x] Preparare e validare localmente la migration 0048: regola `service_package`, configurazione dedicata, snapshot termini, righe servizio non inventariate, audit bonus post-pagamento, estensione `promo_bonus` e RLS.
+- [x] Migration 0048 applicata e verificata manualmente su Supabase dall'utente; nessuna scrittura applicativa o DDL/DML eseguiti da questo branch sul database di produzione.
+- [x] Implementati e verificati: regola/CRUD/UI `service_package`, minimo merce inderogabile, contratto congelato, conversione con riga servizio non inventariata, FiC/report/totali, commissioni solo merce, bonus da `paidAt`, revoca/review, priorità multi-plafond e vincolo primo ordine.

@@ -1,6 +1,6 @@
-import { and, count, eq, ne } from "drizzle-orm";
+import { and, count, eq, ne, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { affiliateCommissions, affiliates, orders, retailers } from "../../drizzle/schema";
+import { affiliateCommissions, affiliates, orderItems, orders, retailers } from "../../drizzle/schema";
 
 /**
  * M7-A: Commission service — calcola e gestisce commissioni affiliati.
@@ -86,8 +86,16 @@ export async function calculateCommissionForOrder(orderId: string): Promise<void
     ? Number(affiliate.firstOrderRate)
     : Number(affiliate.recurringRate);
 
-  // 6. Calcola amount su subtotalNet (escluso IVA)
-  const orderTotal = Number(order.subtotalNet);
+  // 6. Base affiliate: esclusivamente la somma delle righe merce. Il
+  // subtotal dell'ordine può contenere prestazioni non inventariate, che non
+  // sono commissionabili e non devono entrare in questo calcolo.
+  const [{ orderTotal: merchandiseTotal }] = await db
+    .select({
+      orderTotal: sql<string>`COALESCE(SUM(${orderItems.lineTotalNet}::numeric), 0)`,
+    })
+    .from(orderItems)
+    .where(eq(orderItems.orderId, order.id));
+  const orderTotal = Number(merchandiseTotal);
   const commissionAmount = +(orderTotal * (rate / 100)).toFixed(2);
 
   // 7. INSERT

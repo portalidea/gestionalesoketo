@@ -77,6 +77,7 @@ function computePaymentsAmount(items: Array<{
 // --- Interfaces ---
 
 export interface FicProformaItem {
+  kind?: "merchandise";
   productName: string;
   quantity: number;
   unitPrice: number; // already discounted for retailer package
@@ -86,11 +87,26 @@ export interface FicProformaItem {
   sku?: string;
 }
 
+/**
+ * Una prestazione non è merce: non può avere SKU, lotto o scadenza. Mantenerla
+ * tipizzata separatamente evita che i mapper documentali la facciano passare
+ * per un prodotto di magazzino.
+ */
+export interface FicProformaServiceItem {
+  kind: "service";
+  serviceName: string;
+  quantity: number;
+  unitPrice: number;
+  vatRate: number;
+}
+
+export type FicDocumentItem = FicProformaItem | FicProformaServiceItem;
+
 export interface CreateProformaInput {
   orderId: string;
   orderNumber: string;
   retailerFicClientId: number;
-  items: FicProformaItem[];
+  items: FicDocumentItem[];
   paymentTerms: "advance_transfer" | "on_delivery" | "credit_card" | "manual";
   totalGross?: number;
   notes?: string;
@@ -135,9 +151,22 @@ export async function createProforma(
 
   const paymentMethodId = findPaymentMethodId(paymentMethods, paymentLabel);
 
-  // Build items_list with vatRate carried for totalGross calculation
+  // Build items_list with vatRate carried for totalGross calculation. Le righe
+  // servizio restano fiscalmente separate e non ricevono mai attributi di stock.
   const itemsWithVat = input.items.map((item) => {
     const vatId = findVatTypeId(vatTypes, item.vatRate);
+    if (item.kind === "service") {
+      return {
+        product_id: 0,
+        name: item.serviceName,
+        description: "Servizio non inventariato",
+        qty: item.quantity,
+        net_price: item.unitPrice,
+        vat: { id: vatId },
+        not_taxable: false,
+        _vatRate: item.vatRate,
+      };
+    }
     const descParts: string[] = [
       item.batchNumber ? `Lotto: ${item.batchNumber}` : `Lotto: in attesa di assegnazione`,
       item.expiryDate ? `Scad: ${formatDateIT(item.expiryDate)}` : `Scad: TBD`,
@@ -254,6 +283,18 @@ export async function modifyProforma(
 
   const itemsWithVat = input.items.map((item) => {
     const vatId = findVatTypeId(vatTypes, item.vatRate);
+    if (item.kind === "service") {
+      return {
+        product_id: 0,
+        name: item.serviceName,
+        description: "Servizio non inventariato",
+        qty: item.quantity,
+        net_price: item.unitPrice,
+        vat: { id: vatId },
+        not_taxable: false,
+        _vatRate: item.vatRate,
+      };
+    }
     const descParts: string[] = [
       item.batchNumber ? `Lotto: ${item.batchNumber}` : `Lotto: in attesa di assegnazione`,
       item.expiryDate ? `Scad: ${formatDateIT(item.expiryDate)}` : `Scad: TBD`,

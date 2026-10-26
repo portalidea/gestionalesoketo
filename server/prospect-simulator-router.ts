@@ -27,10 +27,14 @@ import {
 import { sendProspectInvitationNotification } from "./services/prospectNotificationService";
 import { convertProspectSimulation, previewProspectConversion } from "./services/prospectOrderConversionService";
 import {
+  createProspectPromotion,
   createProspectTierUpgradePromotion,
   deactivateProspectPromotion,
+  getActiveProspectPromotion,
   getActiveProspectTierUpgradePromotion,
+  listProspectPromotions,
   listProspectTierUpgradePromotions,
+  updateProspectPromotion,
   updateProspectTierUpgradePromotion,
 } from "./services/prospectPromotionService";
 
@@ -73,16 +77,62 @@ const invitedOrderInput = contactInput.extend({
   notes: z.string().trim().max(3000).optional(),
   compositionSessionId: z.string().uuid().optional(),
 });
-const tierUpgradePromotionInput = z.object({
+
+const promotionBaseInput = z.object({
   title: z.string().trim().min(1).max(255),
   publicDescription: z.string().trim().min(1).max(5000),
   internalNotes: z.string().trim().max(5000).optional().nullable(),
   validFrom: z.coerce.date(),
   validTo: z.coerce.date(),
+  isActive: z.boolean().default(true),
+});
+
+/** Contratto legacy, conservato per adminTierUpgradePromotion*. */
+const legacyTierUpgradePromotionInput = promotionBaseInput.extend({
   qualifyingTierCode: z.string().trim().min(1).max(50),
   grantedTierCode: z.string().trim().min(1).max(50),
-  isActive: z.boolean().default(true),
 }).strict();
+
+const tierUpgradePromotionInput = promotionBaseInput.extend({
+  ruleType: z.literal("tier_upgrade"),
+  qualifyingTierCode: z.string().trim().min(1).max(50),
+  grantedTierCode: z.string().trim().min(1).max(50),
+}).strict();
+
+const servicePackagePromotionInput = promotionBaseInput.extend({
+  ruleType: z.literal("service_package"),
+  assignedTierCode: z.string().trim().min(1).max(50),
+  serviceCode: z.string().trim().min(1).max(100),
+  serviceName: z.string().trim().min(1).max(5000),
+  serviceNet: z.coerce.number().positive(),
+  serviceVatRate: z.coerce.number().refine((value) => [4, 5, 10, 22].includes(value), {
+    message: "L'IVA del servizio deve essere 4%, 5%, 10% o 22%",
+  }),
+  minimumMerchandiseNet: z.coerce.number().min(0),
+  bonusAmount: z.coerce.number().positive().nullable().optional(),
+  bonusPaymentDeadline: z.coerce.date().nullable().optional(),
+}).strict();
+
+/** Nuovo contratto admin: i campi richiesti dipendono dal tipo di regola. */
+const prospectPromotionInput = z.discriminatedUnion("ruleType", [
+  tierUpgradePromotionInput,
+  servicePackagePromotionInput,
+]).superRefine((value, ctx) => {
+  if (value.validTo <= value.validFrom) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["validTo"], message: "La data fine deve essere successiva alla data inizio" });
+  }
+  if (value.ruleType === "service_package") {
+    const hasBonusAmount = value.bonusAmount != null;
+    const hasBonusDeadline = value.bonusPaymentDeadline != null;
+    if (hasBonusAmount !== hasBonusDeadline) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: hasBonusAmount ? ["bonusPaymentDeadline"] : ["bonusAmount"],
+        message: "Importo e scadenza del bonus devono essere indicati insieme",
+      });
+    }
+  }
+});
 
 function clientIp(ctx: { req: { headers: Record<string, string | string[] | undefined>; socket?: { remoteAddress?: string } } }) {
   return requestIp(ctx.req.headers, ctx.req.socket?.remoteAddress);
@@ -114,7 +164,7 @@ export const prospectSimulatorRouter = router({
     const config = await getInvitationConfigOrNull(database, tokenState.invitation.companyId);
     if (!config) return { available: false as const };
     const catalog = await getPublicProspectCatalog(database);
-    const tierUpgradePromotion = await getActiveProspectTierUpgradePromotion(database, tokenState.invitation.companyId);
+    const activePromotion = await getActiveProspectPromotion(database, tokenState.invitation.companyId);
     const compositionSession = await openProspectCompositionSession(database, input.token);
     if (!compositionSession) return { available: false as const };
     return {
@@ -131,7 +181,9 @@ export const prospectSimulatorRouter = router({
         tiers: config.tiers,
       },
       products: catalog,
-      tierUpgradePromotion,
+      // La chiave storica resta disponibile finché tutte le UI legacy non saranno migrate.
+      tierUpgradePromotion: activePromotion?.ruleType === "tier_upgrade" ? activePromotion : null,
+      servicePackagePromotion: activePromotion?.ruleType === "service_package" ? activePromotion : null,
     };
   }),
 
@@ -143,8 +195,8 @@ export const prospectSimulatorRouter = router({
     const config = await getInvitationConfigOrNull(database, tokenState.invitation.companyId);
     if (!config) throw new TRPCError({ code: "NOT_FOUND", message: "Link non valido" });
     const catalog = await getPublicProspectCatalog(database);
-    const tierUpgradePromotion = await getActiveProspectTierUpgradePromotion(database, tokenState.invitation.companyId);
-    return calculateProspectSimulation(config, catalog, input.items, tierUpgradePromotion);
+    const activePromotion = await getActiveProspectPromotion(database, tokenState.invitation.companyId);
+    return calculateProspectSimulation(config, catalog, input.items, activePromotion);
   }),
 
   /** Persistenza best-effort del carrello: token, invito e company restano server-side. */
@@ -195,6 +247,35 @@ export const prospectSimulatorRouter = router({
     return listProspectInvitations(await requireDatabase(), ctx.activeCompanyId);
   }),
 
+  /** API admin corrente per entrambe le regole: tier_upgrade e service_package. */
+  adminPromotionList: adminProcedure.query(async ({ ctx }) => {
+    return listProspectPromotions(await requireDatabase(), ctx.activeCompanyId);
+  }),
+
+  adminPromotionConfig: adminProcedure.query(async ({ ctx }) => {
+    const config = await getProspectSimulatorConfig(await requireDatabase(), ctx.activeCompanyId);
+    return { tiers: config.tiers };
+  }),
+
+  adminCreatePromotion: adminProcedure.input(prospectPromotionInput).mutation(async ({ ctx, input }) => {
+    return createProspectPromotion(await requireDatabase(), ctx.activeCompanyId, ctx.user!.id, input);
+  }),
+
+  adminUpdatePromotion: adminProcedure.input(z.object({
+    id: z.string().uuid(),
+    promotion: prospectPromotionInput,
+  }).strict()).mutation(async ({ ctx, input }) => {
+    return updateProspectPromotion(await requireDatabase(), ctx.activeCompanyId, ctx.user!.id, input.id, input.promotion);
+  }),
+
+  adminDeactivatePromotion: adminProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ ctx, input }) => {
+    return deactivateProspectPromotion(await requireDatabase(), ctx.activeCompanyId, ctx.user!.id, input.id);
+  }),
+
+  /**
+   * Compatibilità completa con il precedente pannello tier upgrade.
+   * Nuove UI devono usare adminPromotion*.
+   */
   adminTierUpgradePromotionList: adminProcedure.query(async ({ ctx }) => {
     return listProspectTierUpgradePromotions(await requireDatabase(), ctx.activeCompanyId);
   }),
@@ -204,13 +285,13 @@ export const prospectSimulatorRouter = router({
     return { tiers: config.tiers };
   }),
 
-  adminCreateTierUpgradePromotion: adminProcedure.input(tierUpgradePromotionInput).mutation(async ({ ctx, input }) => {
+  adminCreateTierUpgradePromotion: adminProcedure.input(legacyTierUpgradePromotionInput).mutation(async ({ ctx, input }) => {
     return createProspectTierUpgradePromotion(await requireDatabase(), ctx.activeCompanyId, ctx.user!.id, input);
   }),
 
   adminUpdateTierUpgradePromotion: adminProcedure.input(z.object({
     id: z.string().uuid(),
-    promotion: tierUpgradePromotionInput,
+    promotion: legacyTierUpgradePromotionInput,
   }).strict()).mutation(async ({ ctx, input }) => {
     return updateProspectTierUpgradePromotion(await requireDatabase(), ctx.activeCompanyId, ctx.user!.id, input.id, input.promotion);
   }),

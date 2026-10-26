@@ -17,11 +17,13 @@ import { getDb } from "./db";
 import {
   orders,
   orderItems,
+  orderServiceLines,
   retailers,
   products,
   productBatches,
   inventoryByBatch,
   locations,
+  prospectOrderCommercialTerms,
 } from "../drizzle/schema";
 import { eq, desc, and, gte, lte, sql, inArray, asc, gt, lt } from "drizzle-orm";
 import { calculateOrderPricing, calculateEventOrderPricing, type PricingItemInput } from "./pricing";
@@ -51,6 +53,47 @@ import {
   previewOrderDelivery,
   type FulfillmentTarget,
 } from "./services/orderConfirmDelivery";
+
+type OrderServiceLineForDocument = {
+  serviceCode: string;
+  serviceName: string;
+  quantity: string;
+  unitPriceNet: string;
+  vatRate: string;
+  lineTotalNet: string;
+  lineTotalGross: string;
+};
+
+/**
+ * Le prestazioni sono lette esclusivamente dalla propria tabella: nessuna
+ * riga servizio viene mai resa un orderItem né quindi coinvolta da FEFO/lotti.
+ */
+async function loadOrderServiceLines(database: any, orderId: string): Promise<OrderServiceLineForDocument[]> {
+  return database
+    .select({
+      serviceCode: orderServiceLines.serviceCode,
+      serviceName: orderServiceLines.serviceName,
+      quantity: orderServiceLines.quantity,
+      unitPriceNet: orderServiceLines.unitPriceNet,
+      vatRate: orderServiceLines.vatRate,
+      lineTotalNet: orderServiceLines.lineTotalNet,
+      lineTotalGross: orderServiceLines.lineTotalGross,
+    })
+    .from(orderServiceLines)
+    .where(eq(orderServiceLines.orderId, orderId))
+    .orderBy(orderServiceLines.createdAt);
+}
+
+function toFicServiceItems(serviceLines: OrderServiceLineForDocument[]) {
+  return serviceLines.map((line) => ({
+    kind: "service" as const,
+    name: line.serviceName,
+    description: "Servizio non inventariato",
+    qty: Number(line.quantity),
+    unitPriceFinal: line.unitPriceNet,
+    vatRate: line.vatRate,
+  }));
+}
 
 /**
  * Effetti esterni post-commit della consegna: mai nella transazione di stock.
@@ -84,29 +127,35 @@ async function ensureFicDocumentsAfterFulfillment(input: { orderId: string; comp
     if (!ficProformaId) {
       const ficClientId = await getRetailerFicClientId(order.retailerId, order.companyId);
       if (!ficClientId) throw new Error("Rivenditore non collegato a un cliente Fatture in Cloud per questa company.");
-      const items = await db
-        .select({
-          productName: orderItems.productName,
-          productSku: orderItems.productSku,
-          quantity: orderItems.quantity,
-          unitPriceFinal: orderItems.unitPriceFinal,
-          vatRate: orderItems.vatRate,
-        })
-        .from(orderItems)
-        .where(eq(orderItems.orderId, order.id));
+      const [items, serviceLines] = await Promise.all([
+        db
+          .select({
+            productName: orderItems.productName,
+            productSku: orderItems.productSku,
+            quantity: orderItems.quantity,
+            unitPriceFinal: orderItems.unitPriceFinal,
+            vatRate: orderItems.vatRate,
+          })
+          .from(orderItems)
+          .where(eq(orderItems.orderId, order.id)),
+        loadOrderServiceLines(db, order.id),
+      ]);
       const proforma = await createFicProformaForCompany(order.companyId, {
         ficClientId,
         date: new Date().toISOString().slice(0, 10),
         orderNumber: order.orderNumber ?? undefined,
         notesInternal: `Ordine ${order.orderNumber ?? order.id}${order.notesInternal ? ` — ${order.notesInternal}` : ""}`,
-        items: items.map((item) => ({
-          code: item.productSku,
-          name: item.productName,
-          description: item.productName,
-          qty: item.quantity,
-          unitPriceFinal: item.unitPriceFinal,
-          vatRate: item.vatRate,
-        })),
+        items: [
+          ...items.map((item) => ({
+            code: item.productSku,
+            name: item.productName,
+            description: item.productName,
+            qty: item.quantity,
+            unitPriceFinal: item.unitPriceFinal,
+            vatRate: item.vatRate,
+          })),
+          ...toFicServiceItems(serviceLines),
+        ],
       });
       ficProformaId = proforma.id;
       proformaCreated = true;
@@ -264,6 +313,16 @@ export const ordersRouter = router({
             subtotalNet: orders.subtotalNet,
             vatAmount: orders.vatAmount,
             totalGross: orders.totalGross,
+            serviceNet: sql<string>`COALESCE((
+              SELECT SUM(osl.line_total_net)
+              FROM order_service_lines osl
+              WHERE osl."orderId" = ${orders.id}
+            ), 0)`.as("serviceNet"),
+            serviceGross: sql<string>`COALESCE((
+              SELECT SUM(osl.line_total_gross)
+              FROM order_service_lines osl
+              WHERE osl."orderId" = ${orders.id}
+            ), 0)`.as("serviceGross"),
             discountPercent: orders.discountPercent,
             ficProformaNumber: orders.ficProformaNumber,
             paymentStatus: orders.paymentStatus,
@@ -353,7 +412,8 @@ export const ordersRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Ordine non trovato" });
       }
 
-       const items = await db
+      const [items, serviceLines] = await Promise.all([
+        db
         .select({
           id: orderItems.id,
           orderId: orderItems.orderId,
@@ -375,7 +435,9 @@ export const ordersRouter = router({
         .from(orderItems)
         .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
         .where(eq(orderItems.orderId, input.id))
-        .orderBy(orderItems.createdAt);
+        .orderBy(orderItems.createdAt),
+        loadOrderServiceLines(db, input.id),
+      ]);
       const productIds = Array.from(new Set(items.map((item) => item.productId)));
       const labelWarnings = productIds.length === 0
         ? []
@@ -387,6 +449,15 @@ export const ordersRouter = router({
         ...order,
         isInterCompanyOrder: order.retailerId === SOKETO_SRL_INTERCOMPANY_RETAILER_ID,
         items,
+        serviceLines,
+        totals: {
+          merchandiseNet: (Number(order.subtotalNet) - serviceLines.reduce((sum, line) => sum + Number(line.lineTotalNet), 0)).toFixed(2),
+          serviceNet: serviceLines.reduce((sum, line) => sum + Number(line.lineTotalNet), 0).toFixed(2),
+          serviceGross: serviceLines.reduce((sum, line) => sum + Number(line.lineTotalGross), 0).toFixed(2),
+          subtotalNet: order.subtotalNet,
+          vatAmount: order.vatAmount,
+          totalGross: order.totalGross,
+        },
         labelWarnings,
       };
     }),
@@ -645,14 +716,15 @@ export const ordersRouter = router({
           }
         }
 
-        if (itemValues.length > 0) {
-          await tx.insert(orderItems).values(itemValues);
-        }
+        const insertedItems = itemValues.length > 0
+          ? await tx.insert(orderItems).values(itemValues).returning({ id: orderItems.id })
+          : [];
 
         await persistAllowanceConsumptions(tx, {
           orderId: order.id,
           createdBy: ctx.user!.id,
           pricing: lockedPricing,
+          orderItemIdsByPricingLine: insertedItems.map((item) => item.id),
         });
 
         return { order, pricing: lockedPricing };
@@ -857,12 +929,13 @@ export const ordersRouter = router({
           }
         }
 
-        await tx.insert(orderItems).values(itemValues);
+        const insertedItems = await tx.insert(orderItems).values(itemValues).returning({ id: orderItems.id });
         if (lockedPricing.allowance) {
           await persistAllowanceConsumptions(tx, {
             orderId: input.orderId,
             createdBy: ctx.user!.id,
             pricing: lockedPricing,
+            orderItemIdsByPricingLine: insertedItems.map((item) => item.id),
           });
         }
         return lockedPricing;
@@ -891,6 +964,17 @@ export const ordersRouter = router({
       }
       if (order.prospectCommercialTermsReleasedAt) {
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Le condizioni promozionali risultano già rilasciate" });
+      }
+      const [terms] = await db.select({ ruleType: prospectOrderCommercialTerms.ruleType })
+        .from(prospectOrderCommercialTerms)
+        .where(eq(prospectOrderCommercialTerms.id, order.prospectCommercialTermsId))
+        .limit(1);
+      if (!terms) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Termini prospect congelati non trovati" });
+      if (terms.ruleType === "service_package") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Un pacchetto con servizio e bonus non può essere rilasciato al repricing ordinario. Usa un'azione auditata che rimuova o ricalcoli insieme servizio e bonus.",
+        });
       }
       const [released] = await db.update(orders).set({
         prospectCommercialTermsReleasedAt: new Date(),
@@ -1022,35 +1106,48 @@ export const ordersRouter = router({
           const retailerFicClientId = await getRetailerFicClientId(order.retailerId, ctx.activeCompanyId);
 
           if (retailerFicClientId) {
-            // Reload all items with updated batch info
-            const updatedItems = await db
-              .select({
-                productName: orderItems.productName,
-                productSku: orderItems.productSku,
-                quantity: orderItems.quantity,
-                unitPriceFinal: orderItems.unitPriceFinal,
-                vatRate: orderItems.vatRate,
-                batchNumber: productBatches.batchNumber,
-                expirationDate: productBatches.expirationDate,
-              })
-              .from(orderItems)
-              .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
-              .where(eq(orderItems.orderId, item.orderId));
+            // Reload solo le righe merce con i lotti; le prestazioni restano
+            // in order_service_lines e non ricevono mai dati di magazzino.
+            const [updatedItems, serviceLines] = await Promise.all([
+              db
+                .select({
+                  productName: orderItems.productName,
+                  productSku: orderItems.productSku,
+                  quantity: orderItems.quantity,
+                  unitPriceFinal: orderItems.unitPriceFinal,
+                  vatRate: orderItems.vatRate,
+                  batchNumber: productBatches.batchNumber,
+                  expirationDate: productBatches.expirationDate,
+                })
+                .from(orderItems)
+                .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
+                .where(eq(orderItems.orderId, item.orderId)),
+              loadOrderServiceLines(db, item.orderId),
+            ]);
 
             const { modifyProforma } = await import("./services/ficDocumentService");
             await modifyProforma(order.ficProformaId, {
               orderId: item.orderId,
               orderNumber: order.orderNumber ?? "",
               retailerFicClientId,
-              items: updatedItems.map((it) => ({
-                productName: it.productName,
-                quantity: it.quantity,
-                unitPrice: parseFloat(it.unitPriceFinal),
-                vatRate: parseFloat(it.vatRate),
-                batchNumber: it.batchNumber ?? undefined,
-                expiryDate: it.expirationDate ?? undefined,
-                sku: it.productSku ?? undefined,
-              })),
+              items: [
+                ...updatedItems.map((it) => ({
+                  productName: it.productName,
+                  quantity: it.quantity,
+                  unitPrice: parseFloat(it.unitPriceFinal),
+                  vatRate: parseFloat(it.vatRate),
+                  batchNumber: it.batchNumber ?? undefined,
+                  expiryDate: it.expirationDate ?? undefined,
+                  sku: it.productSku ?? undefined,
+                })),
+                ...serviceLines.map((line) => ({
+                  kind: "service" as const,
+                  serviceName: line.serviceName,
+                  quantity: Number(line.quantity),
+                  unitPrice: Number(line.unitPriceNet),
+                  vatRate: Number(line.vatRate),
+                })),
+              ],
               paymentTerms: order.paymentTerms as any,
               notes: order.notesInternal ?? undefined,
             });
@@ -1243,26 +1340,30 @@ export const ordersRouter = router({
         });
       }
 
-      // Carica items con product description e batch info
-      const items = await db
-        .select({
-          id: orderItems.id,
-          productSku: orderItems.productSku,
-          productName: orderItems.productName,
-          quantity: orderItems.quantity,
-          unitPriceFinal: orderItems.unitPriceFinal,
-          vatRate: orderItems.vatRate,
-          batchId: orderItems.batchId,
-          productDescription: products.description,
-          batchNumber: productBatches.batchNumber,
-          expirationDate: productBatches.expirationDate,
-        })
-        .from(orderItems)
-        .leftJoin(products, eq(orderItems.productId, products.id))
-        .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
-        .where(eq(orderItems.orderId, input.orderId));
+      // Merce con lotti e prestazioni non inventariate restano due sorgenti
+      // distinte anche nel documento fiscale.
+      const [items, serviceLines] = await Promise.all([
+        db
+          .select({
+            id: orderItems.id,
+            productSku: orderItems.productSku,
+            productName: orderItems.productName,
+            quantity: orderItems.quantity,
+            unitPriceFinal: orderItems.unitPriceFinal,
+            vatRate: orderItems.vatRate,
+            batchId: orderItems.batchId,
+            productDescription: products.description,
+            batchNumber: productBatches.batchNumber,
+            expirationDate: productBatches.expirationDate,
+          })
+          .from(orderItems)
+          .leftJoin(products, eq(orderItems.productId, products.id))
+          .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
+          .where(eq(orderItems.orderId, input.orderId)),
+        loadOrderServiceLines(db, input.orderId),
+      ]);
 
-      if (items.length === 0) {
+      if (items.length === 0 && serviceLines.length === 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Ordine senza righe" });
       }
 
@@ -1289,7 +1390,7 @@ export const ordersRouter = router({
         date: new Date().toISOString().split("T")[0],
         orderNumber: order.orderNumber ?? undefined,
         notesInternal: `Ordine ${order.orderNumber}${order.notesInternal ? ` — ${order.notesInternal}` : ""}`,
-        items: ficItems,
+        items: [...ficItems, ...toFicServiceItems(serviceLines)],
       });
 
       // Salva riferimento proforma sull'ordine
@@ -1353,26 +1454,28 @@ export const ordersRouter = router({
         });
       }
 
-      // Carica items con product description e batch info
-      const items = await db
-        .select({
-          id: orderItems.id,
-          productSku: orderItems.productSku,
-          productName: orderItems.productName,
-          quantity: orderItems.quantity,
-          unitPriceFinal: orderItems.unitPriceFinal,
-          vatRate: orderItems.vatRate,
-          batchId: orderItems.batchId,
-          productDescription: products.description,
-          batchNumber: productBatches.batchNumber,
-          expirationDate: productBatches.expirationDate,
-        })
-        .from(orderItems)
-        .leftJoin(products, eq(orderItems.productId, products.id))
-        .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
-        .where(eq(orderItems.orderId, input.orderId));
+      const [items, serviceLines] = await Promise.all([
+        db
+          .select({
+            id: orderItems.id,
+            productSku: orderItems.productSku,
+            productName: orderItems.productName,
+            quantity: orderItems.quantity,
+            unitPriceFinal: orderItems.unitPriceFinal,
+            vatRate: orderItems.vatRate,
+            batchId: orderItems.batchId,
+            productDescription: products.description,
+            batchNumber: productBatches.batchNumber,
+            expirationDate: productBatches.expirationDate,
+          })
+          .from(orderItems)
+          .leftJoin(products, eq(orderItems.productId, products.id))
+          .leftJoin(productBatches, eq(orderItems.batchId, productBatches.id))
+          .where(eq(orderItems.orderId, input.orderId)),
+        loadOrderServiceLines(db, input.orderId),
+      ]);
 
-      if (items.length === 0) {
+      if (items.length === 0 && serviceLines.length === 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Ordine senza righe" });
       }
 
@@ -1399,7 +1502,7 @@ export const ordersRouter = router({
         date: new Date().toISOString().split("T")[0],
         orderNumber: order.orderNumber ?? undefined,
         notesInternal: `Ordine ${order.orderNumber} (rigenerata)${order.notesInternal ? ` — ${order.notesInternal}` : ""}`,
-        items: ficItems,
+        items: [...ficItems, ...toFicServiceItems(serviceLines)],
       });
 
       // Salva nuovi riferimenti proforma

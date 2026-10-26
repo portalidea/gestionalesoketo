@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { companies, orders, prospectCompositionSessions, prospectInvitations, prospectOrderCommercialTerms, prospectPromotions, prospectSimulations, retailers, userCompanyAccess } from "../../drizzle/schema";
+import { companies, orderItems, orderPromotionBonuses, orderServiceLines, orders, prospectCompositionSessions, prospectInvitations, prospectOrderCommercialTerms, prospectPromotions, prospectSimulations, retailerAllowanceConsumptions, retailerAllowances, retailers, userCompanyAccess } from "../../drizzle/schema";
 import { EKETO_COMPANY_ID, SOKETO_COMPANY_ID } from "../../shared/const";
 import { prospectInvitationInput, prospectSimulatorRouter } from "../prospect-simulator-router";
 import type { TrpcContext } from "../_core/context";
@@ -17,10 +17,11 @@ import {
   submitInvitedProspectOrder,
 } from "./prospectInvitationService";
 import { convertProspectSimulation, previewProspectConversion } from "./prospectOrderConversionService";
-import { createProspectTierUpgradePromotion, getActiveProspectTierUpgradePromotion } from "./prospectPromotionService";
+import { createProspectServicePackagePromotion, createProspectTierUpgradePromotion, getActiveProspectTierUpgradePromotion } from "./prospectPromotionService";
 import { calculateProspectSimulation, getProspectSimulatorConfig, getPublicProspectCatalog } from "./prospectSimulationService";
-import { modifyOrderItems } from "./orderStateMachine";
+import { cancelPayment, modifyOrderItems, registerPayment } from "./orderStateMachine";
 import { ordersRouter } from "../orders-router";
+import { calculateOrderPricingWithAllowance } from "./retailerAllowanceService";
 
 const ACTOR_ID = "10000000-0000-0000-0000-000000000001";
 const PRODUCT_ID = "20000000-0000-0000-0000-000000000001";
@@ -395,6 +396,10 @@ describe("prospect invitations and conversion — PostgreSQL isolato", () => {
     await expect(createProspectTierUpgradePromotion(database, EKETO_COMPANY_ID, ACTOR_ID, {
       title: "Sovrapposta", publicDescription: "Non deve essere attivabile.", validFrom: new Date(now.getTime() - 30_000), validTo: new Date(now.getTime() + 60_000), qualifyingTierCode: "partner", grantedTierCode: "premium", isActive: true,
     })).rejects.toThrow("sovrapposta");
+    await expect(createProspectServicePackagePromotion(database, EKETO_COMPANY_ID, ACTOR_ID, {
+      title: "Servizio sovrapposto", publicDescription: "Non deve essere attivabile.", validFrom: new Date(now.getTime() - 30_000), validTo: new Date(now.getTime() + 60_000), isActive: true,
+      assignedTierCode: "premium", serviceCode: "ADV", serviceName: "Pubblicità", serviceNet: 200, serviceVatRate: 22, minimumMerchandiseNet: 690,
+    })).rejects.toThrow("sovrapposta");
     const [lockedOrder] = await database.select({ id: orders.id }).from(orders).where(sql`"prospectCommercialTermsId" IS NOT NULL`).limit(1);
     await expect(modifyOrderItems({ orderId: lockedOrder.id, actorUserId: ACTOR_ID, items: [{ productId: PRODUCT_ID, quantity: 9 }] })).rejects.toThrow("condizioni promozionali prospect congelate");
     const caller = ordersRouter.createCaller({ req: { headers: {}, socket: { remoteAddress: "127.0.0.1" } } as TrpcContext["req"], res: {} as TrpcContext["res"], user: { id: ACTOR_ID, role: "admin" }, activeCompanyId: EKETO_COMPANY_ID } as TrpcContext);
@@ -414,5 +419,132 @@ describe("prospect invitations and conversion — PostgreSQL isolato", () => {
     const submitted = await submitInvitedProspectOrder(database, { token: invitation.token, ...contact("promo-soketo-isolation", "IT 91929394950") });
     const [terms] = await database.select().from(prospectOrderCommercialTerms).where(eq(prospectOrderCommercialTerms.simulationId, submitted.id));
     expect(terms).toBeUndefined();
+  });
+
+  it("P5: pacchetto servizio congela riga/bonus, concede da paidAt e revoca senza consumi", async () => {
+    const database = await getDb();
+    await database.execute(sql`UPDATE prospect_promotions SET is_active = false WHERE company_id = ${EKETO_COMPANY_ID}::uuid`);
+    const now = new Date();
+    await createProspectServicePackagePromotion(database, EKETO_COMPANY_ID, ACTOR_ID, {
+      title: "Pacchetto Pubblicità",
+      publicDescription: "Servizio fisso sul primo ordine.",
+      validFrom: new Date(now.getTime() - 60_000),
+      validTo: new Date(now.getTime() + 86_400_000),
+      isActive: true,
+      assignedTierCode: "premium",
+      serviceCode: "ADV-200",
+      serviceName: "Pubblicità",
+      serviceNet: 200,
+      serviceVatRate: 22,
+      minimumMerchandiseNet: 690,
+      bonusAmount: 200,
+      // La registrazione avviene oggi, ma la data di pagamento precedente alla
+      // deadline deve comunque concedere il bonus.
+      bonusPaymentDeadline: new Date("2026-10-25T00:00:00.000Z"),
+    });
+    await database.execute(sql`UPDATE products SET "unitPrice" = 100.00 WHERE id = ${PRODUCT_ID}::uuid`);
+    const invitation = await invite(database, "service-bonus");
+    const submitted = await submitInvitedProspectOrder(database, {
+      token: invitation.token,
+      ...contact("service-bonus", "IT 10120230340", 13),
+    });
+    const [terms] = await database.select().from(prospectOrderCommercialTerms)
+      .where(eq(prospectOrderCommercialTerms.simulationId, submitted.id));
+    expect(terms).toMatchObject({ ruleType: "service_package", pricingTierCode: "premium", merchandiseNet: "727.35", serviceNet: "200.00", serviceVatAmount: "44.00" });
+
+    const converted = await convertProspectSimulation(database, {
+      companyId: EKETO_COMPANY_ID, simulationId: submitted.id, actorId: ACTOR_ID, useExistingRetailer: false,
+    });
+    const [serviceLine] = await database.select().from(orderServiceLines).where(eq(orderServiceLines.orderId, converted.orderId));
+    const [pendingBonus] = await database.select().from(orderPromotionBonuses).where(eq(orderPromotionBonuses.orderId, converted.orderId));
+    const [order] = await database.select({ subtotalNet: orders.subtotalNet, totalGross: orders.totalGross }).from(orders).where(eq(orders.id, converted.orderId));
+    expect(serviceLine).toMatchObject({ serviceCode: "ADV-200", serviceName: "Pubblicità", lineTotalNet: "200.00", vatRate: "22.00", lineTotalGross: "244.00" });
+    expect(pendingBonus).toMatchObject({ status: "pending", bonusAmount: "200.00", valuationDiscountPercent: "0.00" });
+    expect(order.subtotalNet).toBe("927.35");
+    expect(Number(order.totalGross)).toBeGreaterThan(Number(order.subtotalNet));
+
+    await registerPayment({
+      orderId: converted.orderId,
+      actorUserId: ACTOR_ID,
+      paidAt: new Date("2026-10-25T12:00:00.000Z"),
+      paymentMethod: "bonifico",
+    });
+    const [granted] = await database.select().from(orderPromotionBonuses).where(eq(orderPromotionBonuses.orderId, converted.orderId));
+    const [allowance] = await database.select().from(retailerAllowances).where(eq(retailerAllowances.id, granted.allowanceId!));
+    expect(granted.status).toBe("granted");
+    expect(allowance).toMatchObject({ allowanceType: "promo_bonus", initialAmount: "200.00", valuationDiscountPercent: "0.00", status: "active", postExhaustionPricingPackageId: PREMIUM_ID });
+
+    const [baseAllowance] = await database.insert(retailerAllowances).values({
+      retailerId: converted.retailerId, billingCompanyId: EKETO_COMPANY_ID, initialAmount: "200.00", valuationDiscountPercent: "44.05",
+      activatedAt: new Date("2026-10-24T00:00:00.000Z"), packageInvoiceReference: null, postExhaustionPricingPackageId: PREMIUM_ID,
+      status: "active", allowanceType: "restaurant_package", sourceAmount: "200.00", sourceReference: "Plafond base test", sourceReceivedAt: new Date("2026-10-24T00:00:00.000Z"), notes: null, createdBy: ACTOR_ID,
+    }).returning({ id: retailerAllowances.id });
+    const multiAllowancePricing = await calculateOrderPricingWithAllowance({
+      database, retailerId: converted.retailerId, companyId: EKETO_COMPANY_ID, items: [{ productId: PRODUCT_ID, quantity: 13 }],
+    });
+    expect(multiAllowancePricing.allowanceConsumptionPlan.map((plan) => plan.allowanceId)).toEqual([granted.allowanceId, baseAllowance.id]);
+    expect(multiAllowancePricing.items.filter((item) => item.allowanceCovered).map((item) => item.quantity)).toEqual([2, 3]);
+    expect(multiAllowancePricing.items.find((item) => !item.allowanceCovered)?.quantity).toBe(8);
+
+    await cancelPayment({ orderId: converted.orderId, actorUserId: ACTOR_ID, reason: "Test annullo pagamento" });
+    const [revoked] = await database.select().from(orderPromotionBonuses).where(eq(orderPromotionBonuses.orderId, converted.orderId));
+    const [cancelledAllowance] = await database.select().from(retailerAllowances).where(eq(retailerAllowances.id, granted.allowanceId!));
+    expect(revoked.status).toBe("revoked");
+    expect(cancelledAllowance.status).toBe("cancelled");
+  });
+
+  it("P6: bonus tardivo non crea plafond; retry concorrente resta unico; bonus consumato richiede revisione", async () => {
+    const database = await getDb();
+    const createServiceOrder = async (suffix: string, vat: string) => {
+      const invitation = await invite(database, suffix);
+      const submitted = await submitInvitedProspectOrder(database, { token: invitation.token, ...contact(suffix, vat, 13) });
+      return convertProspectSimulation(database, { companyId: EKETO_COMPANY_ID, simulationId: submitted.id, actorId: ACTOR_ID, useExistingRetailer: false });
+    };
+
+    const late = await createServiceOrder("service-late", "IT 10120230341");
+    await registerPayment({ orderId: late.orderId, actorUserId: ACTOR_ID, paidAt: new Date("2026-10-26T12:00:00.000Z"), paymentMethod: "bonifico" });
+    const [expired] = await database.select().from(orderPromotionBonuses).where(eq(orderPromotionBonuses.orderId, late.orderId));
+    expect(expired).toMatchObject({ status: "expired", allowanceId: null });
+
+    const concurrent = await createServiceOrder("service-concurrent", "IT 10120230342");
+    const concurrentResults = await Promise.allSettled([
+      registerPayment({ orderId: concurrent.orderId, actorUserId: ACTOR_ID, paidAt: new Date("2026-10-25T12:00:00.000Z"), paymentMethod: "bonifico" }),
+      registerPayment({ orderId: concurrent.orderId, actorUserId: ACTOR_ID, paidAt: new Date("2026-10-25T12:00:00.000Z"), paymentMethod: "bonifico" }),
+    ]);
+    expect(concurrentResults.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const [granted] = await database.select().from(orderPromotionBonuses).where(eq(orderPromotionBonuses.orderId, concurrent.orderId));
+    const bonusAllowances = await database.select().from(retailerAllowances).where(eq(retailerAllowances.id, granted.allowanceId!));
+    expect(granted.status).toBe("granted");
+    expect(bonusAllowances).toHaveLength(1);
+
+    const [coveredItem] = await database.select({ id: orderItems.id, unitPriceBase: orderItems.unitPriceBase })
+      .from(orderItems).where(eq(orderItems.orderId, concurrent.orderId)).limit(1);
+    await database.insert(retailerAllowanceConsumptions).values({
+      allowanceId: granted.allowanceId!, orderId: concurrent.orderId, orderItemId: coveredItem.id,
+      entryType: "consumption", reversesConsumptionId: null, coveredQuantity: "1.000000",
+      listUnitPriceSnapshot: coveredItem.unitPriceBase, valuationDiscountPercentSnapshot: "0.00",
+      consumptionAmount: "1.00", createdBy: ACTOR_ID, reversalReason: null,
+    });
+    await cancelPayment({ orderId: concurrent.orderId, actorUserId: ACTOR_ID, reason: "Bonus già utilizzato" });
+    const [review] = await database.select().from(orderPromotionBonuses).where(eq(orderPromotionBonuses.orderId, concurrent.orderId));
+    const [reviewAllowance] = await database.select().from(retailerAllowances).where(eq(retailerAllowances.id, granted.allowanceId!));
+    expect(review.status).toBe("review_required");
+    expect(reviewAllowance.status).toBe("cancelled");
+  });
+
+  it("P7: una promozione prospect non si applica a un retailer che ha già un ordine", async () => {
+    const database = await getDb();
+    const vatNumber = "10120230343";
+    const [existing] = await database.insert(retailers).values({
+      name: "Retailer con storico", companyId: EKETO_COMPANY_ID, vatNumber, pricingPackageId: PREMIUM_ID,
+    }).returning({ id: retailers.id });
+    await database.insert(orders).values({
+      retailerId: existing.id, companyId: EKETO_COMPANY_ID, status: "pending", subtotalNet: "1.00", vatAmount: "0.10", totalGross: "1.10", discountPercent: "44.05", paymentTerms: "advance_transfer", createdBy: ACTOR_ID,
+    });
+    const invitation = await invite(database, "service-not-first");
+    const submitted = await submitInvitedProspectOrder(database, { token: invitation.token, ...contact("service-not-first", `IT ${vatNumber}`, 13) });
+    const preview = await previewProspectConversion(database, EKETO_COMPANY_ID, submitted.id);
+    expect(preview).toMatchObject({ requiresExistingRetailerConfirmation: true, promotionFirstOrderEligible: false });
+    await expect(convertProspectSimulation(database, { companyId: EKETO_COMPANY_ID, simulationId: submitted.id, actorId: ACTOR_ID, useExistingRetailer: true })).rejects.toThrow("solo al primo ordine");
   });
 });

@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { affiliateCommissions, affiliates, orders, retailers, userCompanyAccess } from "../../drizzle/schema";
+import { affiliateCommissions, affiliates, orderItems, orderServiceLines, orders, retailers, userCompanyAccess } from "../../drizzle/schema";
 import { createManualAffiliateCommission } from "./manualAffiliateCommissionService";
 import { calculateCommissionForOrder, recalculateCommissionForOrder, voidCommissionForOrder } from "./commissionService";
 import { affiliatePortalRouter } from "../affiliate-portal-router";
@@ -15,6 +15,7 @@ const ACTOR_ID = "90000000-0000-0000-0000-000000000004";
 const AFFILIATE_USER_ID = "90000000-0000-0000-0000-000000000005";
 const RETAILER_ID = "90000000-0000-0000-0000-000000000006";
 const ORDER_ID = "90000000-0000-0000-0000-000000000007";
+const PRODUCT_ID = "90000000-0000-0000-0000-000000000008";
 
 function context(user: unknown, activeCompanyId?: string): TrpcContext {
   return {
@@ -42,7 +43,10 @@ beforeAll(async () => {
     { userId: ACTOR_ID, companyId: SOKETO_COMPANY_ID, isDefault: false },
   ]);
   await database.insert(retailers).values({ id: RETAILER_ID, name: "Retailer test", companyId: EKETO_COMPANY_ID, affiliateId: AFFILIATE_ID });
-  await database.insert(orders).values({ id: ORDER_ID, retailerId: RETAILER_ID, companyId: EKETO_COMPANY_ID, createdBy: ACTOR_ID, subtotalNet: "100.00", vatAmount: "0", totalGross: "100.00", discountPercent: "0", paymentTerms: "advance_transfer" });
+  await database.execute(sql`INSERT INTO products (id, sku, name, "unitPrice", "vatRate", "piecesPerUnit", "costPrice") VALUES (${PRODUCT_ID}::uuid, 'COMM-MERCE', 'Merce commissionabile', 100.00, 10.00, 1, 25.00)`);
+  await database.insert(orders).values({ id: ORDER_ID, retailerId: RETAILER_ID, companyId: EKETO_COMPANY_ID, createdBy: ACTOR_ID, subtotalNet: "300.00", vatAmount: "30.00", totalGross: "330.00", discountPercent: "0", paymentTerms: "advance_transfer" });
+  await database.insert(orderItems).values({ orderId: ORDER_ID, productId: PRODUCT_ID, quantity: 1, unitPriceBase: "100.00", discountPercent: "0.00", unitPriceFinal: "100.00", vatRate: "10.00", lineTotalNet: "100.00", lineTotalGross: "110.00", productSku: "COMM-MERCE", productName: "Merce commissionabile", batchId: null });
+  await database.insert(orderServiceLines).values({ orderId: ORDER_ID, companyId: EKETO_COMPANY_ID, sourcePromotionId: null, serviceCode: "ADV", serviceName: "Pubblicità", quantity: "1.000", unitPriceNet: "200.00", vatRate: "22.00", lineTotalNet: "200.00", lineTotalGross: "244.00" });
 });
 
 describe("provvigioni manuali — PostgreSQL isolato", () => {
@@ -84,6 +88,8 @@ describe("provvigioni manuali — PostgreSQL isolato", () => {
     const database = await getDb();
     const [manual] = await database.select().from(affiliateCommissions).where(eq(affiliateCommissions.origin, "manual"));
     await calculateCommissionForOrder(ORDER_ID);
+    const [firstAutomatic] = await database.select().from(affiliateCommissions).where(eq(affiliateCommissions.origin, "automatic_order"));
+    expect(firstAutomatic).toMatchObject({ orderTotal: "100.00", commissionAmount: "10.00" });
     await recalculateCommissionForOrder(ORDER_ID);
     await voidCommissionForOrder(ORDER_ID, "Ordine annullato");
     const [unchangedManual] = await database.select().from(affiliateCommissions).where(eq(affiliateCommissions.id, manual.id));

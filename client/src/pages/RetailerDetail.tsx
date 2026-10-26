@@ -665,9 +665,11 @@ export default function RetailerDetail() {
                 </Badge>
               </div>
               <CardDescription>
-                {allowanceQuery.data.allowance.allowanceType === "investor_benefit"
-                  ? "Beneficio investitore: consumo valorizzato a prezzo al pubblico."
-                  : `Pacchetto ristoratore: consumo valorizzato Premium con sconto congelato del ${parseFloat(allowanceQuery.data.allowance.valuationDiscountPercent).toFixed(2)}%.`}
+                {allowanceQuery.data.allowance.allowanceType === "promo_bonus"
+                  ? `Bonus promo: consumo valorizzato a prezzo al pubblico. ${allowanceQuery.data.allowance.sourceReference}`
+                  : allowanceQuery.data.allowance.allowanceType === "investor_benefit"
+                    ? "Beneficio investitore: consumo valorizzato a prezzo al pubblico."
+                    : `Pacchetto ristoratore: consumo valorizzato Premium con sconto congelato del ${parseFloat(allowanceQuery.data.allowance.valuationDiscountPercent).toFixed(2)}%.`}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -676,17 +678,18 @@ export default function RetailerDetail() {
                 <div><p className="text-xs text-muted-foreground">Consumati</p><p className="text-xl font-bold">€ {parseFloat(allowanceQuery.data.allowance.consumedAmount).toFixed(2)}</p></div>
                 <div><p className="text-xs text-muted-foreground">Residuo</p><p className="text-xl font-bold text-[#2D5A27]">€ {parseFloat(allowanceQuery.data.allowance.remainingAmount).toFixed(2)}</p></div>
               </div>
+              {allowanceQuery.data.allowances.length > 1 && <div className="space-y-2 border-t pt-3"><p className="text-sm font-semibold">Plafond disponibili in ordine di consumo</p><div className="grid gap-2 sm:grid-cols-2">{allowanceQuery.data.allowances.map((allowance) => <div key={allowance.id} className="rounded-md border bg-background/70 p-3 text-sm"><div className="flex items-center justify-between gap-2"><strong>{allowance.allowanceType === "promo_bonus" ? "Bonus promo" : allowance.allowanceType === "investor_benefit" ? "Beneficio investitore" : "Pacchetto ristoratore"}</strong><Badge variant={allowance.status === "active" ? "default" : "secondary"}>{allowance.status === "active" ? "Attivo" : allowance.status === "exhausted" ? "Esaurito" : "Non utilizzabile"}</Badge></div><p className="mt-1 text-muted-foreground">Residuo € {parseFloat(allowance.remainingAmount).toFixed(2)} su € {parseFloat(allowance.initialAmount).toFixed(2)}</p><p className="mt-1 text-xs text-muted-foreground">{allowance.allowanceType === "promo_bonus" || allowance.allowanceType === "investor_benefit" ? "Prezzo al pubblico" : `Premium (${parseFloat(allowance.valuationDiscountPercent).toFixed(2)}%)`}</p></div>)}</div></div>}
               <div className="grid grid-cols-1 gap-3 border-t pt-3 text-sm sm:grid-cols-3">
                 <div>
                   <p className="text-xs text-muted-foreground">Tipo di credito</p>
                   <p className="font-medium">
-                    {allowanceQuery.data.allowance.allowanceType === "investor_benefit" ? "Beneficio investitore" : "Pacchetto ristoratore"}
+                    {allowanceQuery.data.allowance.allowanceType === "promo_bonus" ? "Bonus promo" : allowanceQuery.data.allowance.allowanceType === "investor_benefit" ? "Beneficio investitore" : "Pacchetto ristoratore"}
                   </p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Criterio di valorizzazione</p>
                   <p className="font-medium">
-                    {allowanceQuery.data.allowance.allowanceType === "investor_benefit"
+                    {allowanceQuery.data.allowance.allowanceType === "investor_benefit" || allowanceQuery.data.allowance.allowanceType === "promo_bonus"
                       ? "Prezzo al pubblico"
                       : `Premium (${parseFloat(allowanceQuery.data.allowance.valuationDiscountPercent).toFixed(2)}%)`}
                   </p>
