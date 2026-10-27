@@ -110,7 +110,7 @@ const servicePackagePromotionInput = promotionBaseInput.extend({
   }),
   minimumMerchandiseNet: z.coerce.number().min(0),
   bonusAmount: z.coerce.number().positive().nullable().optional(),
-  bonusPaymentDeadline: z.coerce.date().nullable().optional(),
+  bonusPaymentDeadline: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "La scadenza bonus deve essere nel formato YYYY-MM-DD").nullable().optional(),
 }).strict();
 
 /** Nuovo contratto admin: i campi richiesti dipendono dal tipo di regola. */
