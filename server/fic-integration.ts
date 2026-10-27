@@ -856,55 +856,24 @@ function computePaymentsAmount(items: Array<{
 
 // ─── Proforma creation (multi-tenant) ──────────────────────────────────────
 
-/**
- * Crea proforma su FiC per una company specifica.
- * Il companyId determina quale connessione FiC usare.
- */
-export async function createFicProformaForCompany(
-  companyId: string,
-  input: {
-    ficClientId: number;
-    date: string;
-    notesInternal: string;
-    orderNumber?: string;
-    items: Array<
-      {
-        kind?: "merchandise";
-        code?: string;
-        name: string;
-        description: string;
-        qty: number;
-        unitPriceFinal: string;
-        vatRate: string;
-      }
-      | {
-        kind: "service";
-        name: string;
-        description: string;
-        qty: number;
-        unitPriceFinal: string;
-        vatRate: string;
-      }
-    >;
-  },
-): Promise<{ id: number; number: string }> {
-  const { accessToken, ficCompanyId } = await getActiveFicConnection(companyId);
+export type FicProformaInput = {
+  ficClientId: number;
+  date: string;
+  notesInternal: string;
+  orderNumber?: string;
+  items: Array<
+    { kind?: "merchandise"; code?: string; name: string; description: string; qty: number; unitPriceFinal: string; vatRate: string }
+    | { kind: "service"; name: string; description: string; qty: number; unitPriceFinal: string; vatRate: string }
+  >;
+};
 
-  const [vatTypes, paymentMethods] = await Promise.all([
-    getFicVatTypesForCompany(companyId),
-    getFicPaymentMethodsForCompany(companyId),
-  ]);
-
+/** Costruisce il payload senza chiamate esterne, così il documento resta verificabile in ambiente isolato. */
+export function buildFicProformaPayload(input: FicProformaInput, vatTypes: FicVatType[], paymentMethods: FicPaymentMethod[], ficEntity: unknown) {
   const paymentMethodId = findPaymentMethodId(paymentMethods, "Bonifico");
-
   const items_list = input.items.map((it) => {
-    const vatRateNum = parseFloat(it.vatRate);
-    const vatId = findVatTypeId(vatTypes, vatRateNum);
+    const vatId = findVatTypeId(vatTypes, parseFloat(it.vatRate));
     return {
       product_id: 0,
-      // Una prestazione non è una referenza di catalogo: nessun SKU/FIC code
-      // può essere attribuito alla riga, anche se coincide nominalmente con una
-      // descrizione merceologica.
       ...(it.kind !== "service" && it.code ? { code: it.code } : {}),
       name: it.name,
       description: it.kind === "service" ? "Servizio non inventariato" : it.description,
@@ -914,20 +883,12 @@ export async function createFicProformaForCompany(
       not_taxable: false,
     };
   });
-
-  const paymentsAmount = computePaymentsAmount(
-    input.items.map((it) => ({
-      quantity: it.qty,
-      unitPrice: parseFloat(it.unitPriceFinal),
-      vatRate: parseFloat(it.vatRate),
-    })),
-  );
-
-  const ficEntity = await getFicClientByIdForCompany(input.ficClientId, companyId);
-
-  const body = {
+  const paymentsAmount = computePaymentsAmount(input.items.map((it) => ({
+    quantity: it.qty, unitPrice: parseFloat(it.unitPriceFinal), vatRate: parseFloat(it.vatRate),
+  })));
+  return {
     data: {
-      type: "proforma",
+      type: "proforma" as const,
       entity: ficEntity,
       date: input.date,
       currency: { id: "EUR" },
@@ -935,14 +896,24 @@ export async function createFicProformaForCompany(
       subject: input.orderNumber ? `Ordine ${input.orderNumber}` : "Proforma",
       visible_subject: input.orderNumber ? `Ordine ${input.orderNumber}` : "Proforma",
       items_list,
-      payments_list: [{
-        amount: paymentsAmount,
-        due_date: input.date,
-        status: "not_paid" as const,
-      }],
+      payments_list: [{ amount: paymentsAmount, due_date: input.date, status: "not_paid" as const }],
       notes: input.notesInternal,
     },
   };
+}
+
+/** Crea proforma su FiC per una company specifica. */
+export async function createFicProformaForCompany(
+  companyId: string,
+  input: FicProformaInput,
+): Promise<{ id: number; number: string }> {
+  const { accessToken, ficCompanyId } = await getActiveFicConnection(companyId);
+  const [vatTypes, paymentMethods] = await Promise.all([
+    getFicVatTypesForCompany(companyId),
+    getFicPaymentMethodsForCompany(companyId),
+  ]);
+  const ficEntity = await getFicClientByIdForCompany(input.ficClientId, companyId);
+  const body = buildFicProformaPayload(input, vatTypes, paymentMethods, ficEntity);
 
   console.log(`[fic:createProforma] company=${companyId} ficCompany=${ficCompanyId} client=${input.ficClientId}`);
 

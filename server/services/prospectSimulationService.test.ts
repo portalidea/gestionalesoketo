@@ -114,7 +114,7 @@ describe("calculateProspectSimulation", () => {
       serviceVatRate: "22.00",
       minimumMerchandiseNet: "690.00",
       bonusAmount: "200.00",
-      bonusPaymentDeadline: new Date("2026-10-31T00:00:00.000Z"),
+      bonusPaymentDeadline: "2026-10-31",
     };
     const result = calculateProspectSimulation(config, [product], [{ productId: product.id, quantity: 1 }], servicePackage);
     expect(result.currentTierMerchandiseNet).toBe("690.00");
@@ -123,6 +123,7 @@ describe("calculateProspectSimulation", () => {
     expect(result.totalNet).toBe("890.00");
     expect(result.vatAmount).toBe("113.00");
     expect(result.totalGross).toBe("1003.00");
+    expect(result.appliedServicePackage?.bonusPaymentDeadline).toBe("2026-10-31");
   });
 
   it("rifiuta il minimo del pacchetto quando la sola merce non raggiunge la soglia", () => {

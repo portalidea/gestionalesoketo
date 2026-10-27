@@ -56,7 +56,7 @@ export type ProspectCartItemInput = { productId: string; quantity: number };
 
 /** Campagna tier upgrade già risolta server-side per company e finestra temporale. */
 export type ProspectTierUpgradePromotion = { ruleType?: "tier_upgrade"; promotionId: string; title: string; publicDescription: string; validFrom: Date; validTo: Date; qualifyingTierCode: string; grantedTierCode: string; };
-export type ProspectServicePackagePromotion = { ruleType: "service_package"; promotionId: string; title: string; publicDescription: string; validFrom: Date; validTo: Date; assignedTierCode: string; serviceCode: string; serviceName: string; serviceNet: string; serviceVatRate: string; minimumMerchandiseNet: string; bonusAmount: string | null; bonusPaymentDeadline: Date | null; };
+export type ProspectServicePackagePromotion = { ruleType: "service_package"; promotionId: string; title: string; publicDescription: string; validFrom: Date; validTo: Date; assignedTierCode: string; serviceCode: string; serviceName: string; serviceNet: string; serviceVatRate: string; minimumMerchandiseNet: string; bonusAmount: string | null; bonusPaymentDeadline: string | null; };
 export type ProspectActivePromotion = (ProspectTierUpgradePromotion & { ruleType?: "tier_upgrade" }) | ProspectServicePackagePromotion;
 
 export type ProspectSimulationCalculation = {

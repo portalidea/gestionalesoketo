@@ -135,7 +135,7 @@ export function buildProspectPromotionTerms(calculation: ProspectSimulationCalcu
     appliedBenefitsSnapshot: [{ type: "service_package", title: promotion.title, qualifyingTierCode: calculation.reachedTier.code, grantedTierCode: promotion.assignedTierCode }],
     pricedItemsSnapshot, merchandiseNet: calculation.currentTierMerchandiseNet, shippingNet: calculation.shippingNet, shippingVatRate: calculation.shippingVatRate, shippingVatAmount: calculation.shippingVatAmount, freeShippingApplied: calculation.freeShippingApplied,
     vatAmount: calculation.vatAmount, totalGross: calculation.totalGross, ruleType: "service_package", serviceLineSnapshot: { serviceCode: service.serviceCode, serviceName: service.serviceName, unitPriceNet: service.net, vatRate: service.vatRate, lineTotalNet: service.net, lineTotalGross: service.gross },
-    bonusSnapshot: promotion.bonusAmount && promotion.bonusPaymentDeadline ? { amount: promotion.bonusAmount, paymentDeadline: promotion.bonusPaymentDeadline.toISOString().slice(0, 10) } : null,
+    bonusSnapshot: promotion.bonusAmount && promotion.bonusPaymentDeadline ? { amount: promotion.bonusAmount, paymentDeadline: promotion.bonusPaymentDeadline } : null,
     serviceNet: service.net, serviceVatRate: service.vatRate, serviceVatAmount: service.vatAmount,
   };
 }
@@ -335,12 +335,12 @@ export async function deactivateProspectPromotion(database: Database, companyId:
 export type ProspectServicePackagePromotionInput = {
   title: string; publicDescription: string; internalNotes?: string | null; validFrom: Date; validTo: Date; isActive: boolean;
   assignedTierCode: string; serviceCode: string; serviceName: string; serviceNet: number; serviceVatRate: number; minimumMerchandiseNet: number;
-  bonusAmount?: number | null; bonusPaymentDeadline?: Date | null;
+  bonusAmount?: number | null; bonusPaymentDeadline?: string | null;
 };
 export type ProspectServicePackagePromotion = {
   ruleType: "service_package"; promotionId: string; title: string; publicDescription: string; validFrom: Date; validTo: Date;
   assignedTierCode: string; serviceCode: string; serviceName: string; serviceNet: string; serviceVatRate: string; minimumMerchandiseNet: string;
-  bonusAmount: string | null; bonusPaymentDeadline: Date | null;
+  bonusAmount: string | null; bonusPaymentDeadline: string | null;
 };
 export type ProspectActivePromotion = (ProspectTierUpgradePromotion & { ruleType: "tier_upgrade" }) | ProspectServicePackagePromotion;
 
@@ -356,13 +356,17 @@ async function validateServicePackageInput(database: Database, companyId: string
   if (!tiers.some((tier) => tier.code === input.assignedTierCode)) throw new TRPCError({ code: "BAD_REQUEST", message: "Il pacchetto assegnato deve corrispondere a una fascia prospect configurata" });
   if (!input.serviceCode.trim() || !input.serviceName.trim() || !Number.isFinite(input.serviceNet) || input.serviceNet <= 0 || ![4, 5, 10, 22].includes(input.serviceVatRate) || !Number.isFinite(input.minimumMerchandiseNet) || input.minimumMerchandiseNet < 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Configurazione del servizio non valida" });
   const hasBonus = input.bonusAmount != null || input.bonusPaymentDeadline != null;
-  if (hasBonus && (!(input.bonusAmount! > 0) || !Number.isFinite(input.bonusAmount) || !input.bonusPaymentDeadline || Number.isNaN(input.bonusPaymentDeadline.getTime()))) throw new TRPCError({ code: "BAD_REQUEST", message: "Bonus e data limite pagamento devono essere indicati insieme" });
+  if (hasBonus && (!(input.bonusAmount! > 0) || !Number.isFinite(input.bonusAmount) || !input.bonusPaymentDeadline || !isDateOnly(input.bonusPaymentDeadline))) throw new TRPCError({ code: "BAD_REQUEST", message: "Bonus e data limite pagamento devono essere indicati insieme" });
 }
 function standardValues(input: ProspectServicePackagePromotionInput) {
   return { title: input.title.trim(), publicDescription: input.publicDescription.trim(), internalNotes: input.internalNotes?.trim() || null, validFrom: input.validFrom, validTo: input.validTo, isActive: input.isActive, ruleType: "service_package" as const };
 }
-function toDateOnly(value: Date | null | undefined) {
-  return value ? value.toISOString().slice(0, 10) : null;
+function isDateOnly(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  return new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) === value;
+}
+function toDateOnly(value: string | null | undefined) {
+  return value == null ? null : isDateOnly(value) ? value : null;
 }
 export async function getActiveProspectPromotion(database: Database, companyId: string, now = new Date()): Promise<ProspectActivePromotion | null> {
   const rows = await database.select({
@@ -377,7 +381,7 @@ export async function getActiveProspectPromotion(database: Database, companyId: 
   const row = rows[0]; if (!row) return null;
   if (row.ruleType === "tier_upgrade") return { ...mapTierUpgradePromotion(row), ruleType: "tier_upgrade" };
   if (!row.assignedTierCode || !row.serviceCode || !row.serviceName || row.serviceNet == null || row.serviceVatRate == null || row.minimumMerchandiseNet == null) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Campagna pacchetto servizio incompleta" });
-  return { ruleType: "service_package", promotionId: row.id, title: row.title, publicDescription: row.publicDescription, validFrom: row.validFrom, validTo: row.validTo, assignedTierCode: row.assignedTierCode, serviceCode: row.serviceCode, serviceName: row.serviceName, serviceNet: String(row.serviceNet), serviceVatRate: String(row.serviceVatRate), minimumMerchandiseNet: String(row.minimumMerchandiseNet), bonusAmount: row.bonusAmount == null ? null : String(row.bonusAmount), bonusPaymentDeadline: row.bonusPaymentDeadline ? new Date(`${String(row.bonusPaymentDeadline).slice(0, 10)}T00:00:00.000Z`) : null };
+  return { ruleType: "service_package", promotionId: row.id, title: row.title, publicDescription: row.publicDescription, validFrom: row.validFrom, validTo: row.validTo, assignedTierCode: row.assignedTierCode, serviceCode: row.serviceCode, serviceName: row.serviceName, serviceNet: String(row.serviceNet), serviceVatRate: String(row.serviceVatRate), minimumMerchandiseNet: String(row.minimumMerchandiseNet), bonusAmount: row.bonusAmount == null ? null : String(row.bonusAmount), bonusPaymentDeadline: row.bonusPaymentDeadline ? String(row.bonusPaymentDeadline).slice(0, 10) : null };
 }
 export async function createProspectServicePackagePromotion(database: Database, companyId: string, actorId: string, input: ProspectServicePackagePromotionInput) {
   await validateServicePackageInput(database, companyId, input);

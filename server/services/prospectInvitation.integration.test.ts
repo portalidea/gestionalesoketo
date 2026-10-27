@@ -440,7 +440,7 @@ describe("prospect invitations and conversion — PostgreSQL isolato", () => {
       bonusAmount: 200,
       // La registrazione avviene oggi, ma la data di pagamento precedente alla
       // deadline deve comunque concedere il bonus.
-      bonusPaymentDeadline: new Date("2026-10-25T00:00:00.000Z"),
+      bonusPaymentDeadline: "2026-10-25",
     });
     await database.execute(sql`UPDATE products SET "unitPrice" = 100.00 WHERE id = ${PRODUCT_ID}::uuid`);
     const invitation = await invite(database, "service-bonus");
@@ -459,7 +459,7 @@ describe("prospect invitations and conversion — PostgreSQL isolato", () => {
     const [pendingBonus] = await database.select().from(orderPromotionBonuses).where(eq(orderPromotionBonuses.orderId, converted.orderId));
     const [order] = await database.select({ subtotalNet: orders.subtotalNet, totalGross: orders.totalGross }).from(orders).where(eq(orders.id, converted.orderId));
     expect(serviceLine).toMatchObject({ serviceCode: "ADV-200", serviceName: "Pubblicità", lineTotalNet: "200.00", vatRate: "22.00", lineTotalGross: "244.00" });
-    expect(pendingBonus).toMatchObject({ status: "pending", bonusAmount: "200.00", valuationDiscountPercent: "0.00" });
+    expect(pendingBonus).toMatchObject({ status: "pending", bonusAmount: "200.00", valuationDiscountPercent: "0.00", paymentDeadline: "2026-10-25" });
     expect(order.subtotalNet).toBe("927.35");
     expect(Number(order.totalGross)).toBeGreaterThan(Number(order.subtotalNet));
 

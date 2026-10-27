@@ -60,7 +60,11 @@ type PromotionRow = {
 
 const AUTO_SERVICE_CODE = "PROSPECT_SERVICE";
 const dateInputValue = (date: Date | string) => new Date(date).toISOString().slice(0, 16);
-const dateOnlyInputValue = (date: Date | string | null | undefined) => date ? new Date(date).toISOString().slice(0, 10) : "";
+const dateOnlyInputValue = (date: Date | string | null | undefined) => {
+  if (!date) return "";
+  const raw = String(date);
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : new Date(raw).toISOString().slice(0, 10);
+};
 const decimalInputValue = (value: string | number | null | undefined) => value == null ? "" : String(value);
 const euro = (value: string | number) => new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(Number(value));
 const toNumber = (value: string) => Number.isFinite(Number(value)) ? Number(value) : null;
@@ -151,7 +155,7 @@ export default function ProspectPromotions() {
       if (editingId) updateMutation.mutate({ id: editingId, promotion }); else createMutation.mutate(promotion);
       return;
     }
-    const promotion = { ...base, ruleType: "service_package" as const, assignedTierCode: form.assignedTierCode, serviceCode: form.serviceCode, serviceName: form.serviceName.trim(), serviceNet: Number(form.serviceNet), serviceVatRate: Number(form.serviceVatRate), minimumMerchandiseNet: Number(form.minimumMerchandiseNet), bonusAmount: form.bonusEnabled ? Number(form.bonusAmount) : null, bonusPaymentDeadline: form.bonusEnabled ? new Date(`${form.bonusPaymentDeadline}T00:00:00`) : null };
+    const promotion = { ...base, ruleType: "service_package" as const, assignedTierCode: form.assignedTierCode, serviceCode: form.serviceCode, serviceName: form.serviceName.trim(), serviceNet: Number(form.serviceNet), serviceVatRate: Number(form.serviceVatRate), minimumMerchandiseNet: Number(form.minimumMerchandiseNet), bonusAmount: form.bonusEnabled ? Number(form.bonusAmount) : null, bonusPaymentDeadline: form.bonusEnabled ? form.bonusPaymentDeadline : null };
     if (editingId) updateMutation.mutate({ id: editingId, promotion }); else createMutation.mutate(promotion);
   };
 
