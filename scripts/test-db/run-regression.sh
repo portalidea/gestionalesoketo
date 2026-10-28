@@ -25,7 +25,6 @@ pnpm run testdb:m13-idempotency
 pnpm run testdb:fefo
 pnpm run testdb:retailer-stock-unblock
 pnpm run testdb:legacy-api-calls
-pnpm run testdb:order-confirm-delivery
 pnpm run testdb:retailer-allowances
 pnpm run testdb:ddt:derived-validation
 pnpm run testdb:intercompany
@@ -34,5 +33,8 @@ pnpm run testdb:intercompany:report
 pnpm run testdb:intercompany:manual
 pnpm run testdb:shopify
 pnpm run testdb:prospect-simulator
+# L'audit fulfillment è append-only e mantiene FK sugli ordini: viene quindi
+# eseguito per ultimo, dopo ogni fixture che ricrea gli stessi ordini test.
+pnpm run testdb:order-confirm-delivery
 
 echo "TESTDB_REGRESSION=PASS"

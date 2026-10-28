@@ -63,6 +63,7 @@ import WarehouseReport from "./pages/reports/WarehouseReport";
 import SalesReport from "./pages/reports/SalesReport";
 import MarketplaceReport from "./pages/reports/MarketplaceReport";
 import PromozioniReport from "./pages/reports/PromozioniReport";
+import FulfillmentExceptionsReport from "./pages/reports/FulfillmentExceptionsReport";
 import InventoryExport from "./pages/InventoryExport";
 import Companies from "./pages/Companies";
 import TierRules from "./pages/TierRules";
@@ -246,6 +247,9 @@ function Router() {
       </Route>
       <Route path="/reports/promozioni">
         <RequireRole allowedRoles={["admin"]}><PromozioniReport /></RequireRole>
+      </Route>
+      <Route path="/reports/fulfillment-exceptions">
+        <RequireRole allowedRoles={["admin"]}><FulfillmentExceptionsReport /></RequireRole>
       </Route>
       <Route path="/reports/scadenze">
         <RequireRole allowedRoles={["admin"]}><ExpiryAlerts /></RequireRole>

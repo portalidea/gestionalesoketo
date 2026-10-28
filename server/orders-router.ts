@@ -12,7 +12,7 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { staffProcedure, writerProcedure, router } from "./_core/trpc";
+import { adminProcedure, staffProcedure, writerProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
 import {
   orders,
@@ -51,6 +51,7 @@ import {
 import {
   executeOrderFulfillment,
   previewOrderDelivery,
+  type FulfillmentExceptionSelection,
   type FulfillmentTarget,
 } from "./services/orderConfirmDelivery";
 
@@ -205,7 +206,8 @@ export async function fulfillAndRunPostCommit(input: {
   companyId: string;
   actorUserId: string;
   targetStatus: FulfillmentTarget;
-  source: "manual_step" | "delivery_confirm";
+  source: "manual_step" | "delivery_confirm" | "delivery_exception";
+  exceptions?: FulfillmentExceptionSelection[];
 }, dependencies: PostCommitDependencies = {}) {
   const result = await executeOrderFulfillment(input);
   const ensureFicDocuments = dependencies.ensureFicDocuments ?? ensureFicDocumentsAfterFulfillment;
@@ -238,6 +240,12 @@ export async function retryFicDocumentsAfterFulfillment(
 const orderItemInput = z.object({
   productId: uuidSchema,
   quantity: z.number().int().positive(),
+});
+
+const fulfillmentExceptionInput = z.object({
+  orderItemId: uuidSchema,
+  exceptionType: z.enum(["reallocated", "no_stock_movement"]),
+  reason: z.string().trim().min(1, "Il motivo è obbligatorio.").max(2_000),
 });
 
 const statusEnum = z.enum([
@@ -1577,6 +1585,24 @@ export const ordersRouter = router({
       actorUserId: ctx.user!.id,
       targetStatus: "delivered",
       source: "delivery_confirm",
+    })),
+
+  /**
+   * Percorso composto con eccezioni riga: solo admin. Le scelte vengono
+   * ricalcolate e validate nel service sotto lock, non dal browser.
+   */
+  confirmOrderDeliveryWithExceptions: adminProcedure
+    .input(z.object({
+      orderId: uuidSchema,
+      exceptions: z.array(fulfillmentExceptionInput).min(1),
+    }))
+    .mutation(({ input, ctx }) => fulfillAndRunPostCommit({
+      orderId: input.orderId,
+      companyId: ctx.activeCompanyId,
+      actorUserId: ctx.user!.id,
+      targetStatus: "delivered",
+      source: "delivery_exception",
+      exceptions: input.exceptions,
     })),
 
   /** Step manuale, ora atomico come il percorso composto. */

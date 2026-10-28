@@ -17,6 +17,11 @@ const IDS = {
   ficFailure: "d0000000-0000-0000-0000-000000000007",
   otherCompanyOnly: "d0000000-0000-0000-0000-000000000008",
   soketoOnlyBatch: "d0000000-0000-0000-0000-000000000009",
+  reallocatedZero: "d0000000-0000-0000-0000-000000000010",
+  noStockMovement: "d0000000-0000-0000-0000-000000000011",
+  reallocatedPartial: "d0000000-0000-0000-0000-000000000012",
+  missingReason: "d0000000-0000-0000-0000-000000000013",
+  mixed: "d0000000-0000-0000-0000-000000000014",
 } as const;
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -53,7 +58,7 @@ async function createOrder(input: {
     INSERT INTO orders (
       id, "orderNumber", "retailerId", status, "paymentStatus", "subtotalNet", "vatAmount", "totalGross", "discountPercent", "createdBy", "companyId"
     ) VALUES (
-      ${input.id}, ${`TEST-DELIVERY-${input.id.slice(-1)}`}, ${retailerId}, ${status}, ${paymentStatus}, 10, 1, 11, 0, ${TEST_IDS.adminUser}, ${TEST_IDS.originCompany}
+      ${input.id}, ${`TEST-DELIVERY-${input.id.slice(-4)}`}, ${retailerId}, ${status}, ${paymentStatus}, 10, 1, 11, 0, ${TEST_IDS.adminUser}, ${TEST_IDS.originCompany}
     )
   `;
   await sql`
@@ -332,6 +337,146 @@ async function main() {
   );
   assert(otherCompanyMovements[0]?.count === 0 && otherCompanyState[0]?.status === "pending" && await stock(TEST_IDS.soketoCentral, IDS.soketoOnlyBatch) === 50, "T12: nessuna scrittura deve interessare stock, movimenti o stato quando serve un travaso.");
 
+  // T13: lotto originario a zero ma prodotto disponibile -> solo opzione A;
+  // il server rialloca FEFO, registra audit e non duplica al retry.
+  await sql`UPDATE "inventoryByBatch" SET quantity = 0 WHERE "locationId" = ${TEST_IDS.originCentral} AND "batchId" = ${TEST_IDS.batchSoon}`;
+  await sql`UPDATE "inventoryByBatch" SET quantity = 120 WHERE "locationId" = ${TEST_IDS.originCentral} AND "batchId" = ${TEST_IDS.batchFourMonths}`;
+  await sql`UPDATE products SET "labelStock" = 40 WHERE id = ${TEST_IDS.productBoxes}`;
+  await createOrder({ id: IDS.reallocatedZero, batchId: TEST_IDS.batchSoon, quantity: 2 });
+  const [zeroItem] = await sql<{ id: string }[]>`SELECT id FROM "orderItems" WHERE "orderId" = ${IDS.reallocatedZero}`;
+  const zeroPreview = await previewOrderDelivery({ orderId: IDS.reallocatedZero, companyId: TEST_IDS.originCompany });
+  assert(zeroPreview.requiresExceptions && zeroPreview.exceptionItems.length === 1 && zeroPreview.exceptionItems[0]?.reallocated.available && !zeroPreview.exceptionItems[0]?.noStockMovement.available, "T13: lotto zero con prodotto disponibile deve offrire solo riallocazione e scarico.");
+  const zeroResult = await executeOrderFulfillment({
+    ...common,
+    orderId: IDS.reallocatedZero,
+    targetStatus: "delivered",
+    exceptions: [{ orderItemId: zeroItem!.id, exceptionType: "reallocated", reason: "Lotto storico esaurito: riallocazione FEFO." }],
+  });
+  const [zeroAudit] = await sql<{ exceptionType: string; originalBatchQuantityAtAction: number; productCentralQuantityAtAction: number; replacementAllocations: Array<{ batchId: string; quantityPackages: number }> }[]>`
+    SELECT "exceptionType", "originalBatchQuantityAtAction", "productCentralQuantityAtAction", "replacementAllocations"
+    FROM order_item_fulfillment_exceptions WHERE "orderItemId" = ${zeroItem!.id}
+  `;
+  const zeroMovements = await sql<{ batchId: string; quantity: number }[]>`SELECT "batchId", quantity FROM "stockMovements" WHERE "sourceDocument" = ${IDS.reallocatedZero}`;
+  const zeroLabels = await sql<{ count: number }[]>`SELECT count(*)::int AS count FROM "labelMovements" WHERE "sourceOrderId" = ${IDS.reallocatedZero}`;
+  const zeroEvents = await sql<{ source: string }[]>`SELECT source FROM order_status_events WHERE "orderId" = ${IDS.reallocatedZero}`;
+  const zeroRetry = await executeOrderFulfillment({
+    ...common,
+    orderId: IDS.reallocatedZero,
+    targetStatus: "delivered",
+    exceptions: [{ orderItemId: zeroItem!.id, exceptionType: "reallocated", reason: "Retry innocuo" }],
+  });
+  const [zeroAuditCount] = await sql<{ count: number }[]>`SELECT count(*)::int AS count FROM order_item_fulfillment_exceptions WHERE "orderId" = ${IDS.reallocatedZero}`;
+  assert(zeroResult.newStatus === "delivered" && zeroAudit?.exceptionType === "reallocated" && zeroAudit.originalBatchQuantityAtAction === 0 && zeroAudit.productCentralQuantityAtAction === 120, "T13: audit riallocazione deve congelare correttamente le giacenze rilevate.");
+  assert(zeroAudit.replacementAllocations.length === 1 && zeroAudit.replacementAllocations[0]?.batchId === TEST_IDS.batchFourMonths && zeroAudit.replacementAllocations[0]?.quantityPackages === 2 && zeroMovements.length === 1 && zeroMovements[0]?.batchId === TEST_IDS.batchFourMonths && zeroLabels[0]?.count === 1, "T13: riallocazione deve scaricare il lotto FEFO effettivo e consumare etichette una sola volta.");
+  assert(zeroEvents.every((event) => event.source === "delivery_exception") && zeroRetry.idempotent && zeroAuditCount.count === 1, "T13: retry deve restare idempotente senza doppio audit.");
+
+  // T14: lotto e prodotto a zero -> solo opzione B; nessun movimento né etichetta.
+  await sql`UPDATE "inventoryByBatch" SET quantity = 0 WHERE "locationId" = ${TEST_IDS.originCentral} AND "batchId" IN (${TEST_IDS.batchSoon}, ${TEST_IDS.batchFourMonths})`;
+  await sql`UPDATE products SET "labelStock" = 40 WHERE id = ${TEST_IDS.productBoxes}`;
+  await createOrder({ id: IDS.noStockMovement, batchId: TEST_IDS.batchSoon, quantity: 1 });
+  const [noStockItem] = await sql<{ id: string }[]>`SELECT id FROM "orderItems" WHERE "orderId" = ${IDS.noStockMovement}`;
+  const noStockPreview = await previewOrderDelivery({ orderId: IDS.noStockMovement, companyId: TEST_IDS.originCompany });
+  assert(noStockPreview.requiresExceptions && noStockPreview.exceptionItems.length === 1 && !noStockPreview.exceptionItems[0]?.reallocated.available && noStockPreview.exceptionItems[0]?.noStockMovement.available, "T14: lotto e prodotto a zero devono offrire solo evasione senza scarico.");
+  await executeOrderFulfillment({
+    ...common,
+    orderId: IDS.noStockMovement,
+    targetStatus: "delivered",
+    exceptions: [{ orderItemId: noStockItem!.id, exceptionType: "no_stock_movement", reason: "Merce già consegnata, lotto esaurito." }],
+  });
+  const [noStockAudit] = await sql<{ exceptionType: string; replacementAllocations: unknown[] }[]>`SELECT "exceptionType", "replacementAllocations" FROM order_item_fulfillment_exceptions WHERE "orderItemId" = ${noStockItem!.id}`;
+  const [noStockMovementCount] = await sql<{ count: number }[]>`SELECT count(*)::int AS count FROM "stockMovements" WHERE "sourceDocument" = ${IDS.noStockMovement}`;
+  const [noStockLabelCount] = await sql<{ count: number }[]>`SELECT count(*)::int AS count FROM "labelMovements" WHERE "sourceOrderId" = ${IDS.noStockMovement}`;
+  const [noStockState] = await sql<{ status: string; labelStock: number }[]>`SELECT o.status, p."labelStock" FROM orders o JOIN products p ON p.id = ${TEST_IDS.productBoxes} WHERE o.id = ${IDS.noStockMovement}`;
+  assert(noStockAudit?.exceptionType === "no_stock_movement" && noStockAudit.replacementAllocations.length === 0 && noStockMovementCount.count === 0 && noStockLabelCount.count === 0 && noStockState?.status === "delivered" && noStockState.labelStock === 40, "T14: evasione senza scarico non deve mutare stock, movimenti o etichette.");
+
+  // T15: lotto parzialmente disponibile -> A include anche il suo residuo nel FEFO.
+  await sql`UPDATE "inventoryByBatch" SET quantity = CASE WHEN "batchId" = ${TEST_IDS.batchSoon} THEN 6 ELSE 6 END WHERE "locationId" = ${TEST_IDS.originCentral} AND "batchId" IN (${TEST_IDS.batchSoon}, ${TEST_IDS.batchFourMonths})`;
+  await sql`UPDATE products SET "labelStock" = 40 WHERE id = ${TEST_IDS.productBoxes}`;
+  await createOrder({ id: IDS.reallocatedPartial, batchId: TEST_IDS.batchSoon, quantity: 2 });
+  const [partialItem] = await sql<{ id: string }[]>`SELECT id FROM "orderItems" WHERE "orderId" = ${IDS.reallocatedPartial}`;
+  const partialPreview = await previewOrderDelivery({ orderId: IDS.reallocatedPartial, companyId: TEST_IDS.originCompany });
+  assert(partialPreview.exceptionItems.length === 1 && partialPreview.exceptionItems[0]?.reallocated.available && !partialPreview.exceptionItems[0]?.noStockMovement.available, "T15: lotto parziale e prodotto sufficiente devono offrire solo riallocazione.");
+  await executeOrderFulfillment({
+    ...common,
+    orderId: IDS.reallocatedPartial,
+    targetStatus: "delivered",
+    exceptions: [{ orderItemId: partialItem!.id, exceptionType: "reallocated", reason: "Riallocazione FEFO con residuo lotto storico." }],
+  });
+  const [partialAudit] = await sql<{ replacementAllocations: Array<{ batchId: string; quantityPackages: number }> }[]>`SELECT "replacementAllocations" FROM order_item_fulfillment_exceptions WHERE "orderItemId" = ${partialItem!.id}`;
+  const partialMovements = await sql<{ batchId: string; quantity: number }[]>`SELECT "batchId", quantity FROM "stockMovements" WHERE "sourceDocument" = ${IDS.reallocatedPartial} ORDER BY "batchId"`;
+  assert(partialAudit.replacementAllocations.length === 2 && partialAudit.replacementAllocations.some((allocation) => allocation.batchId === TEST_IDS.batchSoon && allocation.quantityPackages === 1) && partialAudit.replacementAllocations.some((allocation) => allocation.batchId === TEST_IDS.batchFourMonths && allocation.quantityPackages === 1), "T15: la riallocazione deve includere il residuo del lotto originario e il lotto FEFO successivo.");
+  assert(partialMovements.length === 2 && partialMovements.every((movement) => movement.quantity === 6), "T15: ogni lotto FEFO deve generare il proprio movimento reale di 6 pezzi.");
+
+  // T16: ordine misto — una riga normale e una riallocata nello stesso commit.
+  await sql`UPDATE "inventoryByBatch" SET quantity = CASE WHEN "batchId" = ${TEST_IDS.batchSoon} THEN 0 ELSE 12 END WHERE "locationId" = ${TEST_IDS.originCentral} AND "batchId" IN (${TEST_IDS.batchSoon}, ${TEST_IDS.batchFourMonths})`;
+  await sql`UPDATE products SET "labelStock" = 40 WHERE id = ${TEST_IDS.productBoxes}`;
+  await createOrder({ id: IDS.mixed, batchId: TEST_IDS.batchFourMonths, quantity: 1 });
+  await sql`
+    INSERT INTO "orderItems" ("orderId", "productId", "batchId", quantity, "unitPriceBase", "discountPercent", "unitPriceFinal", "vatRate", "lineTotalNet", "lineTotalGross", "productSku", "productName")
+    VALUES (${IDS.mixed}, ${TEST_IDS.productBoxes}, ${TEST_IDS.batchSoon}, 1, 10, 0, 10, 10, 10, 11, 'TEST-BOX-6', 'TEST Prodotto Confezione 6')
+  `;
+  const mixedItems = await sql<{ id: string; batchId: string }[]>`SELECT id, "batchId" FROM "orderItems" WHERE "orderId" = ${IDS.mixed}`;
+  const mixedStaleItem = mixedItems.find((item) => item.batchId === TEST_IDS.batchSoon)!;
+  await executeOrderFulfillment({
+    ...common,
+    orderId: IDS.mixed,
+    targetStatus: "delivered",
+    exceptions: [{ orderItemId: mixedStaleItem.id, exceptionType: "reallocated", reason: "Riallocazione della sola riga con lotto storico esaurito." }],
+  });
+  const [mixedAuditCount] = await sql<{ count: number }[]>`SELECT count(*)::int AS count FROM order_item_fulfillment_exceptions WHERE "orderId" = ${IDS.mixed}`;
+  const mixedMovements = await sql<{ quantity: number }[]>`SELECT quantity FROM "stockMovements" WHERE "sourceDocument" = ${IDS.mixed}`;
+  const [mixedLabel] = await sql<{ quantity: number }[]>`SELECT quantity FROM "labelMovements" WHERE "sourceOrderId" = ${IDS.mixed}`;
+  assert(mixedAuditCount.count === 1 && mixedMovements.length === 2 && mixedMovements.every((movement) => movement.quantity === 6) && mixedLabel?.quantity === -2, "T16: la riga normale deve essere scaricata insieme a quella riallocata e le etichette restano aggregate.");
+
+  // T17: il motivo vuoto è bloccato prima di qualsiasi scrittura.
+  await sql`UPDATE "inventoryByBatch" SET quantity = 0 WHERE "locationId" = ${TEST_IDS.originCentral} AND "batchId" IN (${TEST_IDS.batchSoon}, ${TEST_IDS.batchFourMonths})`;
+  await createOrder({ id: IDS.missingReason, batchId: TEST_IDS.batchSoon, quantity: 1 });
+  const [missingReasonItem] = await sql<{ id: string }[]>`SELECT id FROM "orderItems" WHERE "orderId" = ${IDS.missingReason}`;
+  let missingReasonError = "";
+  try {
+    await executeOrderFulfillment({
+      ...common,
+      orderId: IDS.missingReason,
+      targetStatus: "delivered",
+      exceptions: [{ orderItemId: missingReasonItem!.id, exceptionType: "no_stock_movement", reason: "   " }],
+    });
+  } catch (error) {
+    missingReasonError = error instanceof Error ? error.message : String(error);
+  }
+  const [missingReasonState] = await sql<{ status: string }[]>`SELECT status FROM orders WHERE id = ${IDS.missingReason}`;
+  const [missingReasonAuditCount] = await sql<{ count: number }[]>`SELECT count(*)::int AS count FROM order_item_fulfillment_exceptions WHERE "orderId" = ${IDS.missingReason}`;
+  const [missingReasonMovementCount] = await sql<{ count: number }[]>`SELECT count(*)::int AS count FROM "stockMovements" WHERE "sourceDocument" = ${IDS.missingReason}`;
+  assert(missingReasonError.includes("motivo") && missingReasonState?.status === "pending" && missingReasonAuditCount.count === 0 && missingReasonMovementCount.count === 0, "T17: motivo assente deve bloccare audit, movimenti e cambio stato.");
+
+  // T18: report admin filtrabile per company, periodo e tipo, con audit e
+  // allocazioni sostitutive leggibili. L'azienda arriva dal middleware.
+  await sql`
+    INSERT INTO "userCompanyAccess" ("userId", "companyId", "isDefault")
+    VALUES (${TEST_IDS.adminUser}, ${TEST_IDS.originCompany}, true)
+    ON CONFLICT ("userId", "companyId") DO UPDATE SET "isDefault" = true
+  `;
+  const { reportsRouter } = await import("../server/reports-router");
+  const reportCaller = reportsRouter.createCaller({
+    req: { headers: { "x-active-company-id": TEST_IDS.originCompany } },
+    res: {},
+    user: { id: TEST_IDS.adminUser, role: "admin" },
+  } as any);
+  const exceptionReport = await reportCaller.fulfillmentExceptions.list({
+    dateFrom: "2026-01-01",
+    dateTo: "2026-12-31",
+    limit: 100,
+    offset: 0,
+  });
+  const withoutStockReport = await reportCaller.fulfillmentExceptions.list({
+    dateFrom: "2026-01-01",
+    dateTo: "2026-12-31",
+    exceptionType: "no_stock_movement",
+    limit: 100,
+    offset: 0,
+  });
+  assert(exceptionReport.total === 4 && exceptionReport.items.filter((item: any) => item.exceptionType === "reallocated").length === 3 && exceptionReport.items.some((item: any) => Array.isArray(item.replacementAllocations) && item.replacementAllocations.length === 2), "T18: il report deve elencare le eccezioni della company attiva e le riallocazioni FEFO.");
+  assert(withoutStockReport.total === 1 && withoutStockReport.items[0]?.exceptionType === "no_stock_movement", "T18: il filtro tipo deve isolare le righe evase senza scarico.");
+
   console.log(JSON.stringify({
     generatedAt: new Date().toISOString(),
     tests: {
@@ -347,6 +492,12 @@ async function main() {
       concurrentSameOrderOneDelivery: "PASS",
       ficFailureRetryAndSingleDeliveryEmail: "PASS",
       otherCompanyOnlyStockRequiresTransfer: "PASS",
+      reallocatedZeroBatchAuditAndRetry: "PASS",
+      noStockMovementNoInventoryAndNoLabels: "PASS",
+      partialBatchReallocationIncludesOriginalRemainder: "PASS",
+      mixedNormalAndReallocatedRows: "PASS",
+      missingReasonBlocksAllWrites: "PASS",
+      fulfillmentExceptionReportFilters: "PASS",
     },
     raw: {
       complete: { result: resultComplete, items: completeItems, events: completeEvents, movements: completeMovements, labels: completeLabels },

@@ -49,7 +49,9 @@ import {
 } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { format } from "date-fns";
 import { it } from "date-fns/locale";
 import {
@@ -427,6 +429,7 @@ function BatchSelector({
 export default function OrderDetail() {
   const params = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
+  const { user } = useAuth();
   const utils = trpc.useUtils();
   const [cancelReason, setCancelReason] = useState("");
   const [editItemsOpen, setEditItemsOpen] = useState(false);
@@ -434,6 +437,10 @@ export default function OrderDetail() {
   const [releaseTermsOpen, setReleaseTermsOpen] = useState(false);
   const [releaseTermsReason, setReleaseTermsReason] = useState("");
   const [confirmDeliveryOpen, setConfirmDeliveryOpen] = useState(false);
+  const [deliveryExceptionSelections, setDeliveryExceptionSelections] = useState<Record<string, {
+    exceptionType?: "reallocated" | "no_stock_movement";
+    reason: string;
+  }>>({});
 
   const orderQuery = trpc.orders.getById.useQuery(
     { id: params.id ?? "" },
@@ -463,10 +470,24 @@ export default function OrderDetail() {
   const confirmOrderDelivery = trpc.orders.confirmOrderDelivery.useMutation({
     onSuccess: (data) => {
       setConfirmDeliveryOpen(false);
+      setDeliveryExceptionSelections({});
       if (data.fic.error) {
         toast.warning("Consegna registrata, ma documento FiC non generato: usa Riprova.");
       } else {
         toast.success("Trasferimento, spedizione e consegna registrati.");
+      }
+      invalidateOrder();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const confirmOrderDeliveryWithExceptions = trpc.orders.confirmOrderDeliveryWithExceptions.useMutation({
+    onSuccess: (data) => {
+      setConfirmDeliveryOpen(false);
+      setDeliveryExceptionSelections({});
+      if (data.fic.error) {
+        toast.warning("Consegna registrata, ma documento FiC non generato: usa Riprova.");
+      } else {
+        toast.success("Consegna registrata con eccezioni auditabili.");
       }
       invalidateOrder();
     },
@@ -551,6 +572,7 @@ export default function OrderDetail() {
     markShipped,
     markDelivered,
     confirmOrderDelivery,
+    confirmOrderDeliveryWithExceptions,
     retryFicDocuments,
     cancelOrder,
   };
@@ -615,6 +637,19 @@ export default function OrderDetail() {
     ? { label: "Da incassare", variant: "outline" as const, color: "text-amber-600" }
     : (PAYMENT_STATUS_CONFIG[paymentStatus] ?? PAYMENT_STATUS_CONFIG.unpaid);
   const labelWarnings = (order as any).labelWarnings as Array<{ productId: string; productName: string; labelStock: number }> ?? [];
+  const isAdmin = user?.role === "admin";
+  const deliveryExceptionItems = deliveryPreview.data?.exceptionItems ?? [];
+  const requiresDeliveryExceptions = Boolean(deliveryPreview.data?.requiresExceptions);
+  const exceptionPayload = deliveryExceptionItems.map((item) => ({
+    orderItemId: item.orderItemId,
+    exceptionType: deliveryExceptionSelections[item.orderItemId]?.exceptionType,
+    reason: deliveryExceptionSelections[item.orderItemId]?.reason?.trim() ?? "",
+  }));
+  const areDeliveryExceptionsComplete = requiresDeliveryExceptions
+    && deliveryExceptionItems.length > 0
+    && exceptionPayload.every((selection) => selection.exceptionType && selection.reason.length > 0);
+  const canProceedDelivery = Boolean(deliveryPreview.data?.canConfirm)
+    || (isAdmin && areDeliveryExceptionsComplete);
   const hasPromotionalLinePricing = order.items.some(
     (item) => parseFloat(item.discountPercent) > parseFloat(order.discountPercent ?? "0"),
   );
@@ -1188,17 +1223,23 @@ export default function OrderDetail() {
             )}
 
             {canConfirmDelivery && (
-              <Dialog open={confirmDeliveryOpen} onOpenChange={setConfirmDeliveryOpen}>
+              <Dialog open={confirmDeliveryOpen} onOpenChange={(open) => {
+                setConfirmDeliveryOpen(open);
+                if (!open) setDeliveryExceptionSelections({});
+              }}>
                 <Button
                   type="button"
                   className="w-full justify-start gap-2 bg-emerald-700 text-white hover:bg-emerald-800"
                   disabled={isAnyMutationPending}
-                  onClick={() => setConfirmDeliveryOpen(true)}
+                  onClick={() => {
+                    setDeliveryExceptionSelections({});
+                    setConfirmDeliveryOpen(true);
+                  }}
                 >
                   <CheckCircle2 className="h-4 w-4" />
                   Segna come consegnato
                 </Button>
-                <DialogContent className="max-w-2xl">
+                <DialogContent className="max-w-4xl">
                   <DialogHeader>
                     <DialogTitle>Confermi la consegna dell’ordine?</DialogTitle>
                     <DialogDescription>
@@ -1209,6 +1250,82 @@ export default function OrderDetail() {
                   {deliveryPreview.isLoading && (
                     <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
                       <Loader2 className="h-4 w-4 animate-spin" /> Verifica lotti FEFO in corso…
+                    </div>
+                  )}
+                  {requiresDeliveryExceptions && (
+                    <div className="max-h-[58vh] space-y-4 overflow-y-auto pr-1">
+                      <Alert variant="destructive" className="border-amber-400 bg-amber-50 text-amber-950">
+                        <AlertTriangle className="h-4 w-4 text-amber-700" />
+                        <AlertTitle>Righe con lotto non evadibile</AlertTitle>
+                        <AlertDescription>
+                          {isAdmin
+                            ? "Scegli un’opzione per ogni riga e indica il motivo. Le condizioni saranno rivalidate dal server al momento della consegna."
+                            : "Solo un amministratore può applicare un’eccezione di evasione. Nessuna opzione è disponibile per il tuo ruolo."}
+                        </AlertDescription>
+                      </Alert>
+                      {deliveryExceptionItems.map((item) => {
+                        const selected = deliveryExceptionSelections[item.orderItemId] ?? { reason: "" };
+                        const neitherOptionAvailable = !item.reallocated.available && !item.noStockMovement.available;
+                        return (
+                          <div key={item.orderItemId} className="space-y-3 rounded-lg border border-amber-300 bg-amber-50/60 p-4">
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div>
+                                <h3 className="font-semibold text-amber-950">{item.productName}</h3>
+                                <p className="font-mono text-xs text-amber-900/80">{item.productSku} · {item.quantityPackages} conf. / {item.quantityPieces} pz</p>
+                              </div>
+                              <Badge variant="outline" className="border-amber-400 bg-white text-amber-950">Intervento richiesto</Badge>
+                            </div>
+                            <div className="grid gap-2 text-sm sm:grid-cols-3">
+                              <div><span className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">Lotto originale</span><span className="font-mono">{item.originalBatchNumber}</span><span className="ml-1 text-xs text-muted-foreground">scad. {item.originalBatchExpirationDate}</span></div>
+                              <div><span className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">Giacenza lotto</span><span className="font-semibold">{item.originalBatchQuantity} pz</span></div>
+                              <div><span className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">Giacenza prodotto</span><span className="font-semibold">{item.productCentralQuantity} pz</span></div>
+                            </div>
+                            <p className="text-xs text-amber-900">{item.issue}</p>
+                            <div className="grid gap-2 md:grid-cols-2">
+                              <Button
+                                type="button"
+                                variant={selected.exceptionType === "reallocated" ? "default" : "outline"}
+                                disabled={!isAdmin || !item.reallocated.available}
+                                className="h-auto min-h-16 justify-start whitespace-normal px-3 py-2 text-left"
+                                onClick={() => setDeliveryExceptionSelections((current) => ({
+                                  ...current,
+                                  [item.orderItemId]: { ...current[item.orderItemId], exceptionType: "reallocated", reason: current[item.orderItemId]?.reason ?? "" },
+                                }))}
+                              >
+                                <span><strong>A — Rialloca e scarica</strong><br /><span className="text-xs font-normal">{item.reallocated.available ? "Disponibile: il server rialloca FEFO sui lotti attuali, anche su più lotti, e scarica normalmente." : "Non disponibile: il prodotto non basta nel centrale per l’intera riga."}</span></span>
+                              </Button>
+                              <Button
+                                type="button"
+                                variant={selected.exceptionType === "no_stock_movement" ? "destructive" : "outline"}
+                                disabled={!isAdmin || !item.noStockMovement.available}
+                                className="h-auto min-h-16 justify-start whitespace-normal px-3 py-2 text-left"
+                                onClick={() => setDeliveryExceptionSelections((current) => ({
+                                  ...current,
+                                  [item.orderItemId]: { ...current[item.orderItemId], exceptionType: "no_stock_movement", reason: current[item.orderItemId]?.reason ?? "" },
+                                }))}
+                              >
+                                <span><strong>B — Evasa senza scarico</strong><br /><span className="text-xs font-normal">{item.noStockMovement.available ? "Disponibile: nessun movimento merce, nessuna giacenza rivenditore e nessun consumo etichette." : "Non disponibile: richiede lotto originario a zero e prodotto insufficiente nel centrale."}</span></span>
+                              </Button>
+                            </div>
+                            {neitherOptionAvailable && (
+                              <Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertDescription>Nessuna opzione è applicabile: serve una verifica manuale prima della consegna.</AlertDescription></Alert>
+                            )}
+                            <div>
+                              <label className="mb-1 block text-sm font-medium" htmlFor={`delivery-exception-reason-${item.orderItemId}`}>Motivo obbligatorio</label>
+                              <Textarea
+                                id={`delivery-exception-reason-${item.orderItemId}`}
+                                value={selected.reason}
+                                disabled={!isAdmin || !selected.exceptionType}
+                                placeholder="Es. merce già consegnata, lotto esaurito"
+                                onChange={(event) => setDeliveryExceptionSelections((current) => ({
+                                  ...current,
+                                  [item.orderItemId]: { ...current[item.orderItemId], reason: event.target.value },
+                                }))}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                   {deliveryPreview.data?.canConfirm && (
@@ -1241,7 +1358,7 @@ export default function OrderDetail() {
                       </Table>
                     </div>
                   )}
-                  {deliveryPreview.data && !deliveryPreview.data.canConfirm && (
+                  {deliveryPreview.data && !deliveryPreview.data.canConfirm && !requiresDeliveryExceptions && (
                     <Alert variant="destructive">
                       <AlertTriangle className="h-4 w-4" />
                       <AlertTitle>Consegna non disponibile</AlertTitle>
@@ -1256,11 +1373,24 @@ export default function OrderDetail() {
                     <Button type="button" variant="outline" onClick={() => setConfirmDeliveryOpen(false)}>Annulla</Button>
                     <Button
                       type="button"
-                      disabled={!deliveryPreview.data?.canConfirm || confirmOrderDelivery.isPending}
-                      onClick={() => confirmOrderDelivery.mutate({ orderId: order.id })}
+                      disabled={!canProceedDelivery || confirmOrderDelivery.isPending || confirmOrderDeliveryWithExceptions.isPending}
+                      onClick={() => {
+                        if (requiresDeliveryExceptions) {
+                          confirmOrderDeliveryWithExceptions.mutate({
+                            orderId: order.id,
+                            exceptions: exceptionPayload.map((selection) => ({
+                              orderItemId: selection.orderItemId,
+                              exceptionType: selection.exceptionType!,
+                              reason: selection.reason,
+                            })),
+                          });
+                          return;
+                        }
+                        confirmOrderDelivery.mutate({ orderId: order.id });
+                      }}
                     >
-                      {confirmOrderDelivery.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                      Procedi
+                      {(confirmOrderDelivery.isPending || confirmOrderDeliveryWithExceptions.isPending) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      {requiresDeliveryExceptions ? "Conferma con eccezioni" : "Procedi"}
                     </Button>
                   </DialogFooter>
                 </DialogContent>

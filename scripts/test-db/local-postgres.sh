@@ -108,6 +108,7 @@ reset_database() {
     drizzle/migrations/0046_legacy_api_calls.sql
     drizzle/migrations/0047_order_status_events.sql
     drizzle/migrations/0048_prospect_service_package_bonus.sql
+    drizzle/migrations/0049_order_item_fulfillment_exceptions.sql
   )
 
   for file in "${files[@]}"; do
