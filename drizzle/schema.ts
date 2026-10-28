@@ -1175,6 +1175,55 @@ export type OrderStatusEvent = typeof orderStatusEvents.$inferSelect;
 export type InsertOrderStatusEvent = typeof orderStatusEvents.$inferInsert;
 
 /**
+ * Audit append-only delle righe consegnate con una scelta amministrativa
+ * eccezionale: riallocazione FEFO oppure chiusura senza movimento di stock.
+ * Gli snapshot restano anche se la riallocazione spezza/sostituisce la riga.
+ */
+export const orderItemFulfillmentExceptions = pgTable(
+  "order_item_fulfillment_exceptions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    companyId: uuid("companyId").notNull(),
+    orderId: uuid("orderId").notNull(),
+    orderItemId: uuid("orderItemId").notNull(),
+    productId: uuid("productId")
+      .notNull()
+      .references(() => products.id, { onDelete: "restrict" }),
+    originalBatchId: uuid("originalBatchId").notNull(),
+    originalBatchNumberSnapshot: text("originalBatchNumberSnapshot").notNull(),
+    originalBatchExpirationSnapshot: date("originalBatchExpirationSnapshot").notNull(),
+    productSkuSnapshot: varchar("productSkuSnapshot", { length: 100 }).notNull(),
+    productNameSnapshot: varchar("productNameSnapshot", { length: 255 }).notNull(),
+    piecesPerUnitSnapshot: integer("piecesPerUnitSnapshot").notNull(),
+    quantityPackages: integer("quantityPackages").notNull(),
+    quantityPieces: integer("quantityPieces").notNull(),
+    originalBatchQuantityAtAction: integer("originalBatchQuantityAtAction").notNull(),
+    productCentralQuantityAtAction: integer("productCentralQuantityAtAction").notNull(),
+    exceptionType: varchar("exceptionType", { length: 32 }).notNull(),
+    replacementAllocations: jsonb("replacementAllocations").notNull().default([]),
+    reason: text("reason").notNull(),
+    actorUserId: uuid("actorUserId")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    foreignKey({
+      columns: [t.orderId, t.companyId],
+      foreignColumns: [orders.id, orders.companyId],
+      name: "order_item_fulfillment_exceptions_order_company_fkey",
+    }).onDelete("restrict"),
+    unique("order_item_fulfillment_exceptions_order_item_unique").on(t.orderItemId),
+    index("idx_order_item_fulfillment_exceptions_company_created").on(t.companyId, t.createdAt),
+    index("idx_order_item_fulfillment_exceptions_company_type_created").on(t.companyId, t.exceptionType, t.createdAt),
+    index("idx_order_item_fulfillment_exceptions_order_created").on(t.orderId, t.createdAt),
+  ],
+);
+
+export type OrderItemFulfillmentException = typeof orderItemFulfillmentExceptions.$inferSelect;
+export type InsertOrderItemFulfillmentException = typeof orderItemFulfillmentExceptions.$inferInsert;
+
+/**
  * Order items — righe ordine (M6.1).
  * Snapshot di prezzo al momento dell'ordine per immutabilità.
  */

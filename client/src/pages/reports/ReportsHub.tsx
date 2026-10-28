@@ -1,12 +1,14 @@
 import { Link } from "wouter";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Warehouse, ShoppingCart, ShoppingBag, Gift, ArrowRight } from "lucide-react";
+import { Warehouse, ShoppingCart, ShoppingBag, Gift, ArrowRight, PackageCheck } from "lucide-react";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { formatEur, formatNum } from "@/components/reports";
 import { getDefaultDateRange } from "@/components/reports";
 
 export default function ReportsHub() {
+  const { user } = useAuth();
   const dateRange = getDefaultDateRange();
 
   // Micro-preview queries
@@ -60,6 +62,13 @@ export default function ReportsHub() {
       icon: <Gift className="h-8 w-8 text-green-700" />,
       preview: "Report ordini omaggio",
     },
+    ...(user?.role === "admin" ? [{
+      title: "Eccezioni di evasione",
+      description: "Righe riallocate FEFO o consegnate senza movimento di magazzino",
+      href: "/reports/fulfillment-exceptions",
+      icon: <PackageCheck className="h-8 w-8 text-amber-700" />,
+      preview: "Audit consegne eccezionali",
+    }] : []),
   ];
 
   return (

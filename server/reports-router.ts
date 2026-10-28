@@ -1206,6 +1206,77 @@ const intercompanyTransfersRouter = router({
     }),
 });
 
+// ============= ECCEZIONI EVASIONE RIGA =============
+
+const fulfillmentExceptionsRouter = router({
+  /**
+   * Audit operativo delle sole righe evase con riallocazione FEFO o senza
+   * movimento di stock. Company e autorizzazione derivano dal contesto.
+   */
+  list: adminProcedure
+    .input(z.object({
+      dateFrom: z.string().optional(),
+      dateTo: z.string().optional(),
+      exceptionType: z.enum(["reallocated", "no_stock_movement"]).optional(),
+      limit: z.number().int().min(1).max(500).default(100),
+      offset: z.number().int().min(0).default(0),
+    }))
+    .query(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new Error("DB non disponibile");
+      const { dateFrom, dateTo } = parseDateRange(input);
+      const typePredicate = input.exceptionType
+        ? sql`AND e."exceptionType" = ${input.exceptionType}`
+        : sql``;
+      const [rows, countRows] = await Promise.all([
+        db.execute<any>(sql`
+          SELECT
+            e.id,
+            e."createdAt",
+            e."exceptionType",
+            e."orderId",
+            o."orderNumber",
+            o.status AS "orderStatus",
+            r.name AS "retailerName",
+            e."productSkuSnapshot" AS "productSku",
+            e."productNameSnapshot" AS "productName",
+            e."quantityPackages",
+            e."quantityPieces",
+            e."originalBatchNumberSnapshot" AS "originalBatchNumber",
+            e."originalBatchExpirationSnapshot" AS "originalBatchExpiration",
+            e."originalBatchQuantityAtAction" AS "originalBatchQuantity",
+            e."productCentralQuantityAtAction" AS "productCentralQuantity",
+            e."replacementAllocations",
+            e.reason,
+            u.name AS "actorName"
+          FROM public.order_item_fulfillment_exceptions e
+          INNER JOIN public.orders o ON o.id = e."orderId" AND o."companyId" = e."companyId"
+          LEFT JOIN public.retailers r ON r.id = o."retailerId"
+          LEFT JOIN public.users u ON u.id = e."actorUserId"
+          WHERE e."companyId" = ${ctx.activeCompanyId}::uuid
+            AND e."createdAt" >= ${dateFrom.toISOString()}::timestamptz
+            AND e."createdAt" <= ${dateTo.toISOString()}::timestamptz
+            ${typePredicate}
+          ORDER BY e."createdAt" DESC, e.id DESC
+          LIMIT ${input.limit}
+          OFFSET ${input.offset}
+        `),
+        db.execute<any>(sql`
+          SELECT COUNT(*)::int AS count
+          FROM public.order_item_fulfillment_exceptions e
+          WHERE e."companyId" = ${ctx.activeCompanyId}::uuid
+            AND e."createdAt" >= ${dateFrom.toISOString()}::timestamptz
+            AND e."createdAt" <= ${dateTo.toISOString()}::timestamptz
+            ${typePredicate}
+        `),
+      ]);
+      return {
+        items: rows as unknown as any[],
+        total: Number((countRows as Array<{ count: number }>)[0]?.count ?? 0),
+      };
+    }),
+});
+
 // ============= COMBINED ROUTER =============
 
 export const reportsRouter = router({
@@ -1214,5 +1285,6 @@ export const reportsRouter = router({
   marketplace: marketplaceRouter,
   promozioni: promozioniRouter,
   intercompanyTransfers: intercompanyTransfersRouter,
+  fulfillmentExceptions: fulfillmentExceptionsRouter,
   export: exportRouter,
 });
