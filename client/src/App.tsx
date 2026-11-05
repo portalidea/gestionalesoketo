@@ -50,6 +50,7 @@ import AffiliateDashboard from "./pages/AffiliateDashboard";
 import AffiliateCommissions from "./pages/AffiliateCommissions";
 import AffiliateProfile from "./pages/AffiliateProfile";
 import MarketplaceShopify from "./pages/MarketplaceShopify";
+import MarketplaceAmazon from "./pages/MarketplaceAmazon";
 import MarketplaceShopifyVariants from "./pages/MarketplaceShopifyVariants";
 import MarketplaceShopifyOrders from "./pages/MarketplaceShopifyOrders";
 import MarketplaceShopifyOrderDetail from "./pages/MarketplaceShopifyOrderDetail";
@@ -298,6 +299,9 @@ function Router() {
       </Route>
       <Route path="/marketplace/shopify">
         <RequireRole allowedRoles={ADMIN_ROLES}><MarketplaceShopify /></RequireRole>
+      </Route>
+      <Route path="/marketplace/amazon">
+        <RequireRole allowedRoles={["admin"]}><MarketplaceAmazon /></RequireRole>
       </Route>
       {/* ═══════════════════════════════════════════════════════════
           Affiliate Portal routes — only affiliate_admin / affiliate_user

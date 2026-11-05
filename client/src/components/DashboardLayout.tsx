@@ -81,7 +81,7 @@ const baseMenuItems: MenuItem[] = [
   { icon: ShoppingCart, label: "Ordini", path: "/orders" },
   { icon: Handshake, label: "Affiliati", path: "/affiliates" },
   { icon: Euro, label: "Commissioni", path: "/affiliates/commissions" },
-  { icon: Plug, label: "Marketplace", path: "/marketplace/shopify" },
+  { icon: Plug, label: "Marketplace — Shopify", path: "/marketplace/shopify" },
   { icon: AlertTriangle, label: "Alert", path: "/alerts" },
   { icon: Download, label: "Export Magazzino", path: "/inventory/export" },
   {
@@ -98,6 +98,7 @@ const baseMenuItems: MenuItem[] = [
 ];
 
 const adminMenuItems: MenuItem[] = [
+  { icon: Plug, label: "Marketplace — Amazon", path: "/marketplace/amazon" },
   { icon: Tag, label: "Pacchetti", path: "/settings/packages" },
   { icon: TrendingDown, label: "Motore Tier", path: "/settings/tier-rules" },
   { icon: Users, label: "Team", path: "/settings/team" },

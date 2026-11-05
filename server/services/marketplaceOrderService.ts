@@ -502,6 +502,9 @@ export async function processStockForMarketplaceOrder(
     .where(eq(salesStores.id, order.storeId))
     .limit(1);
   if (!store) throw new Error(`Store ${order.storeId} not found`);
+  if (store.channel !== "shopify") {
+    throw new Error("Il motore Shopify non può scaricare ordini Amazon: usare il flusso Amazon con dry run e ledger per riga");
+  }
 
   if (store.channel === "shopify") {
     if (!store.orderImportStartDate) {
@@ -634,9 +637,9 @@ export async function processStockForMarketplaceOrder(
 export async function retryFailedOrders(storeId?: string): Promise<{ retried: number; succeeded: number }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const conditions = [inArray(marketplaceOrders.stockProcessingStatus, ["failed", "partial"]), sql`"stockProcessingAttempts" < 5`];
+  const conditions = [eq(salesStores.channel, "shopify"), inArray(marketplaceOrders.stockProcessingStatus, ["failed", "partial"]), sql`"stockProcessingAttempts" < 5`];
   if (storeId) conditions.push(eq(marketplaceOrders.storeId, storeId));
-  const failedOrders = await db.select({ id: marketplaceOrders.id }).from(marketplaceOrders).where(and(...conditions));
+  const failedOrders = await db.select({ id: marketplaceOrders.id }).from(marketplaceOrders).innerJoin(salesStores, eq(salesStores.id, marketplaceOrders.storeId)).where(and(...conditions));
   let succeeded = 0;
   for (const order of failedOrders) {
     const result = await processStockForMarketplaceOrder(order.id);
