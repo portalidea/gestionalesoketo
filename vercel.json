@@ -1,5 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "git": {
+    "deploymentEnabled": {
+      "docs/amazon-daily-make-blueprint": false
+    }
+  },
   "buildCommand": "pnpm build",
   "outputDirectory": "dist/public",
   "framework": null,
