@@ -25,7 +25,7 @@ import type { OrderStatus } from "./orderStateMachine";
 export type FulfillmentSource = "manual_step" | "delivery_confirm" | "delivery_exception";
 export type FulfillmentTarget = Extract<OrderStatus, "transferring" | "shipped" | "delivered">;
 
-export type FulfillmentExceptionType = "reallocated" | "no_stock_movement";
+export type FulfillmentExceptionType = "reallocated" | "no_stock_movement" | "partial_no_stock_movement";
 
 export type FulfillmentExceptionSelection = {
   orderItemId: string;
@@ -89,6 +89,16 @@ type FulfillmentExceptionPreview = {
   issue: string;
   reallocated: { available: boolean; allocations: TransferAllocation[] };
   noStockMovement: { available: boolean };
+  partialNoStockMovement: {
+    available: boolean;
+    stockMovementQuantityPieces: number;
+    noStockMovementQuantityPieces: number;
+  };
+  counterpartyAvailability: {
+    companyName: string | null;
+    quantityPieces: number;
+    canTransferForReallocation: boolean;
+  };
 };
 
 const STATUS_INDEX: Record<OrderStatus, number> = {
@@ -259,6 +269,54 @@ function buildAllocationPlan(input: {
   return { allocations, availableByBatchId };
 }
 
+/**
+ * C usa pezzi reali, anche inferiori a una confezione. Le righe commerciali
+ * rimangono intatte; le allocazioni sono solo evidenza dello scarico fisico.
+ * Il piano ordinario ha già riservato le proprie quantità: C non le sottrae.
+ */
+function appendPartialStockAllocations(input: {
+  items: OrderItemForFulfillment[];
+  inventories: LockedInventory[];
+  partialItemIds: Set<string>;
+  plan: ReturnType<typeof buildAllocationPlan>;
+}) {
+  for (const item of input.items
+    .filter((row) => input.partialItemIds.has(row.id))
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))) {
+    const requiredPieces = item.quantity * item.piecesPerUnit;
+    let remainingPieces = requiredPieces;
+    const allocations: TransferAllocation[] = [];
+    const candidates = input.inventories
+      .filter((row) => row.productId === item.productId)
+      .slice()
+      .sort((a, b) => a.expirationDate.localeCompare(b.expirationDate) || a.batchId.localeCompare(b.batchId));
+    for (const candidate of candidates) {
+      if (remainingPieces === 0) break;
+      const available = input.plan.availableByBatchId.get(candidate.batchId) ?? 0;
+      const quantityPieces = Math.min(remainingPieces, available);
+      if (quantityPieces <= 0) continue;
+      input.plan.availableByBatchId.set(candidate.batchId, available - quantityPieces);
+      allocations.push({
+        productId: item.productId,
+        productName: item.productName,
+        productSku: item.productSku,
+        batchId: candidate.batchId,
+        batchNumber: candidate.batchNumber,
+        expirationDate: candidate.expirationDate,
+        // Equivalente descrittivo: mai scritto in orderItems.quantity.
+        quantityPackages: quantityPieces / item.piecesPerUnit,
+        quantityPieces,
+        sourceItemId: item.id,
+      });
+      remainingPieces -= quantityPieces;
+    }
+    if (allocations.length === 0 || remainingPieces === 0) {
+      throw fulfillmentError(`Disponibilità cambiata o impegnata da altre righe per ${item.productName}: riapri l'anteprima e verifica l'opzione C.`);
+    }
+    input.plan.allocations.set(item.id, allocations);
+  }
+}
+
 async function getWarehouseAndRetailerLocation(database: any, order: { retailerId: string | null; companyId: string }) {
   if (!order.retailerId) throw fulfillmentError("L'ordine non è associato a un rivenditore.");
   const [[warehouse], [retailerLocation], [company]] = await Promise.all([
@@ -379,6 +437,14 @@ async function loadCounterpartyCentralAvailability(
   return new Map(rows.map((row: any) => [row.productId, Number(row.quantity)]));
 }
 
+async function loadCounterpartyCompanyName(database: any, companyId: string): Promise<string | null> {
+  const counterpartyCompanyId = getCounterpartyCompanyId(companyId);
+  if (!counterpartyCompanyId) return null;
+  const [company] = await database.select({ name: companies.name })
+    .from(companies).where(eq(companies.id, counterpartyCompanyId)).limit(1);
+  return company?.name ?? null;
+}
+
 async function replaceRowsForFefo(database: any, input: {
   items: OrderItemForFulfillment[];
   allocations: Map<string, TransferAllocation[]>;
@@ -480,6 +546,8 @@ function nextStatuses(currentStatus: OrderStatus, targetStatus: FulfillmentTarge
 function buildFulfillmentExceptionPreviews(
   items: OrderItemForFulfillment[],
   inventories: LockedInventory[],
+  counterpartyAvailablePiecesByProduct: Map<string, number>,
+  counterpartyCompanyName: string | null,
 ): FulfillmentExceptionPreview[] {
   const inventoryByBatchId = new Map(inventories.map((row) => [row.batchId, row]));
   const productQuantityById = new Map<string, number>();
@@ -506,7 +574,12 @@ function buildFulfillmentExceptionPreviews(
         throw fulfillmentError(`Lotto originario non reperibile per la riga ${item.productName}.`);
       }
       const reallocationAvailable = productCentralQuantity >= requiredPieces;
-      const noStockMovementAvailable = originalBatchQuantity === 0 && productCentralQuantity < requiredPieces;
+      const noStockMovementAvailable = originalBatchQuantity === 0 && productCentralQuantity === 0;
+      const partialNoStockMovementAvailable = originalBatchQuantity >= 0
+        && originalBatchQuantity < requiredPieces
+        && productCentralQuantity > 0
+        && productCentralQuantity < requiredPieces;
+      const counterpartyQuantityPieces = counterpartyAvailablePiecesByProduct.get(item.productId) ?? 0;
       return {
         orderItemId: item.id,
         productId: item.productId,
@@ -522,6 +595,18 @@ function buildFulfillmentExceptionPreviews(
         issue: `Il lotto originario non copre ${item.quantity} conf. (${requiredPieces} pz).`,
         reallocated: { available: reallocationAvailable, allocations: [] as TransferAllocation[] },
         noStockMovement: { available: noStockMovementAvailable },
+        partialNoStockMovement: {
+          available: partialNoStockMovementAvailable,
+          stockMovementQuantityPieces: partialNoStockMovementAvailable ? productCentralQuantity : 0,
+          noStockMovementQuantityPieces: partialNoStockMovementAvailable ? requiredPieces - productCentralQuantity : 0,
+        },
+        counterpartyAvailability: {
+          companyName: counterpartyCompanyName,
+          quantityPieces: counterpartyQuantityPieces,
+          canTransferForReallocation: !reallocationAvailable
+            && counterpartyCompanyName !== null
+            && counterpartyQuantityPieces >= requiredPieces - productCentralQuantity,
+        },
       } satisfies FulfillmentExceptionPreview;
     })
     .filter((item): item is FulfillmentExceptionPreview => item !== null);
@@ -556,11 +641,12 @@ export async function previewOrderDelivery(input: { orderId: string; companyId: 
   const items = await loadItems(database, order.id);
   try {
     const productIds = Array.from(new Set(items.map((item) => item.productId)));
-    const [inventory, counterpartyAvailablePiecesByProduct] = await Promise.all([
+    const [inventory, counterpartyAvailablePiecesByProduct, counterpartyCompanyName] = await Promise.all([
       loadCentralInventory(database, order.companyId, warehouse.id, productIds),
       loadCounterpartyCentralAvailability(database, order.companyId, productIds),
+      loadCounterpartyCompanyName(database, order.companyId),
     ]);
-    const exceptionItems = buildFulfillmentExceptionPreviews(items, inventory);
+    const exceptionItems = buildFulfillmentExceptionPreviews(items, inventory, counterpartyAvailablePiecesByProduct, counterpartyCompanyName);
     if (exceptionItems.length > 0) {
       return {
         canConfirm: false,
@@ -609,6 +695,9 @@ export async function executeOrderFulfillment(input: {
   const selectionByItemId = new Map<string, FulfillmentExceptionSelection>();
   for (const selection of requestedExceptions) {
     const reason = selection.reason.trim();
+    if (!["reallocated", "no_stock_movement", "partial_no_stock_movement"].includes(selection.exceptionType)) {
+      throw fulfillmentError("Tipo di eccezione di evasione non valido.");
+    }
     if (!reason || reason.length > 2_000) {
       throw fulfillmentError("Ogni eccezione di evasione richiede un motivo tra 1 e 2.000 caratteri.");
     }
@@ -673,6 +762,8 @@ export async function executeOrderFulfillment(input: {
     if (items.length === 0) throw fulfillmentError("L'ordine non contiene righe da trasferire.");
     let effectiveTransfers: TransferAllocation[] = [];
     const noStockMovementItemIds = new Set<string>();
+    const partialNoStockMovementItemIds = new Set<string>();
+    const partialTransferredPiecesByItemId = new Map<string, number>();
     let effectiveSource = input.source;
 
     // Il trasferimento fisico avviene una sola volta, all'uscita da pending.
@@ -680,11 +771,12 @@ export async function executeOrderFulfillment(input: {
     if (currentStatus === "pending") {
       const { warehouse, retailerLocation, companyName } = await getWarehouseAndRetailerLocation(tx, order);
       const productIds = Array.from(new Set(items.map((item) => item.productId)));
-      const [inventory, counterpartyAvailablePiecesByProduct] = await Promise.all([
+      const [inventory, counterpartyAvailablePiecesByProduct, counterpartyCompanyName] = await Promise.all([
         loadCentralInventory(tx, order.companyId, warehouse.id, productIds, true),
         loadCounterpartyCentralAvailability(tx, order.companyId, productIds),
+        loadCounterpartyCompanyName(tx, order.companyId),
       ]);
-      const exceptionPreviews = buildFulfillmentExceptionPreviews(items, inventory);
+      const exceptionPreviews = buildFulfillmentExceptionPreviews(items, inventory, counterpartyAvailablePiecesByProduct, counterpartyCompanyName);
       const previewByItemId = new Map(exceptionPreviews.map((item) => [item.orderItemId, item]));
 
       if (selectionByItemId.size > 0 || exceptionPreviews.length > 0) {
@@ -699,6 +791,7 @@ export async function executeOrderFulfillment(input: {
           if (
             (selection.exceptionType === "reallocated" && !preview.reallocated.available)
             || (selection.exceptionType === "no_stock_movement" && !preview.noStockMovement.available)
+            || (selection.exceptionType === "partial_no_stock_movement" && !preview.partialNoStockMovement.available)
           ) {
             throw fulfillmentError(`L'opzione selezionata non è disponibile per ${preview.productName}.`);
           }
@@ -714,6 +807,9 @@ export async function executeOrderFulfillment(input: {
         if (selection.exceptionType === "no_stock_movement") {
           noStockMovementItemIds.add(selection.orderItemId);
         }
+        if (selection.exceptionType === "partial_no_stock_movement") {
+          partialNoStockMovementItemIds.add(selection.orderItemId);
+        }
       }
       const plan = buildAllocationPlan({
         items,
@@ -721,13 +817,19 @@ export async function executeOrderFulfillment(input: {
         companyName,
         counterpartyAvailablePiecesByProduct,
         reallocatedItemIds,
-        excludedItemIds: noStockMovementItemIds,
+        excludedItemIds: new Set([...Array.from(noStockMovementItemIds), ...Array.from(partialNoStockMovementItemIds)]),
+      });
+      appendPartialStockAllocations({
+        items,
+        inventories: inventory,
+        partialItemIds: partialNoStockMovementItemIds,
+        plan,
       });
 
       if (selectionByItemId.size > 0) {
         const exceptionsToInsert = Array.from(selectionByItemId.values()).map((selection) => {
           const preview = previewByItemId.get(selection.orderItemId)!;
-          const replacementAllocations = selection.exceptionType === "reallocated"
+          const replacementAllocations = selection.exceptionType !== "no_stock_movement"
             ? (plan.allocations.get(selection.orderItemId) ?? []).map((allocation) => ({
               batchId: allocation.batchId,
               batchNumber: allocation.batchNumber,
@@ -736,8 +838,13 @@ export async function executeOrderFulfillment(input: {
               quantityPieces: allocation.quantityPieces,
             }))
             : [];
-          if (selection.exceptionType === "reallocated" && replacementAllocations.length === 0) {
-            throw new Error(`Piano FEFO mancante per la riallocazione della riga ${selection.orderItemId}.`);
+          if (selection.exceptionType !== "no_stock_movement" && replacementAllocations.length === 0) {
+            throw new Error(`Piano FEFO mancante per la riga ${selection.orderItemId}.`);
+          }
+          const stockMovementQuantityPieces = replacementAllocations.reduce((sum, allocation) => sum + allocation.quantityPieces, 0);
+          const noStockMovementQuantityPieces = preview.quantityPieces - stockMovementQuantityPieces;
+          if (selection.exceptionType === "partial_no_stock_movement") {
+            partialTransferredPiecesByItemId.set(selection.orderItemId, stockMovementQuantityPieces);
           }
           return {
             companyId: order.companyId,
@@ -754,6 +861,8 @@ export async function executeOrderFulfillment(input: {
             quantityPieces: preview.quantityPieces,
             originalBatchQuantityAtAction: preview.originalBatchQuantity,
             productCentralQuantityAtAction: preview.productCentralQuantity,
+            stockMovementQuantityPieces,
+            noStockMovementQuantityPieces,
             exceptionType: selection.exceptionType,
             replacementAllocations,
             reason: selection.reason,
@@ -805,7 +914,9 @@ export async function executeOrderFulfillment(input: {
           batchId: transfer.batchId,
           fromLocationId: warehouse.id,
           toLocationId: retailerLocation.id,
-          notes: `Ordine ${order.orderNumber ?? order.id}: ${transfer.quantityPackages} conf. (${transfer.quantityPieces} pz)`,
+          notes: partialNoStockMovementItemIds.has(transfer.sourceItemId)
+            ? `Ordine ${order.orderNumber ?? order.id}: ${transfer.quantityPieces} pz scaricati con eccezione C`
+            : `Ordine ${order.orderNumber ?? order.id}: ${transfer.quantityPackages} conf. (${transfer.quantityPieces} pz)`,
           notesInternal: `Trasferimento atomico lotto ${transfer.batchNumber} verso ${retailerLocation.name}`,
           createdBy: input.actorUserId,
           companyId: order.companyId,
@@ -822,7 +933,15 @@ export async function executeOrderFulfillment(input: {
     }
 
     if (STATUS_INDEX[input.targetStatus] >= STATUS_INDEX.shipped && STATUS_INDEX[currentStatus] < STATUS_INDEX.shipped) {
-      const itemsForLabels = (await loadItems(tx, order.id)).filter((item) => !noStockMovementItemIds.has(item.id));
+      const itemsForLabels = (await loadItems(tx, order.id))
+        .filter((item) => !noStockMovementItemIds.has(item.id))
+        .map((item) => {
+          const transferredPieces = partialTransferredPiecesByItemId.get(item.id);
+          if (transferredPieces === undefined) return item;
+          // Un'etichetta anche per la confezione incompleta. Arrotondamento
+          // una sola volta per riga, dopo la somma dei pezzi dei diversi lotti.
+          return { ...item, quantity: Math.ceil(transferredPieces / item.piecesPerUnit) };
+        });
       await consumeLabelsAtomically(tx, {
         items: itemsForLabels,
         orderId: order.id,

@@ -1199,6 +1199,8 @@ export const orderItemFulfillmentExceptions = pgTable(
     quantityPieces: integer("quantityPieces").notNull(),
     originalBatchQuantityAtAction: integer("originalBatchQuantityAtAction").notNull(),
     productCentralQuantityAtAction: integer("productCentralQuantityAtAction").notNull(),
+    stockMovementQuantityPieces: integer("stockMovementQuantityPieces"),
+    noStockMovementQuantityPieces: integer("noStockMovementQuantityPieces"),
     exceptionType: varchar("exceptionType", { length: 32 }).notNull(),
     replacementAllocations: jsonb("replacementAllocations").notNull().default([]),
     reason: text("reason").notNull(),

@@ -438,7 +438,7 @@ export default function OrderDetail() {
   const [releaseTermsReason, setReleaseTermsReason] = useState("");
   const [confirmDeliveryOpen, setConfirmDeliveryOpen] = useState(false);
   const [deliveryExceptionSelections, setDeliveryExceptionSelections] = useState<Record<string, {
-    exceptionType?: "reallocated" | "no_stock_movement";
+    exceptionType?: "reallocated" | "no_stock_movement" | "partial_no_stock_movement";
     reason: string;
   }>>({});
 
@@ -647,7 +647,17 @@ export default function OrderDetail() {
   }));
   const areDeliveryExceptionsComplete = requiresDeliveryExceptions
     && deliveryExceptionItems.length > 0
-    && exceptionPayload.every((selection) => selection.exceptionType && selection.reason.length > 0);
+    && exceptionPayload.every((selection, index) => {
+      const item = deliveryExceptionItems[index];
+      const selectedOptionAvailable = selection.exceptionType === "reallocated"
+        ? item.reallocated.available
+        : selection.exceptionType === "no_stock_movement"
+          ? item.noStockMovement.available
+          : selection.exceptionType === "partial_no_stock_movement"
+            ? item.partialNoStockMovement.available
+            : false;
+      return selectedOptionAvailable && selection.reason.length > 0;
+    });
   const canProceedDelivery = Boolean(deliveryPreview.data?.canConfirm)
     || (isAdmin && areDeliveryExceptionsComplete);
   const hasPromotionalLinePricing = order.items.some(
@@ -1265,7 +1275,9 @@ export default function OrderDetail() {
                       </Alert>
                       {deliveryExceptionItems.map((item) => {
                         const selected = deliveryExceptionSelections[item.orderItemId] ?? { reason: "" };
-                        const neitherOptionAvailable = !item.reallocated.available && !item.noStockMovement.available;
+                        const noOptionAvailable = !item.reallocated.available
+                          && !item.noStockMovement.available
+                          && !item.partialNoStockMovement.available;
                         return (
                           <div key={item.orderItemId} className="space-y-3 rounded-lg border border-amber-300 bg-amber-50/60 p-4">
                             <div className="flex flex-wrap items-start justify-between gap-2">
@@ -1281,7 +1293,15 @@ export default function OrderDetail() {
                               <div><span className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">Giacenza prodotto</span><span className="font-semibold">{item.productCentralQuantity} pz</span></div>
                             </div>
                             <p className="text-xs text-amber-900">{item.issue}</p>
-                            <div className="grid gap-2 md:grid-cols-2">
+                            {item.counterpartyAvailability.canTransferForReallocation && (
+                              <Alert className="border-amber-400 bg-amber-100/70 text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">
+                                <AlertTriangle className="h-4 w-4" />
+                                <AlertDescription>
+                                  Disponibili {item.counterpartyAvailability.quantityPieces} pz su {item.counterpartyAvailability.companyName}: puoi fare un travaso e usare l’opzione A
+                                </AlertDescription>
+                              </Alert>
+                            )}
+                            <div className="grid gap-2 md:grid-cols-3">
                               <Button
                                 type="button"
                                 variant={selected.exceptionType === "reallocated" ? "default" : "outline"}
@@ -1304,10 +1324,29 @@ export default function OrderDetail() {
                                   [item.orderItemId]: { ...current[item.orderItemId], exceptionType: "no_stock_movement", reason: current[item.orderItemId]?.reason ?? "" },
                                 }))}
                               >
-                                <span><strong>B — Evasa senza scarico</strong><br /><span className="text-xs font-normal">{item.noStockMovement.available ? "Disponibile: nessun movimento merce, nessuna giacenza rivenditore e nessun consumo etichette." : "Non disponibile: richiede lotto originario a zero e prodotto insufficiente nel centrale."}</span></span>
+                                <span><strong>B — Evasa senza scarico</strong><br /><span className="text-xs font-normal">{item.noStockMovement.available ? "Disponibile: nessun movimento merce, nessuna giacenza rivenditore e nessun consumo etichette." : "Non disponibile: richiede giacenza del prodotto a zero nel centrale."}</span></span>
+                              </Button>
+                              <Button
+                                type="button"
+                                variant={selected.exceptionType === "partial_no_stock_movement" ? "destructive" : "outline"}
+                                disabled={!isAdmin || !item.partialNoStockMovement.available}
+                                className="h-auto min-h-16 justify-start whitespace-normal px-3 py-2 text-left"
+                                onClick={() => setDeliveryExceptionSelections((current) => ({
+                                  ...current,
+                                  [item.orderItemId]: { ...current[item.orderItemId], exceptionType: "partial_no_stock_movement", reason: current[item.orderItemId]?.reason ?? "" },
+                                }))}
+                              >
+                                <span><strong>C — Scarica il disponibile, resto senza scarico</strong><br /><span className="text-xs font-normal">{item.partialNoStockMovement.available
+                                  ? `Disponibile: ${item.partialNoStockMovement.stockMovementQuantityPieces} pz scaricati dai lotti FEFO del centrale; ${item.partialNoStockMovement.noStockMovementQuantityPieces} pz evasi senza scarico né consumo etichette.`
+                                  : "Non disponibile: richiede giacenza del prodotto positiva ma insufficiente nel centrale; il lotto originale può essere a zero."}</span></span>
                               </Button>
                             </div>
-                            {neitherOptionAvailable && (
+                            {item.partialNoStockMovement.available && (
+                              <p className="text-xs text-amber-900">
+                                Le quantità indicate sono preliminari: il server riserva prima le altre righe dell’ordine, poi scarica il residuo per C. Una confezione incompleta realmente scaricata consuma un’etichetta; i pezzi senza scarico non ne consumano.
+                              </p>
+                            )}
+                            {noOptionAvailable && (
                               <Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertDescription>Nessuna opzione è applicabile: serve una verifica manuale prima della consegna.</AlertDescription></Alert>
                             )}
                             <div>
@@ -1316,6 +1355,7 @@ export default function OrderDetail() {
                                 id={`delivery-exception-reason-${item.orderItemId}`}
                                 value={selected.reason}
                                 disabled={!isAdmin || !selected.exceptionType}
+                                maxLength={2000}
                                 placeholder="Es. merce già consegnata, lotto esaurito"
                                 onChange={(event) => setDeliveryExceptionSelections((current) => ({
                                   ...current,

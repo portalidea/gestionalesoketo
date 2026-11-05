@@ -22,6 +22,13 @@ const IDS = {
   reallocatedPartial: "d0000000-0000-0000-0000-000000000012",
   missingReason: "d0000000-0000-0000-0000-000000000013",
   mixed: "d0000000-0000-0000-0000-000000000014",
+  partialAvailable: "d0000000-0000-0000-0000-000000000015",
+  partialMultiBatch: "d0000000-0000-0000-0000-000000000016",
+  partialMixed: "d0000000-0000-0000-0000-000000000017",
+  partialCompeting: "d0000000-0000-0000-0000-000000000018",
+  partialIncompletePackage: "d0000000-0000-0000-0000-000000000019",
+  partialZeroBatch: "d0000000-0000-0000-0000-000000000020",
+  partialZeroReplacementBatch: "d0000000-0000-0000-0000-000000000021",
 } as const;
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -477,6 +484,109 @@ async function main() {
   assert(exceptionReport.total === 4 && exceptionReport.items.filter((item: any) => item.exceptionType === "reallocated").length === 3 && exceptionReport.items.some((item: any) => Array.isArray(item.replacementAllocations) && item.replacementAllocations.length === 2), "T18: il report deve elencare le eccezioni della company attiva e le riallocazioni FEFO.");
   assert(withoutStockReport.total === 1 && withoutStockReport.items[0]?.exceptionType === "no_stock_movement", "T18: il filtro tipo deve isolare le righe evase senza scarico.");
 
+  // T19: caso richiesto, lotto 1 pz / prodotto 1 pz / ordine 5 pz.
+  // La disponibilità nell'altra company è soltanto un avviso; C resta ammessa.
+  await sql`INSERT INTO "inventoryByBatch" ("locationId", "batchId", quantity, "companyId") VALUES (${TEST_IDS.originCentral}, ${TEST_IDS.batchExpired}, 1, ${TEST_IDS.originCompany}) ON CONFLICT ("locationId", "batchId") DO UPDATE SET quantity = 1`;
+  await sql`UPDATE products SET "labelStock" = 40 WHERE id = ${TEST_IDS.productPieces}`;
+  await createOrder({ id: IDS.partialAvailable, productId: TEST_IDS.productPieces, batchId: TEST_IDS.batchExpired, quantity: 5 });
+  const [partialAvailableBefore] = await sql<{ id: string; quantity: number; unitPriceFinal: string; lineTotalNet: string; lineTotalGross: string; batchId: string }[]>`SELECT id, quantity, "unitPriceFinal", "lineTotalNet", "lineTotalGross", "batchId" FROM "orderItems" WHERE "orderId" = ${IDS.partialAvailable}`;
+  const partialAvailablePreview = await previewOrderDelivery({ orderId: IDS.partialAvailable, companyId: TEST_IDS.originCompany });
+  const partialChoice = partialAvailablePreview.exceptionItems[0]!;
+  assert(partialChoice.originalBatchQuantity === 1 && partialChoice.productCentralQuantity === 1 && !partialChoice.reallocated.available && !partialChoice.noStockMovement.available && partialChoice.partialNoStockMovement.available, "T19: lotto parziale e prodotto insufficiente devono offrire C, non A/B.");
+  assert(partialChoice.partialNoStockMovement.stockMovementQuantityPieces === 1 && partialChoice.partialNoStockMovement.noStockMovementQuantityPieces === 4, "T19: la preview deve distinguere 1 pz scaricato e 4 senza scarico.");
+  assert(partialChoice.counterpartyAvailability.companyName === "TEST SoKeto Srl" && partialChoice.counterpartyAvailability.quantityPieces === 50 && partialChoice.counterpartyAvailability.canTransferForReallocation, "T19: disponibilità nell'altra company deve mostrare avviso travaso senza escludere C.");
+  const cSelection = { orderItemId: partialAvailableBefore!.id, exceptionType: "partial_no_stock_movement" as const, reason: "Merce già consegnata: scarico solo il disponibile." };
+  for (const invalidSelection of [
+    { ...cSelection, reason: "   " },
+    { ...cSelection, exceptionType: "no_stock_movement" as const },
+  ]) {
+    let rejected = false;
+    try { await executeOrderFulfillment({ ...common, orderId: IDS.partialAvailable, targetStatus: "delivered", exceptions: [invalidSelection] }); } catch { rejected = true; }
+    assert(rejected && await stock(TEST_IDS.originCentral, TEST_IDS.batchExpired) === 1, "T19: motivo mancante o opzione non disponibile devono essere rifiutati senza scarichi.");
+  }
+  const partialAvailableResults = await Promise.all([
+    executeOrderFulfillment({ ...common, orderId: IDS.partialAvailable, targetStatus: "delivered", exceptions: [cSelection] }),
+    executeOrderFulfillment({ ...common, orderId: IDS.partialAvailable, targetStatus: "delivered", exceptions: [cSelection] }),
+  ]);
+  const [partialAvailableAudit] = await sql<{ stockMovementQuantityPieces: number; noStockMovementQuantityPieces: number; exceptionType: string }[]>`SELECT "stockMovementQuantityPieces", "noStockMovementQuantityPieces", "exceptionType" FROM order_item_fulfillment_exceptions WHERE "orderItemId" = ${cSelection.orderItemId}`;
+  const partialAvailableMovements = await sql<{ quantity: number; batchId: string }[]>`SELECT quantity, "batchId" FROM "stockMovements" WHERE "sourceDocument" = ${IDS.partialAvailable}`;
+  const [partialAvailableAfter] = await sql<{ id: string; quantity: number; unitPriceFinal: string; lineTotalNet: string; lineTotalGross: string; batchId: string }[]>`SELECT id, quantity, "unitPriceFinal", "lineTotalNet", "lineTotalGross", "batchId" FROM "orderItems" WHERE "orderId" = ${IDS.partialAvailable}`;
+  const [partialAvailableLabels] = await sql<{ quantity: number }[]>`SELECT quantity FROM "labelMovements" WHERE "sourceOrderId" = ${IDS.partialAvailable}`;
+  const [partialAuditCount] = await sql<{ count: number }[]>`SELECT count(*)::int AS count FROM order_item_fulfillment_exceptions WHERE "orderId" = ${IDS.partialAvailable}`;
+  const partialAvailableEvents = await sql<{ source: string }[]>`SELECT source FROM order_status_events WHERE "orderId" = ${IDS.partialAvailable}`;
+  assert(partialAvailableResults.filter((result) => result.idempotent).length === 1 && partialAuditCount.count === 1 && partialAvailableEvents.length === 3 && partialAvailableEvents.every((event) => event.source === "delivery_exception"), "T19: due chiamate concorrenti producono un solo audit e una sola consegna.");
+  assert(partialAvailableAudit.stockMovementQuantityPieces === 1 && partialAvailableAudit.noStockMovementQuantityPieces === 4 && partialAvailableAudit.exceptionType === "partial_no_stock_movement", "T19: audit C deve congelare 1 scaricato + 4 senza scarico.");
+  assert(partialAvailableMovements.length === 1 && partialAvailableMovements[0]?.quantity === 1 && await stock(TEST_IDS.originCentral, TEST_IDS.batchExpired) === 0 && await stock(TEST_IDS.normalRetailerLocation, TEST_IDS.batchExpired) === 1 && await stock(TEST_IDS.soketoCentral, IDS.soketoOnlyBatch) === 50, "T19: solo 1 pezzo reale deve essere scaricato/caricato, nessun movimento per i 4 mancanti o travaso automatico.");
+  assert(JSON.stringify(partialAvailableBefore) === JSON.stringify(partialAvailableAfter) && partialAvailableLabels?.quantity === -1, "T19: quantità/prezzi commerciali invariati; etichette solo per la quota effettivamente scaricata.");
+
+  // T20: confezioni da 6; FEFO C scarica i residui 1 + 5 anche se i singoli
+  // lotti non coprono una confezione. Nessuna riga ordine frazionaria.
+  await sql`UPDATE "inventoryByBatch" SET quantity = CASE WHEN "batchId" = ${TEST_IDS.batchSoon} THEN 1 ELSE 5 END WHERE "locationId" = ${TEST_IDS.originCentral} AND "batchId" IN (${TEST_IDS.batchSoon}, ${TEST_IDS.batchFourMonths})`;
+  await createOrder({ id: IDS.partialMultiBatch, batchId: TEST_IDS.batchSoon, quantity: 2 });
+  const [multiBatchItem] = await sql<{ id: string }[]>`SELECT id FROM "orderItems" WHERE "orderId" = ${IDS.partialMultiBatch}`;
+  const multiBatchResult = await executeOrderFulfillment({ ...common, orderId: IDS.partialMultiBatch, targetStatus: "delivered", exceptions: [{ orderItemId: multiBatchItem!.id, exceptionType: "partial_no_stock_movement", reason: "Scarico i residui FEFO e chiudo il resto senza scarico." }] });
+  const [multiBatchAudit] = await sql<{ stockMovementQuantityPieces: number; noStockMovementQuantityPieces: number }[]>`SELECT "stockMovementQuantityPieces", "noStockMovementQuantityPieces" FROM order_item_fulfillment_exceptions WHERE "orderItemId" = ${multiBatchItem!.id}`;
+  const [multiBatchCommercial] = await sql<{ quantity: number; count: number }[]>`SELECT SUM(quantity)::int AS quantity, COUNT(*)::int AS count FROM "orderItems" WHERE "orderId" = ${IDS.partialMultiBatch}`;
+  const [multiBatchLabels] = await sql<{ quantity: number }[]>`SELECT quantity FROM "labelMovements" WHERE "sourceOrderId" = ${IDS.partialMultiBatch}`;
+  assert(multiBatchResult.allocations.length === 2 && multiBatchResult.allocations.some((allocation) => allocation.batchId === TEST_IDS.batchSoon && allocation.quantityPieces === 1) && multiBatchResult.allocations.some((allocation) => allocation.batchId === TEST_IDS.batchFourMonths && allocation.quantityPieces === 5), "T20: C deve scaricare tutti i pezzi FEFO, non solo confezioni complete per lotto.");
+  assert(multiBatchAudit.stockMovementQuantityPieces === 6 && multiBatchAudit.noStockMovementQuantityPieces === 6 && multiBatchCommercial.quantity === 2 && multiBatchCommercial.count === 1, "T20: audit 6 + 6 pezzi; riga finanziaria unica da 2 confezioni invariata.");
+  assert(multiBatchLabels?.quantity === -1, "T20: 1 + 5 pezzi di lotti diversi formano una confezione: una sola etichetta, non due.");
+
+  // T21: le prenotazioni delle righe normali non vengono rubate da C.
+  await sql`UPDATE "inventoryByBatch" SET quantity = CASE WHEN "batchId" = ${TEST_IDS.batchSoon} THEN 1 ELSE 11 END WHERE "locationId" = ${TEST_IDS.originCentral} AND "batchId" IN (${TEST_IDS.batchSoon}, ${TEST_IDS.batchFourMonths})`;
+  await createOrder({ id: IDS.partialMixed, batchId: TEST_IDS.batchSoon, quantity: 3 });
+  const [partialMixedItem] = await sql<{ id: string }[]>`SELECT id FROM "orderItems" WHERE "orderId" = ${IDS.partialMixed}`;
+  await sql`INSERT INTO "orderItems" ("orderId", "productId", "batchId", quantity, "unitPriceBase", "discountPercent", "unitPriceFinal", "vatRate", "lineTotalNet", "lineTotalGross", "productSku", "productName") VALUES (${IDS.partialMixed}, ${TEST_IDS.productBoxes}, ${TEST_IDS.batchFourMonths}, 1, 10, 0, 10, 10, 10, 11, 'TEST-BOX-6', 'TEST Prodotto Confezione 6')`;
+  await executeOrderFulfillment({ ...common, orderId: IDS.partialMixed, targetStatus: "delivered", exceptions: [{ orderItemId: partialMixedItem!.id, exceptionType: "partial_no_stock_movement", reason: "Scarico il disponibile dopo le quote delle altre righe." }] });
+  const [partialMixedAudit] = await sql<{ stockMovementQuantityPieces: number; noStockMovementQuantityPieces: number }[]>`SELECT "stockMovementQuantityPieces", "noStockMovementQuantityPieces" FROM order_item_fulfillment_exceptions WHERE "orderItemId" = ${partialMixedItem!.id}`;
+  const [partialMixedTransferred] = await sql<{ quantity: number }[]>`SELECT SUM(quantity)::int AS quantity FROM "stockMovements" WHERE "sourceDocument" = ${IDS.partialMixed}`;
+  assert(partialMixedAudit.stockMovementQuantityPieces === 6 && partialMixedAudit.noStockMovementQuantityPieces === 12 && partialMixedTransferred.quantity === 12 && await stock(TEST_IDS.originCentral, TEST_IDS.batchSoon) === 0 && await stock(TEST_IDS.originCentral, TEST_IDS.batchFourMonths) === 0, "T21: C deve usare un piano condiviso senza scaricare due volte le quote prenotate per le righe normali.");
+
+  // T22: due righe C che competono per un solo pezzo -> errore tutto-o-niente,
+  // mai un finto scarico a zero o la conversione silenziosa della seconda in B.
+  await sql`UPDATE "inventoryByBatch" SET quantity = 1 WHERE "locationId" = ${TEST_IDS.originCentral} AND "batchId" = ${TEST_IDS.batchExpired}`;
+  await createOrder({ id: IDS.partialCompeting, productId: TEST_IDS.productPieces, batchId: TEST_IDS.batchExpired, quantity: 5 });
+  await sql`INSERT INTO "orderItems" ("orderId", "productId", "batchId", quantity, "unitPriceBase", "discountPercent", "unitPriceFinal", "vatRate", "lineTotalNet", "lineTotalGross", "productSku", "productName") VALUES (${IDS.partialCompeting}, ${TEST_IDS.productPieces}, ${TEST_IDS.batchExpired}, 5, 10, 0, 10, 10, 50, 55, 'TEST-PZ-1', 'TEST Prodotto Pezzo Singolo')`;
+  const competingItems = await sql<{ id: string }[]>`SELECT id FROM "orderItems" WHERE "orderId" = ${IDS.partialCompeting}`;
+  let competingError = "";
+  try { await executeOrderFulfillment({ ...common, orderId: IDS.partialCompeting, targetStatus: "delivered", exceptions: competingItems.map((item) => ({ orderItemId: item.id, exceptionType: "partial_no_stock_movement", reason: "Chiusura del residuo storico." })) }); } catch (error) { competingError = error instanceof Error ? error.message : String(error); }
+  const [competingEffects] = await sql<{ audits: number; movements: number; events: number; status: string }[]>`SELECT (SELECT COUNT(*)::int FROM order_item_fulfillment_exceptions WHERE "orderId" = ${IDS.partialCompeting}) AS audits, (SELECT COUNT(*)::int FROM "stockMovements" WHERE "sourceDocument" = ${IDS.partialCompeting}) AS movements, (SELECT COUNT(*)::int FROM order_status_events WHERE "orderId" = ${IDS.partialCompeting}) AS events, status FROM orders WHERE id = ${IDS.partialCompeting}`;
+  assert(competingError.includes("impegnata da altre righe") && competingEffects.audits === 0 && competingEffects.movements === 0 && competingEffects.events === 0 && competingEffects.status === "pending" && await stock(TEST_IDS.originCentral, TEST_IDS.batchExpired) === 1, "T22: righe C concorrenti non devono creare giacenze negative né effetti parziali.");
+
+  // T23: report C espone esplicitamente quota reale e quota senza movimento.
+  const partialReport = await reportCaller.fulfillmentExceptions.list({ dateFrom: "2026-01-01", dateTo: "2026-12-31", exceptionType: "partial_no_stock_movement", limit: 100, offset: 0 });
+  const partialReportItem = partialReport.items.find((item: any) => item.orderId === IDS.partialAvailable);
+  assert(partialReport.total === 3 && partialReportItem?.stockMovementQuantityPieces === 1 && partialReportItem?.noStockMovementQuantityPieces === 4, "T23: il report deve filtrare C e mostrare 1 pz scaricato + 4 senza scarico.");
+
+  // T24: regola approvata: anche una confezione incompleta consuma un'etichetta.
+  await sql`UPDATE "inventoryByBatch" SET quantity = CASE WHEN "batchId" = ${TEST_IDS.batchSoon} THEN 1 ELSE 0 END WHERE "locationId" = ${TEST_IDS.originCentral} AND "batchId" IN (${TEST_IDS.batchSoon}, ${TEST_IDS.batchFourMonths})`;
+  await createOrder({ id: IDS.partialIncompletePackage, batchId: TEST_IDS.batchSoon, quantity: 1 });
+  const [incompleteItem] = await sql<{ id: string }[]>`SELECT id FROM "orderItems" WHERE "orderId" = ${IDS.partialIncompletePackage}`;
+  await executeOrderFulfillment({ ...common, orderId: IDS.partialIncompletePackage, targetStatus: "delivered", exceptions: [{ orderItemId: incompleteItem!.id, exceptionType: "partial_no_stock_movement", reason: "Scarico 1 pezzo della confezione, resto già consegnato." }] });
+  const [incompleteAudit] = await sql<{ stockMovementQuantityPieces: number; noStockMovementQuantityPieces: number }[]>`SELECT "stockMovementQuantityPieces", "noStockMovementQuantityPieces" FROM order_item_fulfillment_exceptions WHERE "orderItemId" = ${incompleteItem!.id}`;
+  const [incompleteLabels] = await sql<{ quantity: number }[]>`SELECT quantity FROM "labelMovements" WHERE "sourceOrderId" = ${IDS.partialIncompletePackage}`;
+  assert(incompleteAudit.stockMovementQuantityPieces === 1 && incompleteAudit.noStockMovementQuantityPieces === 5 && incompleteLabels?.quantity === -1, "T24: 1 pz su 6 deve scaricare 1, chiudere 5 senza movimenti e consumare una sola etichetta.");
+
+  // T25: lotto originario zero, due pezzi di prodotto su un lotto attuale.
+  // Solo C: B non deve consentire di ignorare la giacenza positiva disponibile.
+  await sql`UPDATE "inventoryByBatch" SET quantity = 0 WHERE "locationId" = ${TEST_IDS.originCentral} AND "batchId" = ${TEST_IDS.batchExpired}`;
+  await sql`INSERT INTO "productBatches" (id, "productId", "batchNumber", "expirationDate", "initialQuantity", "costPrice", "companyId") VALUES (${IDS.partialZeroReplacementBatch}, ${TEST_IDS.productPieces}, 'TEST-C-ZERO-FEFO', '2027-12-31', 2, '1.0000', ${TEST_IDS.originCompany})`;
+  await sql`INSERT INTO "inventoryByBatch" ("locationId", "batchId", quantity, "companyId") VALUES (${TEST_IDS.originCentral}, ${IDS.partialZeroReplacementBatch}, 2, ${TEST_IDS.originCompany})`;
+  await createOrder({ id: IDS.partialZeroBatch, productId: TEST_IDS.productPieces, batchId: TEST_IDS.batchExpired, quantity: 5 });
+  const [zeroCItem] = await sql<{ id: string }[]>`SELECT id FROM "orderItems" WHERE "orderId" = ${IDS.partialZeroBatch}`;
+  const zeroCPreview = await previewOrderDelivery({ orderId: IDS.partialZeroBatch, companyId: TEST_IDS.originCompany });
+  const zeroCChoice = zeroCPreview.exceptionItems[0]!;
+  assert(zeroCChoice.originalBatchQuantity === 0 && zeroCChoice.productCentralQuantity === 2 && zeroCChoice.partialNoStockMovement.available && !zeroCChoice.noStockMovement.available && !zeroCChoice.reallocated.available, "T25: lotto zero e prodotto parziale devono offrire solo C, non A/B.");
+  let zeroBRejected = false;
+  try { await executeOrderFulfillment({ ...common, orderId: IDS.partialZeroBatch, targetStatus: "delivered", exceptions: [{ orderItemId: zeroCItem!.id, exceptionType: "no_stock_movement", reason: "Tentativo B con prodotto ancora disponibile." }] }); } catch { zeroBRejected = true; }
+  assert(zeroBRejected && await stock(TEST_IDS.originCentral, IDS.partialZeroReplacementBatch) === 2, "T25: B deve essere rifiutata lato server senza movimenti se il prodotto ha giacenza positiva.");
+  const oldBatchRetailerStock = await stock(TEST_IDS.normalRetailerLocation, TEST_IDS.batchExpired);
+  await executeOrderFulfillment({ ...common, orderId: IDS.partialZeroBatch, targetStatus: "delivered", exceptions: [{ orderItemId: zeroCItem!.id, exceptionType: "partial_no_stock_movement", reason: "Scarico i due pezzi del lotto attuale, resto già consegnato." }] });
+  const [zeroCAudit] = await sql<{ originalBatchQuantityAtAction: number; stockMovementQuantityPieces: number; noStockMovementQuantityPieces: number }[]>`SELECT "originalBatchQuantityAtAction", "stockMovementQuantityPieces", "noStockMovementQuantityPieces" FROM order_item_fulfillment_exceptions WHERE "orderItemId" = ${zeroCItem!.id}`;
+  const zeroCMovements = await sql<{ batchId: string; quantity: number }[]>`SELECT "batchId", quantity FROM "stockMovements" WHERE "sourceDocument" = ${IDS.partialZeroBatch}`;
+  assert(zeroCAudit.originalBatchQuantityAtAction === 0 && zeroCAudit.stockMovementQuantityPieces === 2 && zeroCAudit.noStockMovementQuantityPieces === 3 && zeroCMovements.length === 1 && zeroCMovements[0]?.batchId === IDS.partialZeroReplacementBatch && zeroCMovements[0]?.quantity === 2, "T25: C con lotto zero deve scaricare FEFO 2 pz e auditare 3 senza scarico.");
+  assert(await stock(TEST_IDS.originCentral, IDS.partialZeroReplacementBatch) === 0 && await stock(TEST_IDS.normalRetailerLocation, IDS.partialZeroReplacementBatch) === 2 && await stock(TEST_IDS.normalRetailerLocation, TEST_IDS.batchExpired) === oldBatchRetailerStock, "T25: solo il lotto reale viene movimentato, senza giacenza fittizia del lotto originario.");
+
   console.log(JSON.stringify({
     generatedAt: new Date().toISOString(),
     tests: {
@@ -498,6 +608,13 @@ async function main() {
       mixedNormalAndReallocatedRows: "PASS",
       missingReasonBlocksAllWrites: "PASS",
       fulfillmentExceptionReportFilters: "PASS",
+      partialOnePieceOfFiveWithTransferWarningAndConcurrency: "PASS",
+      partialMultiBatchLoosePiecesCommercialRowsUnchanged: "PASS",
+      partialMixedSharedInventoryReservations: "PASS",
+      partialCompetingRowsRollback: "PASS",
+      partialExceptionReportFilterAndQuantities: "PASS",
+      partialIncompletePackageOneLabel: "PASS",
+      zeroBatchPositiveInsufficientProductOnlyPartialOption: "PASS",
     },
     raw: {
       complete: { result: resultComplete, items: completeItems, events: completeEvents, movements: completeMovements, labels: completeLabels },
@@ -513,6 +630,7 @@ async function main() {
       fic: { firstAttempt: ficFailureResult.fic, retry: ficRetryResult, sentEmails },
       otherCompanyError,
       otherCompanyPreview,
+      partialAvailable: { preview: partialAvailablePreview, audit: partialAvailableAudit, movements: partialAvailableMovements },
     },
   }, null, 2));
 }

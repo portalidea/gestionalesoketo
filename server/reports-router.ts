@@ -1210,14 +1210,14 @@ const intercompanyTransfersRouter = router({
 
 const fulfillmentExceptionsRouter = router({
   /**
-   * Audit operativo delle sole righe evase con riallocazione FEFO o senza
-   * movimento di stock. Company e autorizzazione derivano dal contesto.
+   * Audit operativo delle righe evase con riallocazione FEFO, senza
+   * movimento di stock o con scarico parziale. Company e autorizzazione derivano dal contesto.
    */
   list: adminProcedure
     .input(z.object({
       dateFrom: z.string().optional(),
       dateTo: z.string().optional(),
-      exceptionType: z.enum(["reallocated", "no_stock_movement"]).optional(),
+      exceptionType: z.enum(["reallocated", "no_stock_movement", "partial_no_stock_movement"]).optional(),
       limit: z.number().int().min(1).max(500).default(100),
       offset: z.number().int().min(0).default(0),
     }))
@@ -1242,6 +1242,12 @@ const fulfillmentExceptionsRouter = router({
             e."productNameSnapshot" AS "productName",
             e."quantityPackages",
             e."quantityPieces",
+            COALESCE(e."stockMovementQuantityPieces",
+              CASE WHEN e."exceptionType" = 'reallocated' THEN e."quantityPieces" ELSE 0 END
+            ) AS "stockMovementQuantityPieces",
+            COALESCE(e."noStockMovementQuantityPieces",
+              CASE WHEN e."exceptionType" = 'no_stock_movement' THEN e."quantityPieces" ELSE 0 END
+            ) AS "noStockMovementQuantityPieces",
             e."originalBatchNumberSnapshot" AS "originalBatchNumber",
             e."originalBatchExpirationSnapshot" AS "originalBatchExpiration",
             e."originalBatchQuantityAtAction" AS "originalBatchQuantity",
