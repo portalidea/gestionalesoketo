@@ -53,6 +53,7 @@ function formatExpiration(value: string | null | undefined) {
 }
 
 function typeLabel(value: string) {
+  if (value === "partial_no_stock_movement") return "Scarico parziale, resto senza scarico";
   return value === "reallocated" ? "Riallocata e scaricata" : "Evasa senza scarico";
 }
 
@@ -66,7 +67,7 @@ export default function FulfillmentExceptionsReport() {
     dateTo: dateRange.dateTo,
     exceptionType: exceptionType === ALL_TYPES
       ? undefined
-      : exceptionType as "reallocated" | "no_stock_movement",
+      : exceptionType as "reallocated" | "no_stock_movement" | "partial_no_stock_movement",
     limit: 200,
     offset: 0,
   });
@@ -83,13 +84,14 @@ export default function FulfillmentExceptionsReport() {
         <div className="mb-6 flex flex-wrap items-center gap-3">
           <span className="text-sm text-muted-foreground">Tipo eccezione:</span>
           <Select value={exceptionType} onValueChange={setExceptionType}>
-            <SelectTrigger className="w-[260px]">
+            <SelectTrigger className="w-[310px]">
               <SelectValue placeholder="Tutte le eccezioni" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL_TYPES}>Tutte le eccezioni</SelectItem>
               <SelectItem value="reallocated">Riallocata e scaricata</SelectItem>
               <SelectItem value="no_stock_movement">Evasa senza scarico</SelectItem>
+              <SelectItem value="partial_no_stock_movement">Scarico parziale, resto senza scarico</SelectItem>
             </SelectContent>
           </Select>
           <span className="text-xs text-muted-foreground">I dati sono filtrati per l’azienda attiva selezionata.</span>
@@ -99,7 +101,7 @@ export default function FulfillmentExceptionsReport() {
           <AlertTriangle className="h-4 w-4 text-amber-700" />
           <AlertTitle>Audit di evasione</AlertTitle>
           <AlertDescription>
-            Le righe “Evasa senza scarico” non hanno generato movimenti merce né consumo etichette. Le riallocazioni riportano i lotti FEFO effettivamente scaricati.
+            Le righe “Evasa senza scarico” non hanno generato movimenti merce né consumo etichette. Le riallocazioni riportano i lotti FEFO effettivamente scaricati. Per lo scarico parziale sono distinti i pezzi scaricati e il resto evaso senza movimenti merce né consumo etichette.
           </AlertDescription>
         </Alert>
 
@@ -131,6 +133,8 @@ export default function FulfillmentExceptionsReport() {
                       <TableHead>Prodotto</TableHead>
                       <TableHead>Lotto originario</TableHead>
                       <TableHead className="text-right">Giacenza lotto / prodotto</TableHead>
+                      <TableHead className="text-right">Pezzi scaricati</TableHead>
+                      <TableHead className="text-right">Pezzi senza scarico</TableHead>
                       <TableHead>Motivo / operatore</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -155,16 +159,20 @@ export default function FulfillmentExceptionsReport() {
                             <TableCell><div className="font-medium">{item.productName}</div><div className="font-mono text-xs text-muted-foreground">{item.productSku} · {item.quantityPackages} conf. / {item.quantityPieces} pz</div></TableCell>
                             <TableCell><div className="font-mono text-xs">{item.originalBatchNumber}</div><div className="text-xs text-muted-foreground">scad. {formatExpiration(item.originalBatchExpiration)}</div></TableCell>
                             <TableCell className="text-right font-mono text-xs">{item.originalBatchQuantity} pz / {item.productCentralQuantity} pz</TableCell>
+                            <TableCell className="text-right font-mono text-xs">{item.stockMovementQuantityPieces} pz</TableCell>
+                            <TableCell className="text-right font-mono text-xs">{item.noStockMovementQuantityPieces} pz</TableCell>
                             <TableCell><div className="max-w-[300px] text-sm">{item.reason}</div><div className="mt-1 text-xs text-muted-foreground">{item.actorName ?? "Utente non disponibile"}</div></TableCell>
                           </TableRow>
                           {expanded && (
                             <TableRow className="bg-muted/35">
-                              <TableCell colSpan={8} className="px-8 py-3">
+                              <TableCell colSpan={10} className="px-8 py-3">
                                 <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Lotti FEFO scaricati</div>
                                 <div className="flex flex-wrap gap-2">
                                   {allocations.map((allocation, index) => (
                                     <Badge key={`${item.id}-${allocation.batchNumber ?? index}`} variant="secondary" className="font-normal">
-                                      {allocation.batchNumber ?? "Lotto"} · scad. {formatExpiration(allocation.expirationDate)} · {allocation.quantityPackages ?? 0} conf. / {allocation.quantityPieces ?? 0} pz
+                                      {allocation.batchNumber ?? "Lotto"} · scad. {formatExpiration(allocation.expirationDate)} · {item.exceptionType === "partial_no_stock_movement"
+                                        ? `${allocation.quantityPieces ?? 0} pz scaricati`
+                                        : `${allocation.quantityPackages ?? 0} conf. / ${allocation.quantityPieces ?? 0} pz`}
                                     </Badge>
                                   ))}
                                 </div>

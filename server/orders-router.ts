@@ -244,7 +244,7 @@ const orderItemInput = z.object({
 
 const fulfillmentExceptionInput = z.object({
   orderItemId: uuidSchema,
-  exceptionType: z.enum(["reallocated", "no_stock_movement"]),
+  exceptionType: z.enum(["reallocated", "no_stock_movement", "partial_no_stock_movement"]),
   reason: z.string().trim().min(1, "Il motivo è obbligatorio.").max(2_000),
 });
 
