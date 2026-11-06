@@ -103,7 +103,7 @@ async function fixture(
     multiplier,
   });
   const batchIds: string[] = [];
-  for (const [i, qty] of stocks.entries()) {
+  for (const [i, qty] of Array.from(stocks.entries())) {
     const batchId = randomUUID();
     batchIds.push(batchId);
     await db.insert(productBatches).values({
@@ -213,6 +213,130 @@ describe.skipIf(!enabled)(
     });
     afterAll(async () => {
       if (client) await client.end();
+    });
+
+    it("TSV senza quoting: isola colonne mancanti/extra e pianifica le righe valide prima e dopo, con replay idempotente", async () => {
+      const f = await fixture(true);
+      const runId = await run(f);
+      const validLines = report([
+        { "order-item-id": "valid-before" },
+        { "order-item-id": "valid-after" },
+      ])
+        .toString()
+        .trimEnd()
+        .split("\n")
+        .slice(1);
+      const header = [...headers, "product-name"];
+      const body = Buffer.from(
+        "\uFEFF" +
+          [
+            header.join("\t"),
+            validLines[0] + '\tTitolo "speciale" senza quoting',
+            validLines[0],
+            validLines[0] + "\tTitolo\tPRIVATE_VALUE",
+            validLines[1] + '\tTitolo con "virgolette aperte',
+          ].join("\r\n") +
+          "\r\n"
+      );
+      const input = {
+        storeId: f.storeId,
+        runId,
+        reportId: `r-${runId}`,
+        reportDocumentId: `d-${runId}`,
+        body,
+        compression: "NONE",
+      };
+      expect(await ingestAmazonReport(input)).toMatchObject({
+        rows: 4,
+        pending: 2,
+        reviewRequired: 2,
+      });
+      expect(await processPendingAmazonItems(f.storeId)).toMatchObject({
+        dryRun: 2,
+        processed: 0,
+        errors: [],
+      });
+      const observed = await db
+        .select()
+        .from(amazonImportRowObservations)
+        .where(eq(amazonImportRowObservations.runId, runId))
+        .orderBy(amazonImportRowObservations.rowKey);
+      expect(observed.map(row => row.rowKey)).toEqual(["2", "3", "4", "5"]);
+      expect(observed.filter(row => row.outcome === "dry_run")).toHaveLength(2);
+      const invalid = observed.filter(row => row.outcome === "review_required");
+      expect(invalid).toHaveLength(2);
+      expect(invalid[0]).toMatchObject({
+        itemId: null,
+        sourceRow: {
+          _diagnostic: {
+            rowNumber: 3,
+            expectedColumns: 12,
+            actualColumns: 11,
+            field: "column-count",
+            code: "DOCUMENT_ROW_INVALID",
+          },
+        },
+        plannedAllocations: [],
+      });
+      expect(invalid[1]).toMatchObject({
+        itemId: null,
+        sourceRow: {
+          _diagnostic: {
+            rowNumber: 4,
+            expectedColumns: 12,
+            actualColumns: 13,
+            field: "column-count",
+            code: "DOCUMENT_ROW_INVALID",
+          },
+        },
+        plannedAllocations: [],
+      });
+      expect(Object.keys(invalid[0].sourceRow)).toEqual(["_diagnostic"]);
+      expect(JSON.stringify(observed)).not.toContain("PRIVATE_VALUE");
+      expect(await items(f)).toHaveLength(2);
+      expect(await ledger(f)).toHaveLength(0);
+      expect(await stock(f)).toBe(3);
+      expect(await ingestAmazonReport(input)).toMatchObject({
+        rows: 4,
+        reviewRequired: 2,
+        completed: true,
+      });
+      expect(
+        await db
+          .select()
+          .from(amazonImportRowObservations)
+          .where(eq(amazonImportRowObservations.runId, runId))
+      ).toHaveLength(4);
+      expect(await items(f)).toHaveLength(2);
+      expect(await ledger(f)).toHaveLength(0);
+      expect(await stock(f)).toBe(3);
+    });
+
+    it("una data acquisto invalida va in revisione, non pre-cutoff e non blocca le altre righe", async () => {
+      const f = await fixture(true);
+      const runId = await run(f);
+      expect(
+        await ingest(f, runId, [
+          { "purchase-date": "2026-02-31T10:00:00Z" },
+          { "order-item-id": "valid-date" },
+        ])
+      ).toMatchObject({ rows: 2, reviewRequired: 1, pending: 1 });
+      expect(await processPendingAmazonItems(f.storeId)).toMatchObject({
+        dryRun: 1,
+        processed: 0,
+      });
+      const observed = await db
+        .select()
+        .from(amazonImportRowObservations)
+        .where(eq(amazonImportRowObservations.runId, runId));
+      expect(observed.find(row => row.rowKey === "2")).toMatchObject({
+        outcome: "review_required",
+        itemId: null,
+        sourceRow: { _diagnostic: { field: "purchase-date", rowNumber: 2 } },
+      });
+      expect(observed.some(row => row.outcome === "pre_cutoff")).toBe(false);
+      expect(await ledger(f)).toHaveLength(0);
+      expect(await stock(f)).toBe(3);
     });
 
     it("durable ingest then multipack FEFO exactly once, item-Shipped partial order, actual immutable ledger IDs and timestamps", async () => {
@@ -563,12 +687,23 @@ describe.skipIf(!enabled)(
       expect(states.sort()).toEqual(["processed", "review_required"]);
       expect(await stock(f)).toBe(3);
     });
-    it("parse errors change nothing, disabled/default config remains off, wrong company fail closed", async () => {
+    it("header errors change nothing, disabled/default config remains off, wrong company fail closed", async () => {
       const f = await fixture(),
         runId = await run(f);
       await expect(
-        ingest(f, runId, [{ "last-updated-date": "2026-09-02T10:00:00" }])
-      ).rejects.toThrow();
+        ingestAmazonReport({
+          storeId: f.storeId,
+          runId,
+          reportId: `r-${runId}`,
+          reportDocumentId: `d-${runId}`,
+          body: Buffer.from(
+            report([{}])
+              .toString()
+              .replace("last-updated-date", "unused-column")
+          ),
+          compression: "NONE",
+        })
+      ).rejects.toMatchObject({ code: "DOCUMENT_HEADER_MISSING" });
       const [r] = await db
         .select()
         .from(amazonImportRuns)
@@ -580,7 +715,9 @@ describe.skipIf(!enabled)(
         .update(amazonImportConfigs)
         .set({ enabled: false })
         .where(eq(amazonImportConfigs.storeId, f.storeId));
-      await expect(ingest(f, runId, [{}])).rejects.toMatchObject({ code: "STORE_DISABLED" });
+      await expect(ingest(f, runId, [{}])).rejects.toMatchObject({
+        code: "STORE_DISABLED",
+      });
       expect(await processPendingAmazonItems(f.storeId)).toMatchObject({
         attempted: 0,
       });
@@ -588,7 +725,9 @@ describe.skipIf(!enabled)(
         .update(salesStores)
         .set({ companyId: SOKETO_COMPANY_ID })
         .where(eq(salesStores.id, f.storeId));
-      await expect(processPendingAmazonItems(f.storeId)).rejects.toMatchObject({ code: "STORE_SCOPE" });
+      await expect(processPendingAmazonItems(f.storeId)).rejects.toMatchObject({
+        code: "STORE_SCOPE",
+      });
       const emptyStore = randomUUID();
       await db.insert(salesStores).values({
         id: emptyStore,

@@ -20,6 +20,22 @@ const SAFE_HEADERS = [
   ...CORE_HEADERS,
   "item-tax",
 ] as const;
+export type AmazonReportDiagnosticField =
+  | (typeof SAFE_HEADERS)[number]
+  | "column-count";
+export type AmazonReportRowDiagnosticCode =
+  | "DOCUMENT_ROW_INVALID"
+  | "DOCUMENT_TIMESTAMP_INVALID"
+  | "DOCUMENT_IDENTIFIER_INVALID"
+  | "DOCUMENT_PRICE_INVALID";
+/** Static metadata only: never include received values or unknown header names. */
+export interface AmazonReportRowDiagnostics {
+  rowNumber: number;
+  expectedColumns?: number;
+  actualColumns?: number;
+  field?: AmazonReportDiagnosticField;
+  code: AmazonReportRowDiagnosticCode;
+}
 export type AmazonStockStatus =
   | "pending"
   | "not_shipped"
@@ -44,6 +60,7 @@ export interface AmazonReportRow {
   lineTotal: string;
   unitPrice: string;
   quarantineReason: string | null;
+  rowDiagnostics?: AmazonReportRowDiagnostics;
 }
 
 /** Explicit ISO timezone only; validate calendar components before constructing. */
@@ -113,60 +130,14 @@ export function parseAmazonMoney(
 export const parseAmazonEuro = (value: string) =>
   parseAmazonMoney(value, "EUR");
 
-function cells(text: string, delimiter: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [],
-    field = "",
-    quoted = false,
-    closed = false;
-  const endField = () => {
-    row.push(field);
-    field = "";
-    closed = false;
-  };
-  const endRow = () => {
-    endField();
-    rows.push(row);
-    row = [];
-    if (rows.length > AMAZON_REPORT_MAX_ROWS + 1)
-      throw new AmazonImportError("DOCUMENT_ROWS_LIMIT");
-  };
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (quoted) {
-      if (c === '"') {
-        if (text[i + 1] === '"') {
-          field += '"';
-          i++;
-        } else {
-          quoted = false;
-          closed = true;
-        }
-      } else field += c;
-    } else if (c === delimiter) endField();
-    else if (c === "\n" || c === "\r") {
-      if (c === "\r" && text[i + 1] === "\n") i++;
-      endRow();
-    } else if (c === '"') {
-      if (field || closed)
-        throw new AmazonImportError("DOCUMENT_ROW_INVALID", {
-          rowNumber: rows.length + 1,
-        });
-      quoted = true;
-    } else {
-      if (closed)
-        throw new AmazonImportError("DOCUMENT_ROW_INVALID", {
-          rowNumber: rows.length + 1,
-        });
-      field += c;
-    }
-  }
-  if (quoted)
-    throw new AmazonImportError("DOCUMENT_ROW_INVALID", {
-      rowNumber: rows.length + 1,
-    });
-  if (field || row.length || closed) endRow();
-  return rows;
+/** Amazon TSV has no quoting: tabs and physical newlines always delimit cells. */
+function cells(text: string): string[][] {
+  const lines = text.split(/\r\n|\n|\r/);
+  // A final line terminator does not create a report row. Interior empty lines do.
+  if (lines[lines.length - 1] === "") lines.pop();
+  if (lines.length > AMAZON_REPORT_MAX_ROWS + 1)
+    throw new AmazonImportError("DOCUMENT_ROWS_LIMIT");
+  return lines.map(line => line.split("\t"));
 }
 
 export function parseAmazonReport(
@@ -205,10 +176,13 @@ export function parseAmazonReport(
   }
   if (text.includes("\0")) throw new AmazonImportError("DOCUMENT_NUL");
   if (!text.trim()) throw new AmazonImportError("DOCUMENT_EMPTY");
-  const firstLine = text.split(/\r?\n/, 1)[0];
-  const table = cells(text, firstLine.includes("\t") ? "\t" : ",");
+  const table = cells(text);
   const headers = table.shift();
-  if (!headers || new Set(headers).size !== headers.length)
+  if (
+    !headers ||
+    headers.some(header => !header.trim()) ||
+    new Set(headers).size !== headers.length
+  )
     throw new AmazonImportError("DOCUMENT_HEADERS_INVALID");
   for (const header of CORE_HEADERS)
     if (!headers.includes(header))
@@ -216,17 +190,40 @@ export function parseAmazonReport(
         missingHeader: header,
       });
   return table.map((values, index) => {
+    const rowNumber = index + 2;
+    // A structural mismatch makes every cell position untrustworthy. Do not map
+    // even apparently valid IDs or persist any received values from this row.
     if (values.length !== headers.length)
-      throw new AmazonImportError("DOCUMENT_ROW_INVALID", {
-        rowNumber: index + 2,
-      });
+      return {
+        rowKey: String(rowNumber),
+        source: {},
+        orderId: "",
+        orderItemId: "",
+        sku: "",
+        quantity: 0,
+        purchaseDate: new Date(0),
+        updatedAt: new Date(0),
+        itemStatus: "",
+        orderStatus: "",
+        fulfillmentChannel: "",
+        lineTotal: "0.00",
+        unitPrice: "0.00",
+        quarantineReason: `column_count_mismatch:expected=${headers.length};actual=${values.length}`,
+        rowDiagnostics: {
+          rowNumber,
+          expectedColumns: headers.length,
+          actualColumns: values.length,
+          field: "column-count",
+          code: "DOCUMENT_ROW_INVALID",
+        },
+      };
     const source: Record<string, string> = {};
     for (const header of SAFE_HEADERS)
       source[header] = (values[headers.indexOf(header)] ?? "").trim();
     const cancelled =
       source["order-status"] === "Cancelled" ||
       source["item-status"] === "Cancelled";
-    const required = cancelled
+    const required: readonly (typeof SAFE_HEADERS)[number][] = cancelled
       ? [
           "amazon-order-id",
           "order-item-id",
@@ -235,31 +232,65 @@ export function parseAmazonReport(
         ]
       : SAFE_HEADERS.filter(h => h !== "item-tax");
     const missing = required.filter(header => !source[header]);
+    const issues: string[] = missing.length
+      ? [`missing_fields:${missing.join(",")}`]
+      : [];
+    // One primary diagnostic; all issues remain in the value-free reason.
+    let rowDiagnostics: AmazonReportRowDiagnostics | undefined;
+    const diagnose = (
+      field: AmazonReportDiagnosticField,
+      code: AmazonReportRowDiagnosticCode
+    ) => {
+      rowDiagnostics ??= { rowNumber, field, code };
+    };
+    if (missing.length) diagnose(missing[0], "DOCUMENT_ROW_INVALID");
     // Missing mandatory values are quarantined, not converted into fake IDs or stock.
-    // Dates/quantity below are placeholders confined to observations when missing.
-    const purchaseDate = source["purchase-date"]
-      ? parseAmazonTimestamp(source["purchase-date"])
-      : new Date(0);
-    const updatedAt = source["last-updated-date"]
-      ? parseAmazonTimestamp(source["last-updated-date"])
-      : new Date(0);
+    // Invalid dates/quantity also use placeholders confined to observations.
+    let unreliableDates = false;
+    const timestamp = (field: "purchase-date" | "last-updated-date") => {
+      if (!source[field]) {
+        unreliableDates = true;
+        return new Date(0);
+      }
+      try {
+        return parseAmazonTimestamp(source[field]);
+      } catch {
+        unreliableDates = true;
+        issues.push(`invalid_timestamp:${field}`);
+        diagnose(field, "DOCUMENT_TIMESTAMP_INVALID");
+        return new Date(0);
+      }
+    };
+    const purchaseDate = timestamp("purchase-date");
+    const updatedAt = timestamp("last-updated-date");
     const validQuantity =
       /^[1-9]\d*$/.test(source.quantity) &&
       Number.isSafeInteger(Number(source.quantity)) &&
       Number(source.quantity) <= 2147483647;
-    const issues: string[] = missing.length
-      ? [`missing_fields:${missing.join(",")}`]
-      : [];
-    if (!cancelled && source.quantity && !validQuantity)
+    if (!cancelled && source.quantity && !validQuantity) {
       issues.push("invalid_quantity");
+      diagnose("quantity", "DOCUMENT_ROW_INVALID");
+    }
     if (
       !cancelled &&
       source.currency &&
       !["EUR", "GBP"].includes(source.currency)
-    )
+    ) {
       issues.push("unsupported_currency");
-    if (source.sku.length > 255 || source["amazon-order-id"].length > 255)
-      throw new AmazonImportError("DOCUMENT_IDENTIFIER_INVALID");
+      diagnose("currency", "DOCUMENT_ROW_INVALID");
+    }
+    for (const field of ["amazon-order-id", "order-item-id", "sku"] as const) {
+      if (source[field].length > 255) {
+        issues.push(`invalid_identifier:${field}`);
+        diagnose(field, "DOCUMENT_IDENTIFIER_INVALID");
+        source[field] = "";
+      }
+    }
+    // Unusable dates must not identify an existing line for stale updates.
+    if (unreliableDates) {
+      source["amazon-order-id"] = "";
+      source["order-item-id"] = "";
+    }
     const quantity = validQuantity ? Number(source.quantity) : 0;
     let lineTotal = "0.00";
     try {
@@ -269,7 +300,8 @@ export function parseAmazonReport(
           source.currency === "GBP" ? "GBP" : "EUR"
         );
     } catch {
-      if (!cancelled) issues.push("invalid_item_price");
+      issues.push("invalid_item_price");
+      diagnose("item-price", "DOCUMENT_PRICE_INVALID");
     }
     try {
       if (source["item-tax"])
@@ -278,14 +310,15 @@ export function parseAmazonReport(
           source.currency === "GBP" ? "GBP" : "EUR"
         );
     } catch {
-      if (!cancelled) issues.push("invalid_item_tax");
+      issues.push("invalid_item_tax");
+      diagnose("item-tax", "DOCUMENT_PRICE_INVALID");
     }
     const cents = Number(lineTotal.replace(".", ""));
     const unitCents = quantity
       ? Math.floor((cents + Math.floor(quantity / 2)) / quantity)
       : 0;
     return {
-      rowKey: String(index + 2),
+      rowKey: String(rowNumber),
       source,
       orderId: source["amazon-order-id"],
       orderItemId: source["order-item-id"],
@@ -299,6 +332,7 @@ export function parseAmazonReport(
       lineTotal,
       unitPrice: `${Math.floor(unitCents / 100)}.${String(unitCents % 100).padStart(2, "0")}`,
       quarantineReason: issues.length ? issues.join(";") : null,
+      ...(rowDiagnostics ? { rowDiagnostics } : {}),
     };
   });
 }

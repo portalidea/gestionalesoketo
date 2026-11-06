@@ -63,12 +63,68 @@ describe("Amazon strict parser", () => {
     );
     expect(reversed[0].orderId).toBe("order-1");
   });
-  it("supports RFC-style quoted CSV and TSV including escaped quotes", () => {
-    const csv = `${headers.join(",")}\r\n${values.map((v, i) => `"${i === 7 ? 'P,"ACK' : v}"`.replace('P,"ACK', 'P,""ACK')).join(",")}\r\n`;
-    expect(parseAmazonReport(Buffer.from(csv))[0].sku).toBe('P,"ACK');
-    const tsvValues = [...values];
-    tsvValues[7] = '"P\tACK"';
-    expect(parseAmazonReport(body(tsvValues))[0].sku).toBe("P\tACK");
+  it("does not autodetect CSV or accept quoted TSV header names", () => {
+    for (const report of [
+      `${headers.join(",")}\r\n${values.map(v => `"${v}"`).join(",")}\r\n`,
+      `${headers.map(h => `"${h}"`).join("\t")}\n${values.join("\t")}\n`,
+    ]) {
+      expect(() => parseAmazonReport(Buffer.from(report))).toThrow(
+        "Intestazione obbligatoria Amazon mancante"
+      );
+    }
+  });
+  it.each([
+    'Snack "Keto" al cioccolato',
+    '"Snack ""Keto"""',
+    'Snack """"" ripetuti',
+    '"Snack senza chiusura',
+    'Snack senza apertura"',
+    '",comma,""literal',
+  ])("treats product-name quotes as ordinary TSV characters (%#)", title => {
+    const report = Buffer.from(
+      `${[...headers, "product-name"].join("\t")}\n${[...values, title].join("\t")}\n${[...values, '"following title'].join("\t")}\n`
+    );
+    const rows = parseAmazonReport(report);
+    expect(rows).toHaveLength(2);
+    for (const [index, row] of Array.from(rows.entries())) {
+      expect(row).toMatchObject({
+        rowKey: String(index + 2),
+        orderId: "order-1",
+        sku: "PACK",
+        quarantineReason: null,
+      });
+      expect(row.source).not.toHaveProperty("product-name");
+      expect(row).not.toHaveProperty("rowDiagnostics");
+    }
+  });
+  it("preserves repeated and unmatched quotes in safe fields without unescaping", () => {
+    for (const sku of ['P,""ACK', '"PACK', 'PACK"', '"""PACK""']) {
+      const v = [...values];
+      v[7] = sku;
+      expect(parseAmazonReport(body(v))[0]).toMatchObject({
+        sku,
+        source: { sku },
+        quarantineReason: null,
+      });
+    }
+  });
+  it("tabs and newlines are delimiters even inside apparent quotes", () => {
+    const tabbed = [...values];
+    tabbed[7] = '"P\tACK"';
+    expect(parseAmazonReport(body(tabbed))[0]).toMatchObject({
+      source: {},
+      quarantineReason: "column_count_mismatch:expected=11;actual=12",
+    });
+    const h = [...headers, "product-name"];
+    const rows = parseAmazonReport(
+      Buffer.from(
+        `${h.join("\t")}\n${[...values, '"line one\nline two"'].join("\t")}\n${[...values, "normal"].join("\t")}\n`
+      )
+    );
+    expect(rows).toHaveLength(3);
+    expect(rows[0].quarantineReason).toBeNull();
+    expect(rows[1]).toMatchObject({ rowKey: "3", source: {} });
+    expect(rows[2]).toMatchObject({ rowKey: "4", quarantineReason: null });
   });
   it("missing identity is quarantined without fabricated IDs", () => {
     const missing = [...values];
@@ -96,11 +152,7 @@ describe("Amazon strict parser", () => {
       );
     }
   );
-  it("rejects malformed documents and duplicate/missing headers atomically", () => {
-    expect(() =>
-      parseAmazonReport(Buffer.from(`${headers.join("\t")}\n"unterminated`))
-    ).toThrow();
-    expect(() => parseAmazonReport(body(values.slice(0, -1)))).toThrow();
+  it("rejects duplicate/missing headers and invalid transport atomically", () => {
     expect(() =>
       parseAmazonReport(
         body(
@@ -119,6 +171,7 @@ describe("Amazon strict parser", () => {
     ).toThrow("sku");
     expect(() => parseAmazonReport(Buffer.from([0xff]))).toThrow();
     expect(() => parseAmazonReport(body(), "ZIP")).toThrow();
+    expect(() => parseAmazonReport(Buffer.from(values.join("\t")))).toThrow();
   });
   it("rejects oversized decoded gzip and >2000 data rows", () => {
     expect(() =>
@@ -182,6 +235,27 @@ describe("Amazon safe parser diagnostics", () => {
     for (const sensitive of [secret, email, rawBadValue])
       expect(exposed).not.toContain(sensitive);
     expect(error).not.toHaveProperty("cause");
+  };
+
+  const expectSafeQuarantine = (
+    row: ReturnType<typeof parseAmazonReport>[number]
+  ) => {
+    expect(row.quarantineReason).not.toBeNull();
+    expect(row.rowDiagnostics).toBeDefined();
+    const exposed = JSON.stringify({
+      quarantineReason: row.quarantineReason,
+      rowDiagnostics: row.rowDiagnostics,
+    });
+    for (const sensitive of [secret, email, rawBadValue])
+      expect(exposed).not.toContain(sensitive);
+    for (const key of Object.keys(row.rowDiagnostics!))
+      expect([
+        "rowNumber",
+        "expectedColumns",
+        "actualColumns",
+        "field",
+        "code",
+      ]).toContain(key);
   };
 
   it("accepts both declared gzip and ordinary uncompressed report bytes", () => {
@@ -285,16 +359,29 @@ describe("Amazon safe parser diagnostics", () => {
     `"${rawBadValue}"unexpected`,
     `${rawBadValue}\textra`,
   ])(
-    "reports safe row number for malformed cells or column counts (%#)",
+    "quarantines short physical rows without quote parsing or raw diagnostics (%#)",
     row => {
-      expectSafeError(
-        () =>
-          parseAmazonReport(
-            Buffer.from(`${headers.join("\t")}\n${values.join("\t")}\n${row}`)
-          ),
-        "DOCUMENT_ROW_INVALID",
-        { rowNumber: 3 }
+      const rows = parseAmazonReport(
+        Buffer.from(`${headers.join("\t")}\n${values.join("\t")}\n${row}`)
       );
+      expect(rows).toHaveLength(2);
+      expect(rows[0].quarantineReason).toBeNull();
+      expect(rows[1]).toMatchObject({
+        rowKey: "3",
+        source: {},
+        orderId: "",
+        orderItemId: "",
+        sku: "",
+        quarantineReason: `column_count_mismatch:expected=11;actual=${row.split("\t").length}`,
+        rowDiagnostics: {
+          rowNumber: 3,
+          expectedColumns: 11,
+          actualColumns: row.split("\t").length,
+          field: "column-count",
+          code: "DOCUMENT_ROW_INVALID",
+        },
+      });
+      expectSafeQuarantine(rows[1]);
     }
   );
 
@@ -323,10 +410,23 @@ describe("Amazon safe parser diagnostics", () => {
     for (const column of [2, 3]) {
       const invalid = [...values];
       invalid[column] = timestamp;
-      expectSafeError(
-        () => parseAmazonReport(body(invalid)),
-        "DOCUMENT_TIMESTAMP_INVALID"
+      const [row] = parseAmazonReport(body(invalid));
+      expect(row).toMatchObject({
+        orderId: "",
+        orderItemId: "",
+        source: { "amazon-order-id": "", "order-item-id": "" },
+        quarantineReason: `invalid_timestamp:${headers[column]}`,
+        rowDiagnostics: {
+          rowNumber: 2,
+          field: headers[column],
+          code: "DOCUMENT_TIMESTAMP_INVALID",
+        },
+      });
+      expect(row[column === 2 ? "purchaseDate" : "updatedAt"].getTime()).toBe(
+        0
       );
+      expectSafeQuarantine(row);
+      expect(row.source).not.toHaveProperty("buyer-email");
     }
   });
 
@@ -337,14 +437,27 @@ describe("Amazon safe parser diagnostics", () => {
     }
   );
 
-  it.each([0, 7])("does not expose oversized identifiers (%#)", column => {
-    const invalid = [...values];
-    invalid[column] = `${rawBadValue}${"x".repeat(256)}`;
-    expectSafeError(
-      () => parseAmazonReport(body(invalid)),
-      "DOCUMENT_IDENTIFIER_INVALID"
-    );
-  });
+  it.each([0, 1, 7])(
+    "quarantines and clears oversized identifiers (%#)",
+    column => {
+      const invalid = [...values];
+      invalid[column] = `${rawBadValue}${"x".repeat(256)}`;
+      const [row] = parseAmazonReport(body(invalid));
+      expect(row).toMatchObject({
+        quarantineReason: `invalid_identifier:${headers[column]}`,
+        rowDiagnostics: {
+          rowNumber: 2,
+          field: headers[column],
+          code: "DOCUMENT_IDENTIFIER_INVALID",
+        },
+      });
+      expect(row.source[headers[column]]).toBe("");
+      expect(
+        row[column === 0 ? "orderId" : column === 1 ? "orderItemId" : "sku"]
+      ).toBe("");
+      expectSafeQuarantine(row);
+    }
+  );
 
   it("preserves malformed price, tax, quantity, and currency quarantine behavior", () => {
     const invalid = [...values];
@@ -361,14 +474,226 @@ describe("Amazon safe parser diagnostics", () => {
       quarantineReason:
         "invalid_quantity;unsupported_currency;invalid_item_price;invalid_item_tax",
     });
+    expect(row.rowDiagnostics).toEqual({
+      rowNumber: 2,
+      field: "quantity",
+      code: "DOCUMENT_ROW_INVALID",
+    });
+    expectSafeQuarantine(row);
     invalid[4] = "Cancelled";
     const [cancelled] = parseAmazonReport(
       body([...invalid, rawBadValue], [...headers, "item-tax"])
     );
-    expect(cancelled.quarantineReason).toBeNull();
+    // Cancellation does not excuse malformed amounts that are actually present.
+    expect(cancelled.quarantineReason).toBe(
+      "invalid_item_price;invalid_item_tax"
+    );
+    expect(cancelled.rowDiagnostics).toEqual({
+      rowNumber: 2,
+      field: "item-price",
+      code: "DOCUMENT_PRICE_INVALID",
+    });
+    expectSafeQuarantine(cancelled);
     expect(classifyAmazonRow(cancelled, "2026-09-01").status).toBe("cancelled");
   });
 });
+
+describe("Amazon physical TSV row quarantine", () => {
+  it.each([
+    { invalid: values.slice(0, -1) },
+    { invalid: [...values, "private-buyer@example.test"] },
+  ])(
+    "returns an empty observation for fewer/more columns and keeps valid neighbors (%#)",
+    ({ invalid }) => {
+      const report = Buffer.from(
+        `${headers.join("\t")}\n${values.join("\t")}\n${invalid.join("\t")}\n${values.join("\t")}\n`
+      );
+      const rows = parseAmazonReport(report);
+      expect(rows).toHaveLength(3);
+      expect(rows.map(row => row.rowKey)).toEqual(["2", "3", "4"]);
+      expect(rows[0].quarantineReason).toBeNull();
+      expect(rows[2].quarantineReason).toBeNull();
+      expect(rows[1]).toEqual({
+        rowKey: "3",
+        source: {},
+        orderId: "",
+        orderItemId: "",
+        sku: "",
+        quantity: 0,
+        purchaseDate: new Date(0),
+        updatedAt: new Date(0),
+        itemStatus: "",
+        orderStatus: "",
+        fulfillmentChannel: "",
+        lineTotal: "0.00",
+        unitPrice: "0.00",
+        quarantineReason: `column_count_mismatch:expected=11;actual=${invalid.length}`,
+        rowDiagnostics: {
+          rowNumber: 3,
+          expectedColumns: 11,
+          actualColumns: invalid.length,
+          field: "column-count",
+          code: "DOCUMENT_ROW_INVALID",
+        },
+      });
+      expect(JSON.stringify(rows[1])).not.toContain("private-buyer");
+    }
+  );
+
+  it("reports physical row 29 with BOM/CRLF and no shifting after an empty physical line", () => {
+    const lines = [headers.join("\t"), ...Array(27).fill(values.join("\t"))];
+    // Row 10 is empty but still counts physically; it must not renumber row 29.
+    lines[9] = "";
+    lines.push([...values, "never-store@example.test"].join("\t"));
+    lines.push(values.join("\t"));
+    const rows = parseAmazonReport(
+      Buffer.from(`\uFEFF${lines.join("\r\n")}\r\n`)
+    );
+    expect(rows).toHaveLength(29);
+    expect(rows[8]).toMatchObject({
+      rowKey: "10",
+      source: {},
+      rowDiagnostics: { rowNumber: 10, actualColumns: 1 },
+    });
+    expect(rows[26]).toMatchObject({ rowKey: "28", quarantineReason: null });
+    expect(rows[27]).toMatchObject({
+      rowKey: "29",
+      source: {},
+      quarantineReason: "column_count_mismatch:expected=11;actual=12",
+      rowDiagnostics: {
+        rowNumber: 29,
+        expectedColumns: 11,
+        actualColumns: 12,
+        field: "column-count",
+        code: "DOCUMENT_ROW_INVALID",
+      },
+    });
+    expect(rows[28]).toMatchObject({ rowKey: "30", quarantineReason: null });
+  });
+
+  it.each(["\n", "\r\n", "\r"])(
+    "supports physical line terminator %# with BOM and trailing empty cells",
+    newline => {
+      const report = `\uFEFF${[...headers, "product-name"].join("\t")}${newline}${[...values, ""].join("\t")}${newline}`;
+      const rows = parseAmazonReport(Buffer.from(report));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ rowKey: "2", quarantineReason: null });
+    }
+  );
+
+  it.each([2, 3])(
+    "quarantines semantic timestamp errors between valid rows (%#)",
+    column => {
+      const invalid = [...values];
+      invalid[column] = "2026-02-30T12:00:00Z";
+      const rows = parseAmazonReport(
+        Buffer.from(
+          `${headers.join("\t")}\n${values.join("\t")}\n${invalid.join("\t")}\n${values.join("\t")}\n`
+        )
+      );
+      expect(rows).toHaveLength(3);
+      expect(rows[0].quarantineReason).toBeNull();
+      expect(rows[1]).toMatchObject({
+        rowKey: "3",
+        orderId: "",
+        orderItemId: "",
+        quarantineReason: `invalid_timestamp:${headers[column]}`,
+        rowDiagnostics: {
+          rowNumber: 3,
+          field: headers[column],
+          code: "DOCUMENT_TIMESTAMP_INVALID",
+        },
+      });
+      expect(rows[2].quarantineReason).toBeNull();
+    }
+  );
+
+  it.each(["item-price", "item-tax"])(
+    "quarantines malformed money in %s without leaking values",
+    field => {
+      const h = [...headers, "item-tax", "buyer-email", "product-name"];
+      const v = [
+        ...values,
+        "1.00",
+        "private-buyer@example.test",
+        '"quoted title',
+      ];
+      v[h.indexOf(field)] = "customer-secret-malformed-money";
+      const rows = parseAmazonReport(
+        Buffer.from(
+          `${h.join("\t")}\n${[...values, "1.00", "a@example.test", "before"].join("\t")}\n${v.join("\t")}\n${[...values, "1.00", "b@example.test", "after"].join("\t")}\n`
+        )
+      );
+      expect(rows.map(row => row.quarantineReason)).toEqual([
+        null,
+        field === "item-price" ? "invalid_item_price" : "invalid_item_tax",
+        null,
+      ]);
+      expect(rows[1].rowDiagnostics).toEqual({
+        rowNumber: 3,
+        field,
+        code: "DOCUMENT_PRICE_INVALID",
+      });
+      expect(rows[1].source).not.toHaveProperty("buyer-email");
+      expect(rows[1].source).not.toHaveProperty("product-name");
+      expect(JSON.stringify(rows[1].rowDiagnostics)).not.toContain(
+        "customer-secret"
+      );
+      expect(rows[1].quarantineReason).not.toContain("customer-secret");
+    }
+  );
+
+  it("preserves missing ID header quarantine rather than making those headers fatal", () => {
+    const rows = parseAmazonReport(body(values.slice(2), headers.slice(2)));
+    expect(rows[0]).toMatchObject({
+      orderId: "",
+      orderItemId: "",
+      purchaseDate: parseAmazonTimestamp(values[2]),
+      quarantineReason: "missing_fields:amazon-order-id,order-item-id",
+      rowDiagnostics: {
+        rowNumber: 2,
+        field: "amazon-order-id",
+        code: "DOCUMENT_ROW_INVALID",
+      },
+    });
+  });
+
+  it("clears IDs for missing dates too while keeping the legacy missing-fields reason", () => {
+    const v = [...values];
+    v[2] = "";
+    expect(parseAmazonReport(body(v))[0]).toMatchObject({
+      orderId: "",
+      orderItemId: "",
+      purchaseDate: new Date(0),
+      quarantineReason: "missing_fields:purchase-date",
+      rowDiagnostics: {
+        rowNumber: 2,
+        field: "purchase-date",
+        code: "DOCUMENT_ROW_INVALID",
+      },
+    });
+  });
+
+  it("keeps missing optional amounts and quantity exempt for valid cancellation rows", () => {
+    const cancelled = [...values];
+    cancelled[4] = "Cancelled";
+    for (const index of [5, 6, 7, 8, 9, 10]) cancelled[index] = "";
+    const [row] = parseAmazonReport(body(cancelled));
+    expect(row.quarantineReason).toBeNull();
+    expect(row).not.toHaveProperty("rowDiagnostics");
+  });
+
+  it("accepts 255-character IDs/SKU and exactly 2000 physical data rows", () => {
+    const v = [...values];
+    for (const index of [0, 1, 7]) v[index] = "x".repeat(255);
+    expect(parseAmazonReport(body(v))[0].quarantineReason).toBeNull();
+    const report = `${headers.join("\t")}\r\n${Array(2000).fill(values.join("\t")).join("\r\n")}\r\n`;
+    const rows = parseAmazonReport(Buffer.from(report));
+    expect(rows).toHaveLength(2000);
+    expect(rows[1999].rowKey).toBe("2001");
+  });
+});
+
 describe("Amazon eligibility and all-or-nothing FEFO", () => {
   const eligible = {
     purchaseDate: parseAmazonTimestamp(values[2]),

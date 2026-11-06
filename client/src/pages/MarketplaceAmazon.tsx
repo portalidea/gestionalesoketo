@@ -797,6 +797,11 @@ export default function MarketplaceAmazon() {
                       {observations.data?.items.map(entry => (
                         <TableRow key={entry.id}>
                           <TableCell>
+                            {entry.rowNumber !== null && (
+                              <p className="text-xs font-semibold mb-1">
+                                Riga {entry.rowNumber} del file
+                              </p>
+                            )}
                             {entry.orderId ?? "ID mancante"}
                             <br />
                             {entry.sku ?? "SKU mancante"}
@@ -827,6 +832,28 @@ export default function MarketplaceAmazon() {
                           <TableCell>
                             {labels[entry.outcome] ?? entry.outcome}
                             <p className="text-xs">{entry.reason}</p>
+                            {entry.diagnostic && (
+                              <div className="text-xs mt-1">
+                                <p>{entry.diagnostic.code}</p>
+                                {entry.diagnostic.expectedColumns !==
+                                  undefined &&
+                                  entry.diagnostic.actualColumns !==
+                                    undefined && (
+                                    <p>
+                                      Colonne attese:{" "}
+                                      {entry.diagnostic.expectedColumns};
+                                      trovate: {entry.diagnostic.actualColumns}.
+                                    </p>
+                                  )}
+                                {entry.diagnostic.field && (
+                                  <p>
+                                    {entry.diagnostic.field === "column-count"
+                                      ? "Struttura della riga non valida: nessun ID o SKU viene dedotto."
+                                      : `Campo da verificare: ${entry.diagnostic.field}.`}
+                                  </p>
+                                )}
+                              </div>
+                            )}
                             <p className="text-xs">
                               {entry.fulfillmentChannel ?? "Canale ignoto"} ·{" "}
                               {entry.itemStatus ?? "Stato ignoto"}

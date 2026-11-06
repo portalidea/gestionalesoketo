@@ -18,6 +18,7 @@ import {
 import { EKETO_COMPANY_ID } from "../shared/const";
 import { uuidSchema } from "../shared/schemas";
 import { getAmazonImportProductSummary } from "./services/amazonImportSummaryService";
+import { safeAmazonRowDiagnostic } from "./services/amazonRowDiagnostic";
 
 type Database = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 const dateInput = z
@@ -502,6 +503,7 @@ export const amazonRouter = router({
             id: amazonImportRowObservations.id,
             itemId: amazonImportRowObservations.itemId,
             source: amazonImportRowObservations.sourceRow,
+            rowKey: amazonImportRowObservations.rowKey,
             outcome: amazonImportRowObservations.outcome,
             reason: amazonImportRowObservations.reason,
             planned: amazonImportRowObservations.plannedAllocations,
@@ -522,6 +524,7 @@ export const amazonRouter = router({
           .where(eq(amazonImportRowObservations.runId, input.runId))
           .orderBy(
             asc(amazonImportRowObservations.createdAt),
+            sql`CASE WHEN ${amazonImportRowObservations.rowKey} ~ '^[0-9]{1,10}$' THEN ${amazonImportRowObservations.rowKey}::bigint ELSE NULL END ASC NULLS LAST`,
             asc(amazonImportRowObservations.id)
           )
           .limit(input.limit)
@@ -593,6 +596,14 @@ export const amazonRouter = router({
           items: rows.map(row => ({
             id: row.id,
             itemId: row.itemId,
+            rowNumber:
+              /^\d+$/.test(row.rowKey) &&
+              Number.isSafeInteger(Number(row.rowKey))
+                ? Number(row.rowKey)
+                : null,
+            diagnostic: safeAmazonRowDiagnostic(
+              jsonObject(row.source)._diagnostic
+            ),
             outcome: row.outcome,
             reason: row.reason,
             orderId: sourceText(
