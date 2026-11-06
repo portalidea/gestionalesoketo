@@ -135,8 +135,8 @@
                                 "conditions": [
                                     [
                                         {
-                                            "a": "{{if(equal(ifempty(1.data.report_id; \"NONE\"); \"NONE\"); \"CREATE\"; \"REUSE\")}}",
-                                            "b": "CREATE",
+                                            "a": "{{ifempty(1.data.report_id; \"NONE\")}}",
+                                            "b": "NONE",
                                             "o": "text:equal:ci"
                                         }
                                     ]
@@ -2880,9 +2880,9 @@
                                 "conditions": [
                                     [
                                         {
-                                            "a": "{{if(equal(ifempty(1.data.report_id; \"NONE\"); \"NONE\"); \"CREATE\"; \"REUSE\")}}",
-                                            "b": "REUSE",
-                                            "o": "text:equal:ci"
+                                            "a": "{{ifempty(1.data.report_id; \"NONE\")}}",
+                                            "b": "NONE",
+                                            "o": "text:notequal:ci"
                                         }
                                     ]
                                 ]

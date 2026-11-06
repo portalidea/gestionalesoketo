@@ -1,5 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "git": {
+    "deploymentEnabled": {
+      "docs/amazon-make-native-filters": false
+    }
+  },
   "buildCommand": "pnpm build",
   "outputDirectory": "dist/public",
   "framework": null,
