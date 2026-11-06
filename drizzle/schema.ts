@@ -1477,6 +1477,42 @@ export const salesStores = pgTable(
 export type SalesStore = typeof salesStores.$inferSelect;
 export type InsertSalesStore = typeof salesStores.$inferInsert;
 
+// Amazon daily report import: SQL migration 0051 remains authoritative.
+export const amazonImportConfigs = pgTable("amazon_import_configs", {
+  storeId: uuid("store_id").primaryKey().references(() => salesStores.id, { onDelete: "restrict" }),
+  sellerAccountId: text("seller_account_id").notNull().unique(),
+  purchaseCutoff: date("purchase_cutoff").notNull().default("2026-09-01"),
+  dryRun: boolean("dry_run").notNull().default(true),
+  enabled: boolean("enabled").notNull().default(false),
+  checkpointAt: timestamp("checkpoint_at", { withTimezone: true }),
+  updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "restrict" }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [check("amazon_import_configs_seller_account_id_check", sql`length(btrim(${t.sellerAccountId})) > 0`)]);
+export type AmazonImportConfig = typeof amazonImportConfigs.$inferSelect;
+
+export const amazonImportRuns = pgTable("amazon_import_runs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  storeId: uuid("store_id").notNull().references(() => amazonImportConfigs.storeId, { onDelete: "restrict" }),
+  windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+  windowEnd: timestamp("window_end", { withTimezone: true }).notNull(),
+  reportId: text("report_id"),
+  reportDocumentId: text("report_document_id"),
+  documentSha256: text("document_sha256"),
+  status: text("status").notNull().default("requested"),
+  dryRun: boolean("dry_run").notNull().default(true),
+  summary: jsonb("summary").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  error: text("error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  check("amazon_import_runs_status_check", sql`${t.status} IN ('requested','pending','processing','completed','cancelled','fatal','review_required')`),
+  check("amazon_import_runs_window_valid", sql`${t.windowEnd} > ${t.windowStart} AND ${t.windowEnd} <= ${t.windowStart} + interval '30 days'`),
+  unique("amazon_import_runs_report_unique").on(t.storeId, t.reportId),
+  uniqueIndex("amazon_import_runs_one_open").on(t.storeId).where(sql`${t.status} IN ('requested','pending','processing')`),
+  index("amazon_import_runs_store_created").on(t.storeId, t.createdAt.desc()),
+]);
+export type AmazonImportRun = typeof amazonImportRuns.$inferSelect;
+
 /**
  * Channel variants — mapping tra SKU canale e prodotto interno.
  * multiplier: quanti pezzi interni corrispondono a 1 unità canale.
@@ -1591,15 +1627,67 @@ export const marketplaceOrderItems = pgTable(
     unitPrice: numeric("unitPrice", { precision: 10, scale: 2 }),
     lineTotal: numeric("lineTotal", { precision: 10, scale: 2 }),
     displayName: varchar("displayName", { length: 255 }),
+    amazonSellerAccountId: text("amazonSellerAccountId"),
+    amazonOrderId: text("amazonOrderId"),
+    amazonOrderItemId: text("amazonOrderItemId"),
+    amazonPurchaseDate: timestamp("amazonPurchaseDate", { withTimezone: true }),
+    amazonUpdatedAt: timestamp("amazonUpdatedAt", { withTimezone: true }),
+    amazonItemStatus: text("amazonItemStatus"),
+    amazonOrderStatus: text("amazonOrderStatus"),
+    amazonFulfillmentChannel: text("amazonFulfillmentChannel"),
+    amazonStockStatus: text("amazonStockStatus"),
+    amazonStockReason: text("amazonStockReason"),
+    amazonPiecesProcessed: integer("amazonPiecesProcessed").notNull().default(0),
+    amazonFefoPreview: jsonb("amazonFefoPreview").notNull().default(sql`'[]'::jsonb`),
+    amazonSourceSnapshot: jsonb("amazonSourceSnapshot"),
+    amazonLastRunId: uuid("amazonLastRunId").references(() => amazonImportRuns.id, { onDelete: "restrict" }),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
     index("idx_marketplace_order_items_order").on(t.marketplaceOrderId),
     index("idx_marketplace_order_items_product").on(t.productId),
+    check("marketplace_items_amazon_identity_valid", sql`(${t.amazonSellerAccountId} IS NULL AND ${t.amazonOrderId} IS NULL AND ${t.amazonOrderItemId} IS NULL) OR (${t.amazonSellerAccountId} IS NOT NULL AND ${t.amazonOrderId} IS NOT NULL AND ${t.amazonOrderItemId} IS NOT NULL AND length(btrim(${t.amazonSellerAccountId})) > 0 AND length(btrim(${t.amazonOrderId})) > 0 AND length(btrim(${t.amazonOrderItemId})) > 0 AND ${t.amazonPurchaseDate} IS NOT NULL AND ${t.amazonUpdatedAt} IS NOT NULL AND ${t.amazonStockStatus} IS NOT NULL)`),
+    check("marketplace_items_amazon_processed_nonneg", sql`${t.amazonPiecesProcessed} >= 0`),
+    check("marketplace_items_amazon_status_valid", sql`${t.amazonStockStatus} IS NULL OR ${t.amazonStockStatus} IN ('pending','not_shipped','pre_cutoff','review_required','dry_run','processed','cancelled','post_stock_alert')`),
+    uniqueIndex("marketplace_items_amazon_identity_unique").on(t.amazonSellerAccountId, t.amazonOrderId, t.amazonOrderItemId).where(sql`${t.amazonSellerAccountId} IS NOT NULL`),
+    index("marketplace_items_amazon_run_status").on(t.amazonLastRunId, t.amazonStockStatus),
   ],
 );
 export type MarketplaceOrderItem = typeof marketplaceOrderItems.$inferSelect;
 export type InsertMarketplaceOrderItem = typeof marketplaceOrderItems.$inferInsert;
+
+export const amazonStockAllocations = pgTable("amazon_stock_allocations", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: uuid("item_id").notNull().references(() => marketplaceOrderItems.id, { onDelete: "restrict" }),
+  runId: uuid("run_id").notNull().references(() => amazonImportRuns.id, { onDelete: "restrict" }),
+  productId: uuid("product_id").notNull().references(() => products.id, { onDelete: "restrict" }),
+  batchId: uuid("batch_id").notNull().references(() => productBatches.id, { onDelete: "restrict" }),
+  stockMovementId: uuid("stock_movement_id").notNull().unique().references(() => stockMovements.id, { onDelete: "restrict" }),
+  pieces: integer("pieces").notNull(),
+  amazonUpdatedAt: timestamp("amazon_updated_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  check("amazon_stock_allocations_pieces_check", sql`${t.pieces} > 0`),
+  unique("amazon_stock_allocations_item_batch_unique").on(t.itemId, t.productId, t.batchId),
+  index("amazon_stock_allocations_run").on(t.runId),
+]);
+export type AmazonStockAllocation = typeof amazonStockAllocations.$inferSelect;
+
+export const amazonImportRowObservations = pgTable("amazon_import_row_observations", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  runId: uuid("run_id").notNull().references(() => amazonImportRuns.id, { onDelete: "restrict" }),
+  rowKey: text("row_key").notNull(),
+  itemId: uuid("item_id").references(() => marketplaceOrderItems.id, { onDelete: "restrict" }),
+  sourceRow: jsonb("source_row").$type<Record<string, string>>().notNull(),
+  outcome: text("outcome").notNull(),
+  reason: text("reason"),
+  plannedAllocations: jsonb("planned_allocations").notNull().default(sql`'[]'::jsonb`),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  unique("amazon_import_row_observations_unique").on(t.runId, t.rowKey),
+  index("amazon_import_row_observations_run").on(t.runId),
+]);
+export type AmazonImportRowObservation = typeof amazonImportRowObservations.$inferSelect;
 
 // ============= M13.A: Tier Engine =============
 

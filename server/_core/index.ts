@@ -10,6 +10,7 @@ import fattureInCloudRoutes from "../fattureincloud-routes";
 import { cronRoutes } from "../cron-monthly-report";
 import { cronAlertRoutes } from "../cron-alerts";
 import { resendWebhookHandler } from "../resend-webhook-routes";
+import amazonImportRoutes from "../amazon-import-routes";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -36,6 +37,7 @@ async function startServer() {
   // Deve precedere express.json(): Svix firma il body raw byte-per-byte.
   // È intenzionalmente limitato alla route Resend per non intercettare tRPC.
   app.post("/api/webhooks/resend", express.raw({ type: "application/json" }), resendWebhookHandler);
+  app.use("/api/marketplace/amazon", amazonImportRoutes);
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   // Fatture in Cloud OAuth and webhook routes

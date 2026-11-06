@@ -38,6 +38,7 @@ import { retailerSelfServiceRouter } from "./retailer-selfservice-router";
 import { affiliatesRouter } from "./affiliates-router";
 import { affiliatePortalRouter } from "./affiliate-portal-router";
 import { shopifyRouter } from "./shopify-router";
+import { amazonRouter } from "./amazon-router";
 import { reportsRouter } from "./reports-router";
 import { inventoryExportRouter } from "./inventory-export-router";
 import {
@@ -2234,6 +2235,7 @@ export const appRouter = router({
 
   // ============= M8.1 — SHOPIFY MARKETPLACE =============
   shopify: shopifyRouter,
+  amazon: amazonRouter,
   // ============= M9 — REPORTS =============
   reports: reportsRouter,
   // ============= INVENTORY EXPORT =============

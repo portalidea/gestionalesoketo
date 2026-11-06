@@ -15,14 +15,16 @@ function bootOnce(): Promise<void> {
   if (bootPromise) return bootPromise;
   bootPromise = (async () => {
     try {
-      const [trpcAdapter, contextMod, ficRoutesMod, routersMod] = await Promise.all([
+      const [trpcAdapter, contextMod, ficRoutesMod, routersMod, amazonRoutesMod] = await Promise.all([
         import("@trpc/server/adapters/express"),
         import("../server/_core/context"),
         import("../server/fattureincloud-routes"),
         import("../server/routers"),
+        import("../server/amazon-import-routes"),
       ]);
 
       const app = express();
+      app.use("/api/marketplace/amazon", amazonRoutesMod.default);
       app.use(express.json({ limit: "50mb" }));
       app.use(express.urlencoded({ limit: "50mb", extended: true }));
       app.use("/api", ficRoutesMod.default);

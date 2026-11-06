@@ -110,6 +110,7 @@ reset_database() {
     drizzle/migrations/0048_prospect_service_package_bonus.sql
     drizzle/migrations/0049_order_item_fulfillment_exceptions.sql
     drizzle/migrations/0050_order_item_partial_fulfillment_exception.sql
+    drizzle/migrations/0051_amazon_daily_order_import.sql
   )
 
   for file in "${files[@]}"; do

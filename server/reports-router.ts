@@ -679,6 +679,38 @@ const salesRouter = router({
 
 // ============= MARKETPLACE REPORTS =============
 
+// Imported line totals retain the order currency. Resolve gross once per order;
+// never SUM order gross across a one-to-many item join or use SUM(DISTINCT gross).
+const marketplaceOrderGrossSql = `COALESCE(mo."totalGross"::float,
+  CASE WHEN ss."channel" = 'amazon' THEN (
+    SELECT SUM(gross_item."lineTotal"::float) FROM marketplace_order_items gross_item
+    WHERE gross_item."marketplaceOrderId" = mo.id
+  ) END, 0)`;
+
+// Null currencies are legacy EUR orders; no exchange rates or implicit conversion.
+const marketplaceCurrencySql = `COALESCE(NULLIF(UPPER(TRIM(mo."currency")), ''), 'EUR')`;
+const marketplaceEurOrderGrossSql = `CASE WHEN ${marketplaceCurrencySql} = 'EUR' THEN ${marketplaceOrderGrossSql} ELSE 0 END`;
+const marketplaceEurLineTotalSql = `CASE WHEN ${marketplaceCurrencySql} = 'EUR' THEN moi."lineTotal"::float ELSE 0 END`;
+
+type MarketplaceCurrencySummary = {
+  currency: string; ordersCount: number; totalGross: number; avgOrderValue: number; unitsSold: number;
+};
+
+export function summarizeMarketplaceCurrencies(rows: MarketplaceCurrencySummary[]) {
+  const eur = rows.find(row => row.currency === 'EUR');
+  return {
+    currency: 'EUR' as const,
+    ordersCount: rows.reduce((total, row) => total + Number(row.ordersCount), 0),
+    unitsSold: rows.reduce((total, row) => total + Number(row.unitsSold), 0),
+    totalGross: Number(eur?.totalGross ?? 0),
+    avgOrderValue: Number(eur?.avgOrderValue ?? 0),
+    totalsByCurrency: rows.map(row => ({
+      currency: row.currency, gross: Number(row.totalGross),
+      ordersCount: Number(row.ordersCount), avgOrderValue: Number(row.avgOrderValue),
+    })),
+  };
+}
+
 const marketplaceRouter = router({
   getOverview: staffProcedure
     .input(z.object({
@@ -695,39 +727,52 @@ const marketplaceRouter = router({
       const { dateFrom, dateTo } = parseDateRange(input);
       const prev = getPreviousPeriod(dateFrom, dateTo);
 
-      const channelFilter = input.channel ? `AND ss."channel" = '${input.channel}'` : "";
+      const channelFilter = `AND ss."companyId" = '${companyId}'::uuid AND ss."channel" IN ('shopify', 'amazon')`
+        + (input.channel ? ` AND ss."channel" = '${input.channel}'` : "");
 
       // Summary current
-      const [sumCurrent] = await db.execute<{ ordersCount: number; totalGross: number; avgOrderValue: number; unitsSold: number }>(
+      const sumCurrent = await db.execute<MarketplaceCurrencySummary>(
         sql.raw(`
           SELECT
+            ${marketplaceCurrencySql} AS "currency",
             COUNT(DISTINCT mo."id")::int AS "ordersCount",
-            COALESCE(SUM(mo."totalGross"::float), 0) AS "totalGross",
-            CASE WHEN COUNT(DISTINCT mo."id") > 0 THEN COALESCE(SUM(mo."totalGross"::float), 0) / COUNT(DISTINCT mo."id") ELSE 0 END AS "avgOrderValue",
-            COALESCE(SUM(moi."piecesQuantity"), 0)::int AS "unitsSold"
+            COALESCE(SUM(${marketplaceOrderGrossSql}), 0) AS "totalGross",
+            CASE WHEN COUNT(DISTINCT mo."id") > 0 THEN COALESCE(SUM(${marketplaceOrderGrossSql}), 0) / COUNT(DISTINCT mo."id") ELSE 0 END AS "avgOrderValue",
+            COALESCE(SUM(item_totals."piecesQuantity"), 0)::int AS "unitsSold"
           FROM "marketplace_orders" mo
           INNER JOIN "sales_stores" ss ON ss."id" = mo."storeId"
-          LEFT JOIN "marketplace_order_items" moi ON moi."marketplaceOrderId" = mo."id"
+          LEFT JOIN LATERAL (
+            SELECT SUM(moi."piecesQuantity") AS "piecesQuantity"
+            FROM "marketplace_order_items" moi WHERE moi."marketplaceOrderId" = mo."id"
+          ) item_totals ON true
           WHERE mo."orderDate" >= '${dateFrom.toISOString()}'::timestamptz
             AND mo."orderDate" <= '${dateTo.toISOString()}'::timestamptz
             ${channelFilter}
+          GROUP BY ${marketplaceCurrencySql}
+          ORDER BY "currency"
         `)
       );
 
       // Summary previous
-      const [sumPrev] = await db.execute<{ ordersCount: number; totalGross: number; avgOrderValue: number; unitsSold: number }>(
+      const sumPrev = await db.execute<MarketplaceCurrencySummary>(
         sql.raw(`
           SELECT
+            ${marketplaceCurrencySql} AS "currency",
             COUNT(DISTINCT mo."id")::int AS "ordersCount",
-            COALESCE(SUM(mo."totalGross"::float), 0) AS "totalGross",
-            CASE WHEN COUNT(DISTINCT mo."id") > 0 THEN COALESCE(SUM(mo."totalGross"::float), 0) / COUNT(DISTINCT mo."id") ELSE 0 END AS "avgOrderValue",
-            COALESCE(SUM(moi."piecesQuantity"), 0)::int AS "unitsSold"
+            COALESCE(SUM(${marketplaceOrderGrossSql}), 0) AS "totalGross",
+            CASE WHEN COUNT(DISTINCT mo."id") > 0 THEN COALESCE(SUM(${marketplaceOrderGrossSql}), 0) / COUNT(DISTINCT mo."id") ELSE 0 END AS "avgOrderValue",
+            COALESCE(SUM(item_totals."piecesQuantity"), 0)::int AS "unitsSold"
           FROM "marketplace_orders" mo
           INNER JOIN "sales_stores" ss ON ss."id" = mo."storeId"
-          LEFT JOIN "marketplace_order_items" moi ON moi."marketplaceOrderId" = mo."id"
+          LEFT JOIN LATERAL (
+            SELECT SUM(moi."piecesQuantity") AS "piecesQuantity"
+            FROM "marketplace_order_items" moi WHERE moi."marketplaceOrderId" = mo."id"
+          ) item_totals ON true
           WHERE mo."orderDate" >= '${prev.dateFrom.toISOString()}'::timestamptz
             AND mo."orderDate" <= '${prev.dateTo.toISOString()}'::timestamptz
             ${channelFilter}
+          GROUP BY ${marketplaceCurrencySql}
+          ORDER BY "currency"
         `)
       );
 
@@ -737,15 +782,20 @@ const marketplaceRouter = router({
           SELECT
             ss."channel",
             COUNT(DISTINCT mo."id")::int AS "orders",
-            COALESCE(SUM(mo."totalGross"::float), 0) AS "revenue",
-            COALESCE(SUM(moi."piecesQuantity"), 0)::int AS "units"
+            COALESCE(SUM(${marketplaceEurOrderGrossSql}), 0) AS "revenue",
+            COALESCE(SUM(item_totals."piecesQuantity"), 0)::int AS "units"
           FROM "marketplace_orders" mo
           INNER JOIN "sales_stores" ss ON ss."id" = mo."storeId"
-          LEFT JOIN "marketplace_order_items" moi ON moi."marketplaceOrderId" = mo."id"
+          LEFT JOIN LATERAL (
+            SELECT SUM(moi."piecesQuantity") AS "piecesQuantity"
+            FROM "marketplace_order_items" moi WHERE moi."marketplaceOrderId" = mo."id"
+          ) item_totals ON true
           WHERE mo."orderDate" >= '${dateFrom.toISOString()}'::timestamptz
             AND mo."orderDate" <= '${dateTo.toISOString()}'::timestamptz
+            ${channelFilter}
           GROUP BY ss."channel"
           ORDER BY "revenue" DESC
+          LIMIT 2
         `)
       );
 
@@ -755,7 +805,7 @@ const marketplaceRouter = router({
           SELECT
             DATE(mo."orderDate") AS "date",
             ss."channel",
-            COALESCE(SUM(mo."totalGross"::float), 0) AS "gross",
+            COALESCE(SUM(${marketplaceEurOrderGrossSql}), 0) AS "gross",
             COUNT(DISTINCT mo."id")::int AS "orders"
           FROM "marketplace_orders" mo
           INNER JOIN "sales_stores" ss ON ss."id" = mo."storeId"
@@ -764,6 +814,7 @@ const marketplaceRouter = router({
             ${channelFilter}
           GROUP BY DATE(mo."orderDate"), ss."channel"
           ORDER BY DATE(mo."orderDate")
+          LIMIT 2000
         `)
       );
 
@@ -775,7 +826,7 @@ const marketplaceRouter = router({
             moi."channelSku" AS "sku",
             COALESCE(moi."displayName", moi."channelSku") AS "displayName",
             SUM(moi."piecesQuantity")::int AS "units",
-            COALESCE(SUM(moi."lineTotal"::float), 0) AS "revenue"
+            COALESCE(SUM(${marketplaceEurLineTotalSql}), 0) AS "revenue"
           FROM "marketplace_order_items" moi
           INNER JOIN "marketplace_orders" mo ON mo."id" = moi."marketplaceOrderId"
           INNER JOIN "sales_stores" ss ON ss."id" = mo."storeId"
@@ -796,7 +847,7 @@ const marketplaceRouter = router({
             moi."channelSku" AS "sku",
             COALESCE(moi."displayName", moi."channelSku") AS "displayName",
             SUM(moi."piecesQuantity")::int AS "units",
-            COALESCE(SUM(moi."lineTotal"::float), 0) AS "revenue"
+            COALESCE(SUM(${marketplaceEurLineTotalSql}), 0) AS "revenue"
           FROM "marketplace_order_items" moi
           INNER JOIN "marketplace_orders" mo ON mo."id" = moi."marketplaceOrderId"
           INNER JOIN "sales_stores" ss ON ss."id" = mo."storeId"
@@ -824,8 +875,10 @@ const marketplaceRouter = router({
               AND o."companyId" = '${companyId}'
             UNION
             SELECT DATE(mo."orderDate") AS "date" FROM "marketplace_orders" mo
+            INNER JOIN "sales_stores" ss ON ss.id = mo."storeId"
             WHERE mo."orderDate" >= '${dateFrom.toISOString()}'::timestamptz
               AND mo."orderDate" <= '${dateTo.toISOString()}'::timestamptz
+              ${channelFilter}
           ) d
           LEFT JOIN (
             SELECT DATE(o."createdAt") AS "date", SUM(o."totalGross"::float) AS "revenue"
@@ -837,26 +890,35 @@ const marketplaceRouter = router({
             GROUP BY DATE(o."createdAt")
           ) r ON r."date" = d."date"
           LEFT JOIN (
-            SELECT DATE(mo."orderDate") AS "date", SUM(mo."totalGross"::float) AS "revenue"
+            SELECT DATE(mo."orderDate") AS "date", SUM(${marketplaceEurOrderGrossSql}) AS "revenue"
             FROM "marketplace_orders" mo
+            INNER JOIN "sales_stores" ss ON ss.id = mo."storeId"
             WHERE mo."orderDate" >= '${dateFrom.toISOString()}'::timestamptz
               AND mo."orderDate" <= '${dateTo.toISOString()}'::timestamptz
+              ${channelFilter}
             GROUP BY DATE(mo."orderDate")
           ) m ON m."date" = d."date"
           ORDER BY d."date"
+          LIMIT 2000
         `)
       );
 
-      const cur = sumCurrent as any ?? { ordersCount: 0, totalGross: 0, avgOrderValue: 0, unitsSold: 0 };
-      const prv = sumPrev as any ?? { ordersCount: 0, totalGross: 0, avgOrderValue: 0, unitsSold: 0 };
+      const cur = summarizeMarketplaceCurrencies(sumCurrent as unknown as MarketplaceCurrencySummary[]);
+      const prv = summarizeMarketplaceCurrencies(sumPrev as unknown as MarketplaceCurrencySummary[]);
 
       return {
+        financialCurrency: "EUR" as const,
+        totalsByCurrency: cur.totalsByCurrency,
         summary: {
+          currency: cur.currency,
+          totalsByCurrency: cur.totalsByCurrency,
           ordersCount: cur.ordersCount,
           totalGross: cur.totalGross,
           avgOrderValue: cur.avgOrderValue,
           unitsSold: cur.unitsSold,
           previousPeriod: {
+            currency: prv.currency,
+            totalsByCurrency: prv.totalsByCurrency,
             ordersCount: prv.ordersCount,
             totalGross: prv.totalGross,
             avgOrderValue: prv.avgOrderValue,
@@ -886,7 +948,8 @@ const marketplaceRouter = router({
 
       const { dateFrom, dateTo } = parseDateRange(input);
 
-      const channelFilter = input.channel ? `AND ss."channel" = '${input.channel}'` : "";
+      const channelFilter = `AND ss."companyId" = '${ctx.activeCompanyId}'::uuid AND ss."channel" IN ('shopify', 'amazon')`
+        + (input.channel ? ` AND ss."channel" = '${input.channel}'` : "");
 
       const countResult = await db.execute<{ total: number }>(
         sql.raw(`
@@ -907,7 +970,8 @@ const marketplaceRouter = router({
             mo."channelOrderNumber",
             mo."customerName",
             mo."orderDate",
-            mo."totalGross"::float AS "totalGross",
+            ${marketplaceOrderGrossSql} AS "totalGross",
+            ${marketplaceCurrencySql} AS "currency",
             mo."shippingCountry",
             ss."channel",
             ss."name" AS "storeName",
@@ -1031,20 +1095,24 @@ const exportRouter = router({
               mo."channelOrderNumber" AS "numero",
               mo."orderDate" AS "data",
               mo."customerName" AS "cliente",
-              mo."totalGross"::float AS "totale",
+              ${marketplaceOrderGrossSql} AS "totale",
+              ${marketplaceCurrencySql} AS "valuta",
               ss."channel" AS "canale",
               mo."shippingCountry" AS "paese"
             FROM "marketplace_orders" mo
             INNER JOIN "sales_stores" ss ON ss."id" = mo."storeId"
             WHERE mo."orderDate" >= '${dateFrom.toISOString()}'::timestamptz
               AND mo."orderDate" <= '${dateTo.toISOString()}'::timestamptz
+              AND ss."companyId" = '${companyId}'::uuid
+              AND ss."channel" IN ('shopify', 'amazon')
             ORDER BY mo."orderDate" DESC
+            LIMIT 10000
           `)
         );
         const data = rows as unknown as any[];
-        csvContent = "Numero;Data;Cliente;Totale;Canale;Paese\n";
+        csvContent = "Numero;Data;Cliente;Totale;Valuta;Canale;Paese\n";
         for (const r of data) {
-          csvContent += `${escCsv(r.numero ?? "")};${formatDateCSV(r.data)};${escCsv(r.cliente ?? "")};${formatNumIT(r.totale)};${r.canale};${r.paese ?? ""}\n`;
+          csvContent += `${escCsv(r.numero ?? "")};${formatDateCSV(r.data)};${escCsv(r.cliente ?? "")};${formatNumIT(r.totale)};${escCsv(r.valuta)};${r.canale};${r.paese ?? ""}\n`;
         }
         filename = `marketplace_ordini_${formatFilenameDate(dateFrom)}_${formatFilenameDate(dateTo)}.csv`;
       } else {

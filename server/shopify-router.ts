@@ -5,7 +5,7 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, gt, gte, inArray, isNull, like, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, like, lt, or, sql, type SQL } from "drizzle-orm";
 import { router, staffProcedure, staffProcedureLongRunning } from "./_core/trpc";
 import { getDb } from "./db";
 import {
@@ -25,7 +25,6 @@ import { ShopifyClient } from "./services/shopifyService";
 import {
   importShopifyOrder,
   processStockForMarketplaceOrder,
-  retryFailedOrders,
 } from "./services/marketplaceOrderService";
 import {
   syncVariantsFromShopify,
@@ -595,11 +594,14 @@ export const shopifyRouter = router({
           sortOrder: z.enum(["asc", "desc"]).default("desc"),
         }),
       )
-      .query(async ({ input }) => {
+      .query(async ({ input, ctx }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
 
-        const conditions: any[] = [];
+        const conditions: (SQL | undefined)[] = [
+          sql`EXISTS (SELECT 1 FROM sales_stores ss WHERE ss.id = ${marketplaceOrders.storeId}
+            AND ss.channel = 'shopify' AND ss."companyId" = ${ctx.activeCompanyId}::uuid)`,
+        ];
 
         if (input.status) {
           conditions.push(eq(marketplaceOrders.stockProcessingStatus, input.status));
@@ -671,7 +673,9 @@ export const shopifyRouter = router({
         const [order] = await db
           .select()
           .from(marketplaceOrders)
-          .where(eq(marketplaceOrders.id, input.marketplaceOrderId))
+          .where(and(eq(marketplaceOrders.id, input.marketplaceOrderId),
+            sql`EXISTS (SELECT 1 FROM sales_stores ss WHERE ss.id = ${marketplaceOrders.storeId}
+              AND ss.channel = 'shopify' AND ss."companyId" = ${ctx.activeCompanyId}::uuid)`))
           .limit(1);
 
         if (!order)
@@ -727,6 +731,11 @@ export const shopifyRouter = router({
       .mutation(async ({ input, ctx }) => {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+        const [order] = await db.select({ id: marketplaceOrders.id }).from(marketplaceOrders)
+          .where(and(eq(marketplaceOrders.id, input.marketplaceOrderId),
+            sql`EXISTS (SELECT 1 FROM sales_stores ss WHERE ss.id = ${marketplaceOrders.storeId}
+              AND ss.channel = 'shopify' AND ss."companyId" = ${ctx.activeCompanyId}::uuid)`)).limit(1);
+        if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Ordine Shopify non trovato nell’azienda attiva" });
         // Reset error before retry
         await db
           .update(marketplaceOrders)
@@ -743,8 +752,22 @@ export const shopifyRouter = router({
         };
       }),
 
-    retryAllFailed: staffProcedure.mutation(async () => {
-      return await retryFailedOrders();
+    retryAllFailed: staffProcedure.mutation(async ({ ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB non disponibile" });
+      const orders = await db.select({ id: marketplaceOrders.id }).from(marketplaceOrders)
+        .where(and(inArray(marketplaceOrders.stockProcessingStatus, ["failed", "partial"]),
+          lt(marketplaceOrders.stockProcessingAttempts, 5),
+          sql`EXISTS (SELECT 1 FROM sales_stores ss WHERE ss.id = ${marketplaceOrders.storeId}
+            AND ss.channel = 'shopify' AND ss."companyId" = ${ctx.activeCompanyId}::uuid)`))
+        .orderBy(asc(marketplaceOrders.syncedAt)).limit(50);
+      let processed = 0;
+      let failed = 0;
+      for (const order of orders) {
+        const result = await processStockForMarketplaceOrder(order.id, ctx.activeCompanyId);
+        if (result.status === "processed") processed++; else failed++;
+      }
+      return { succeeded: processed, failed, retried: orders.length };
     }),
   }),
 

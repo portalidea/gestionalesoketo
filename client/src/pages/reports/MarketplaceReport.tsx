@@ -38,6 +38,10 @@ import {
   Legend,
 } from "recharts";
 
+function formatCurrency(amount: number, currency: string) {
+  return new Intl.NumberFormat("it-IT", { style: "currency", currency }).format(amount);
+}
+
 export default function MarketplaceReport() {
   const [dateRange, setDateRange] = useState<DateRange>(getDefaultDateRange);
   const [ordersPage, setOrdersPage] = useState(0);
@@ -91,10 +95,28 @@ export default function MarketplaceReport() {
         <div className="text-center py-12 text-muted-foreground">Nessun dato disponibile</div>
       ) : (
         <>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Vendite per valuta</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {(data.totalsByCurrency.length ? data.totalsByCurrency : [{ currency: "EUR", gross: 0 }]).map(total => (
+                <div key={total.currency} className="flex justify-between gap-4 tabular-nums">
+                  <span>{total.currency}</span>
+                  <span>{formatCurrency(total.gross, total.currency)}</span>
+                </div>
+              ))}
+              <p className="mt-3 text-xs text-muted-foreground">
+                Importi separati per valuta, senza conversione valutaria. KPI finanziari, grafici e fatturato varianti sono solo EUR;
+                gli importi UK in GBP sono esclusi dal confronto Retailer vs Marketplace.
+                Ordini e pezzi includono tutti i marketplace e tutte le valute.
+              </p>
+            </CardContent>
+          </Card>
           {/* Stat Cards */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
             <StatCardWithDelta
-              title="Vendite totali"
+              title="Vendite totali EUR"
               value={formatEur(data.summary.totalGross)}
               currentValue={data.summary.totalGross}
               previousValue={data.summary.previousPeriod.totalGross}
@@ -110,7 +132,7 @@ export default function MarketplaceReport() {
               accent="default"
             />
             <StatCardWithDelta
-              title="AOV"
+              title="AOV EUR"
               value={formatEur(data.summary.avgOrderValue)}
               currentValue={data.summary.avgOrderValue}
               previousValue={data.summary.previousPeriod.avgOrderValue}
@@ -138,7 +160,7 @@ export default function MarketplaceReport() {
             {/* Revenue Time Series */}
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Vendite giornaliere</CardTitle>
+                <CardTitle className="text-base">Vendite giornaliere EUR</CardTitle>
               </CardHeader>
               <CardContent>
                 {data.revenueTimeSeries.length === 0 ? (
@@ -195,7 +217,7 @@ export default function MarketplaceReport() {
           {/* Retailer vs Marketplace Area Chart */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Confronto Retailer vs Marketplace</CardTitle>
+              <CardTitle className="text-base">Confronto Retailer vs Marketplace — EUR</CardTitle>
             </CardHeader>
             <CardContent>
               {data.retailerVsMarketplace.length === 0 ? (
@@ -240,7 +262,7 @@ export default function MarketplaceReport() {
           {/* Top Variants Table */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Top varianti per fatturato</CardTitle>
+              <CardTitle className="text-base">Top varianti per fatturato EUR</CardTitle>
             </CardHeader>
             <CardContent>
               {data.topVariantsByRevenue.length === 0 ? (
@@ -308,7 +330,7 @@ export default function MarketplaceReport() {
                             <TableCell>
                               <Badge variant="outline" className="text-xs capitalize">{o.channel}</Badge>
                             </TableCell>
-                            <TableCell className="text-right tabular-nums">{formatEur(o.totalGross)}</TableCell>
+                            <TableCell className="text-right tabular-nums">{formatCurrency(o.totalGross, o.currency)}</TableCell>
                             <TableCell className="text-xs">{o.shippingCountry ?? "-"}</TableCell>
                             <TableCell>
                               <Badge
