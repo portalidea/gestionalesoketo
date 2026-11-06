@@ -1,4 +1,5 @@
 import { gunzipSync } from "node:zlib";
+import { AmazonImportError } from "./amazonImportErrors";
 
 export const AMAZON_REPORT_MAX_BYTES = 8 * 1024 * 1024;
 export const AMAZON_REPORT_MAX_ROWS = 2000;
@@ -51,8 +52,7 @@ export function parseAmazonTimestamp(value: string): Date {
     /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(
       value
     );
-  if (!match)
-    throw new Error(`Amazon timestamp requires explicit timezone: ${value}`);
+  if (!match) throw new AmazonImportError("DOCUMENT_TIMESTAMP_INVALID");
   const [, y, m, d, h, min, s, , zone] = match;
   const calendar = new Date(Date.UTC(+y, +m - 1, +d));
   if (
@@ -64,10 +64,10 @@ export function parseAmazonTimestamp(value: string): Date {
     +s > 59 ||
     (zone !== "Z" && (+zone.slice(1, 3) > 23 || +zone.slice(4) > 59))
   )
-    throw new Error(`Invalid Amazon timestamp: ${value}`);
+    throw new AmazonImportError("DOCUMENT_TIMESTAMP_INVALID");
   const result = new Date(value);
   if (!Number.isFinite(result.getTime()))
-    throw new Error(`Invalid Amazon timestamp: ${value}`);
+    throw new AmazonImportError("DOCUMENT_TIMESTAMP_INVALID");
   return result;
 }
 
@@ -101,11 +101,11 @@ export function parseAmazonMoney(
     clean = clean.replaceAll(",", "");
   else if (/^\d+(?:,\d{1,2})?$/.test(clean)) clean = clean.replace(",", ".");
   if (!/^\d+(?:\.\d{1,2})?$/.test(clean))
-    throw new Error(`Invalid EUR item-price: ${value}`);
+    throw new AmazonImportError("DOCUMENT_PRICE_INVALID");
   const [whole, fraction = ""] = clean.split(".");
   const cents = Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
   if (!Number.isSafeInteger(cents) || cents > 9999999999)
-    throw new Error("Amazon item-price exceeds numeric(10,2)");
+    throw new AmazonImportError("DOCUMENT_PRICE_INVALID");
   return `${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
 }
 
@@ -129,7 +129,7 @@ function cells(text: string, delimiter: string): string[][] {
     rows.push(row);
     row = [];
     if (rows.length > AMAZON_REPORT_MAX_ROWS + 1)
-      throw new Error("Amazon report exceeds 2000 rows");
+      throw new AmazonImportError("DOCUMENT_ROWS_LIMIT");
   };
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
@@ -148,14 +148,23 @@ function cells(text: string, delimiter: string): string[][] {
       if (c === "\r" && text[i + 1] === "\n") i++;
       endRow();
     } else if (c === '"') {
-      if (field || closed) throw new Error("Malformed Amazon quote");
+      if (field || closed)
+        throw new AmazonImportError("DOCUMENT_ROW_INVALID", {
+          rowNumber: rows.length + 1,
+        });
       quoted = true;
     } else {
-      if (closed) throw new Error("Unexpected text after Amazon quoted field");
+      if (closed)
+        throw new AmazonImportError("DOCUMENT_ROW_INVALID", {
+          rowNumber: rows.length + 1,
+        });
       field += c;
     }
   }
-  if (quoted) throw new Error("Unterminated Amazon quoted field");
+  if (quoted)
+    throw new AmazonImportError("DOCUMENT_ROW_INVALID", {
+      rowNumber: rows.length + 1,
+    });
   if (field || row.length || closed) endRow();
   return rows;
 }
@@ -165,30 +174,52 @@ export function parseAmazonReport(
   compression?: string
 ): AmazonReportRow[] {
   if (body.length > AMAZON_REPORT_MAX_BYTES)
-    throw new Error("Amazon report exceeds 8MB");
+    throw new AmazonImportError("DOCUMENT_TOO_LARGE");
   if (compression && compression !== "GZIP" && compression !== "NONE")
-    throw new Error("Unsupported Amazon compression");
-  const decoded =
-    compression === "GZIP"
-      ? gunzipSync(body, { maxOutputLength: AMAZON_REPORT_MAX_BYTES })
-      : body;
+    throw new AmazonImportError("COMPRESSION_UNSUPPORTED");
+  if (!body.length) throw new AmazonImportError("DOCUMENT_EMPTY");
+  const isGzip = body[0] === 0x1f && body[1] === 0x8b;
+  if (isGzip !== (compression === "GZIP"))
+    throw new AmazonImportError("COMPRESSION_MISMATCH");
+  let decoded = body;
+  if (compression === "GZIP") {
+    try {
+      decoded = gunzipSync(body, { maxOutputLength: AMAZON_REPORT_MAX_BYTES });
+    } catch (error) {
+      throw new AmazonImportError(
+        (error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE"
+          ? "DOCUMENT_TOO_LARGE"
+          : "DOCUMENT_GZIP_INVALID"
+      );
+    }
+  }
   if (decoded.length > AMAZON_REPORT_MAX_BYTES)
-    throw new Error("Decoded Amazon report exceeds 8MB");
-  const text = new TextDecoder("utf-8", { fatal: true })
-    .decode(decoded)
-    .replace(/^\uFEFF/, "");
-  if (text.includes("\0")) throw new Error("Amazon report contains NUL");
+    throw new AmazonImportError("DOCUMENT_TOO_LARGE");
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true })
+      .decode(decoded)
+      .replace(/^\uFEFF/, "");
+  } catch {
+    throw new AmazonImportError("DOCUMENT_ENCODING");
+  }
+  if (text.includes("\0")) throw new AmazonImportError("DOCUMENT_NUL");
+  if (!text.trim()) throw new AmazonImportError("DOCUMENT_EMPTY");
   const firstLine = text.split(/\r?\n/, 1)[0];
   const table = cells(text, firstLine.includes("\t") ? "\t" : ",");
   const headers = table.shift();
   if (!headers || new Set(headers).size !== headers.length)
-    throw new Error("Missing or duplicate Amazon headers");
+    throw new AmazonImportError("DOCUMENT_HEADERS_INVALID");
   for (const header of CORE_HEADERS)
     if (!headers.includes(header))
-      throw new Error(`Missing Amazon header ${header}`);
+      throw new AmazonImportError("DOCUMENT_HEADER_MISSING", {
+        missingHeader: header,
+      });
   return table.map((values, index) => {
     if (values.length !== headers.length)
-      throw new Error(`Malformed Amazon row ${index + 2}: column count`);
+      throw new AmazonImportError("DOCUMENT_ROW_INVALID", {
+        rowNumber: index + 2,
+      });
     const source: Record<string, string> = {};
     for (const header of SAFE_HEADERS)
       source[header] = (values[headers.indexOf(header)] ?? "").trim();
@@ -228,7 +259,7 @@ export function parseAmazonReport(
     )
       issues.push("unsupported_currency");
     if (source.sku.length > 255 || source["amazon-order-id"].length > 255)
-      throw new Error("Amazon identifier too long");
+      throw new AmazonImportError("DOCUMENT_IDENTIFIER_INVALID");
     const quantity = validQuantity ? Number(source.quantity) : 0;
     let lineTotal = "0.00";
     try {
