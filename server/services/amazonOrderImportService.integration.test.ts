@@ -580,7 +580,7 @@ describe.skipIf(!enabled)(
         .update(amazonImportConfigs)
         .set({ enabled: false })
         .where(eq(amazonImportConfigs.storeId, f.storeId));
-      await expect(ingest(f, runId, [{}])).rejects.toThrow("disabled");
+      await expect(ingest(f, runId, [{}])).rejects.toMatchObject({ code: "STORE_DISABLED" });
       expect(await processPendingAmazonItems(f.storeId)).toMatchObject({
         attempted: 0,
       });
@@ -588,9 +588,7 @@ describe.skipIf(!enabled)(
         .update(salesStores)
         .set({ companyId: SOKETO_COMPANY_ID })
         .where(eq(salesStores.id, f.storeId));
-      await expect(processPendingAmazonItems(f.storeId)).rejects.toThrow(
-        "E-Keto"
-      );
+      await expect(processPendingAmazonItems(f.storeId)).rejects.toMatchObject({ code: "STORE_SCOPE" });
       const emptyStore = randomUUID();
       await db.insert(salesStores).values({
         id: emptyStore,

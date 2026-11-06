@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import express, {
   Router,
   type NextFunction,
@@ -20,11 +20,123 @@ import {
   processPendingAmazonItems,
 } from "./services/amazonOrderImportService";
 import { buildAmazonImportWindow } from "./services/amazonImportWindow";
+import {
+  AmazonImportError,
+  amazonImportError,
+  type AmazonImportPhase,
+} from "./services/amazonImportErrors";
+import {
+  persistAmazonImportDiagnostic,
+  type AmazonRequestChecks,
+} from "./services/amazonImportDiagnosticService";
 
 const uuid = z.string().uuid();
 const REPORT_TYPE = "GET_FLAT_FILE_ALL_ORDERS_DATA_BY_LAST_UPDATE_GENERAL";
 const router = Router();
 const buckets = new Map<string, { started: number; count: number }>();
+interface RequestContext {
+  requestId: string;
+  phase: AmazonImportPhase;
+  authenticated: boolean;
+  storeId?: string;
+  checks: AmazonRequestChecks;
+}
+function context(res: Response): RequestContext {
+  return res.locals.amazon;
+}
+router.use((req, res, next) => {
+  res.locals.amazon = {
+    requestId: randomUUID(),
+    phase: "authorization",
+    authenticated: false,
+    checks: {
+      reportIdPresent: Boolean(req.get("X-Amazon-Report-Id")),
+      documentIdPresent: Boolean(req.get("X-Amazon-Report-Document-Id")),
+    },
+  } satisfies RequestContext;
+  next();
+});
+function errorPhase(
+  error: AmazonImportError,
+  fallback: AmazonImportPhase
+): AmazonImportPhase {
+  if (error.code.startsWith("DATABASE_")) return "database";
+  if (
+    [
+      "RUN_NOT_FOUND",
+      "EXECUTION_STATE",
+      "REPORT_ID_MISMATCH",
+      "DOCUMENT_REPLAY_MISMATCH",
+    ].includes(error.code)
+  )
+    return "execution";
+  if (error.code === "DOCUMENT_ID_INVALID") return "metadata";
+  if (
+    error.code.startsWith("DOCUMENT_") ||
+    error.code.startsWith("COMPRESSION_")
+  )
+    return "document";
+  return fallback;
+}
+async function failure(
+  req: Request,
+  res: Response,
+  cause: unknown,
+  status?: number
+) {
+  const error = amazonImportError(cause);
+  const ctx = context(res);
+  const phase = errorPhase(error, ctx.phase);
+  let diagnosticPersisted = false;
+  const runId = uuid.safeParse(req.get("X-Amazon-Import-Run-Id"));
+  if (ctx.authenticated && ctx.storeId && runId.success) {
+    try {
+      diagnosticPersisted = await persistAmazonImportDiagnostic({
+        storeId: ctx.storeId,
+        runId: runId.data,
+        diagnostic: {
+          requestId: ctx.requestId,
+          code: error.code,
+          phase,
+          at: new Date().toISOString(),
+          details: error.details,
+          checks: ctx.checks,
+        },
+      });
+    } catch {
+      console.error("[AMAZON_IMPORT]", {
+        errorCode: "DIAGNOSTIC_PERSIST_FAILED",
+        phase: "database",
+        requestId: ctx.requestId,
+      });
+    }
+  }
+  console.error("[AMAZON_IMPORT]", {
+    errorCode: error.code,
+    phase,
+    requestId: ctx.requestId,
+    details: error.details,
+    checks: ctx.checks,
+    diagnosticPersisted,
+  });
+  res
+    .status(
+      status ??
+        (error.code === "INVALID_INPUT" ||
+        (phase === "metadata" && error.code.endsWith("_INVALID"))
+          ? 400
+          : 409)
+    )
+    .json({
+      error: error.message,
+      errorCode: error.code,
+      phase,
+      requestId: ctx.requestId,
+      details: error.details,
+      checks: ctx.checks,
+      diagnosticPersisted,
+    });
+}
 
 export function validAmazonWebhookKey(
   supplied: string | undefined,
@@ -39,13 +151,21 @@ export function validAmazonWebhookKey(
 }
 function authorize(req: Request, res: Response, next: NextFunction) {
   if (!validAmazonWebhookKey(req.get("X-SoKeto-Amazon-Key"))) {
-    res.status(401).json({ error: "Accesso Amazon non autorizzato" });
+    void failure(req, res, new AmazonImportError("UNAUTHORIZED"), 401);
     return;
   }
-  if (!uuid.safeParse(process.env.AMAZON_IMPORT_STORE_ID).success) {
-    res.status(503).json({ error: "Store Amazon non configurato sul server" });
+  context(res).authenticated = true;
+  const configured = uuid.safeParse(process.env.AMAZON_IMPORT_STORE_ID);
+  if (!configured.success) {
+    void failure(
+      req,
+      res,
+      new AmazonImportError("SERVER_STORE_UNCONFIGURED"),
+      503
+    );
     return;
   }
+  context(res).storeId = configured.data;
   const now = Date.now();
   for (const [key, value] of Array.from(buckets.entries()))
     if (now - value.started > 60_000) buckets.delete(key);
@@ -54,17 +174,18 @@ function authorize(req: Request, res: Response, next: NextFunction) {
   bucket.count += 1;
   buckets.set(key, bucket);
   if (bucket.count > 60) {
-    res.status(429).json({ error: "Troppe richieste Amazon" });
+    void failure(req, res, new AmazonImportError("RATE_LIMITED"), 429);
     return;
   }
   next();
 }
 router.use(authorize);
 
-async function scope() {
+async function scope(res: Response) {
+  context(res).phase = "store";
   const db = await getDb();
-  if (!db) throw new Error("Database non disponibile");
-  const storeId = uuid.parse(process.env.AMAZON_IMPORT_STORE_ID);
+  if (!db) throw new AmazonImportError("DATABASE_UNAVAILABLE");
+  const storeId = context(res).storeId!;
   const [config] = await db
     .select({
       config: amazonImportConfigs,
@@ -79,44 +200,41 @@ async function scope() {
     .innerJoin(companies, eq(companies.id, salesStores.companyId))
     .where(eq(amazonImportConfigs.storeId, storeId))
     .limit(1);
+  if (!config) throw new AmazonImportError("STORE_UNCONFIGURED");
   if (
-    !config ||
     config.channel !== "amazon" ||
     !config.storeActive ||
     !config.companyActive ||
-    config.companyId !== EKETO_COMPANY_ID ||
-    !config.config.enabled
+    config.companyId !== EKETO_COMPANY_ID
   ) {
-    throw new Error("Import Amazon disabilitato o company/store non ammessi");
+    throw new AmazonImportError("STORE_SCOPE");
   }
+  if (!config.config.enabled) throw new AmazonImportError("STORE_DISABLED");
   return { db, config: config.config, storeId };
 }
 function runHeader(req: Request) {
-  return uuid.parse(req.get("X-Amazon-Import-Run-Id"));
+  const parsed = uuid.safeParse(req.get("X-Amazon-Import-Run-Id"));
+  if (!parsed.success) throw new AmazonImportError("RUN_ID_INVALID");
+  return parsed.data;
 }
 function reportHeader(req: Request) {
   if (req.get("X-Amazon-Report-Type") !== REPORT_TYPE)
-    throw new Error("Tipo report Amazon non ammesso");
-  return z.string().min(1).max(255).parse(req.get("X-Amazon-Report-Id"));
+    throw new AmazonImportError("REPORT_TYPE_INVALID");
+  const parsed = z
+    .string()
+    .trim()
+    .min(1)
+    .max(255)
+    .safeParse(req.get("X-Amazon-Report-Id"));
+  if (!parsed.success) throw new AmazonImportError("REPORT_ID_INVALID");
+  return parsed.data;
 }
 function endpoint(action: (req: Request, res: Response) => Promise<void>) {
   return async (req: Request, res: Response) => {
     try {
       await action(req, res);
     } catch (error) {
-      // Non loggare body, chiave o URL firmati. Gli errori applicativi restano nel run.
-      console.error(
-        "[AMAZON_IMPORT]",
-        error instanceof z.ZodError ? "invalid_input" : "request_failed"
-      );
-      res
-        .status(error instanceof z.ZodError ? 400 : 409)
-        .json({
-          error:
-            error instanceof z.ZodError
-              ? "Parametri Amazon non validi"
-              : "Richiesta Amazon non completata: verificare configurazione e riepilogo admin",
-        });
+      await failure(req, res, error);
     }
   };
 }
@@ -131,8 +249,10 @@ async function drain(storeId: string, maxPasses = 4) {
 router.get(
   "/import-window",
   endpoint(async (_req, res) => {
-    const { db, config, storeId } = await scope();
+    const { db, storeId } = await scope(res);
+    context(res).phase = "processing";
     await drain(storeId, 1);
+    context(res).phase = "execution";
     const result = await db.transaction(async tx => {
       const [locked] = await tx
         .select()
@@ -185,7 +305,8 @@ router.post(
   "/report-created",
   express.json({ limit: "16kb" }),
   endpoint(async (req, res) => {
-    const { db, storeId } = await scope();
+    const { db, storeId } = await scope(res);
+    context(res).phase = "metadata";
     const runId = runHeader(req);
     const reportId = reportHeader(req);
     z.object({
@@ -194,6 +315,7 @@ router.post(
     })
       .strict()
       .parse(req.body);
+    context(res).phase = "execution";
     await db.transaction(async tx => {
       const [run] = await tx
         .select()
@@ -206,15 +328,24 @@ router.post(
         )
         .for("update")
         .limit(1);
-      if (!run || (run.reportId && run.reportId !== reportId))
-        throw new Error("Report/run non coerente");
+      context(res).checks.runFound = Boolean(run);
+      if (!run) throw new AmazonImportError("RUN_NOT_FOUND");
+      context(res).checks.reportIdMatches =
+        !run.reportId || run.reportId === reportId;
+      if (run.reportId && run.reportId !== reportId)
+        throw new AmazonImportError("REPORT_ID_MISMATCH");
       if (run.status === "requested")
         await tx
           .update(amazonImportRuns)
-          .set({ reportId, status: "pending", updatedAt: new Date() })
+          .set({
+            reportId,
+            status: "pending",
+            error: null,
+            updatedAt: new Date(),
+          })
           .where(eq(amazonImportRuns.id, runId));
       else if (run.reportId !== reportId)
-        throw new Error("Run già concluso senza report");
+        throw new AmazonImportError("EXECUTION_STATE");
     });
     res.json({ ok: true });
   })
@@ -224,20 +355,58 @@ router.post(
   "/report-file",
   express.raw({ type: () => true, limit: "4mb" }),
   endpoint(async (req, res) => {
-    const { storeId } = await scope();
-    if (!Buffer.isBuffer(req.body)) throw new Error("Documento raw richiesto");
+    const { db, storeId } = await scope(res);
+    context(res).phase = "metadata";
     const runId = runHeader(req);
     const reportId = reportHeader(req);
-    const reportDocumentId = z
+    const document = z
       .string()
+      .trim()
       .min(1)
       .max(1024)
-      .parse(req.get("X-Amazon-Report-Document-Id"));
+      .safeParse(req.get("X-Amazon-Report-Document-Id"));
+    if (!document.success) throw new AmazonImportError("DOCUMENT_ID_INVALID");
+    const reportDocumentId = document.data;
     if (req.get("X-Amazon-Processing-Status") !== "DONE")
-      throw new Error("Report non completo");
-    const compression = z
-      .enum(["NONE", "GZIP"])
-      .parse(req.get("X-Amazon-Compression-Algorithm") || "NONE");
+      throw new AmazonImportError("REPORT_NOT_DONE");
+    const compression = req.get("X-Amazon-Compression-Algorithm") || "NONE";
+    if (compression !== "NONE" && compression !== "GZIP")
+      throw new AmazonImportError("COMPRESSION_UNSUPPORTED");
+    context(res).phase = "execution";
+    // Identity is checked before parsing; ingest revalidates state/identity under lock.
+    const [run] = await db
+      .select({
+        reportId: amazonImportRuns.reportId,
+        reportDocumentId: amazonImportRuns.reportDocumentId,
+        status: amazonImportRuns.status,
+        digest: amazonImportRuns.documentSha256,
+      })
+      .from(amazonImportRuns)
+      .where(
+        and(
+          eq(amazonImportRuns.id, runId),
+          eq(amazonImportRuns.storeId, storeId)
+        )
+      )
+      .limit(1);
+    const ctx = context(res);
+    ctx.checks.runFound = Boolean(run);
+    if (!run) throw new AmazonImportError("RUN_NOT_FOUND");
+    ctx.checks.reportIdMatches = !run.reportId || run.reportId === reportId;
+    ctx.checks.documentIdMatches =
+      !run.reportDocumentId || run.reportDocumentId === reportDocumentId;
+    if (!ctx.checks.reportIdMatches)
+      throw new AmazonImportError("REPORT_ID_MISMATCH");
+    if (!ctx.checks.documentIdMatches)
+      throw new AmazonImportError("DOCUMENT_REPLAY_MISMATCH");
+    if (
+      !run.digest &&
+      !["requested", "pending", "processing"].includes(run.status)
+    )
+      throw new AmazonImportError("EXECUTION_STATE");
+    ctx.phase = "document";
+    if (!Buffer.isBuffer(req.body))
+      throw new AmazonImportError("DOCUMENT_BODY_INVALID");
     const result = await ingestAmazonReport({
       storeId,
       runId,
@@ -246,6 +415,7 @@ router.post(
       body: req.body,
       compression,
     });
+    ctx.phase = "processing";
     await drain(storeId);
     res.status(200).json({ ok: true, durable: true, result });
   })
@@ -255,7 +425,8 @@ router.post(
   "/report-status",
   express.json({ limit: "16kb" }),
   endpoint(async (req, res) => {
-    const { db, storeId } = await scope();
+    const { db, storeId } = await scope(res);
+    context(res).phase = "metadata";
     const runId = runHeader(req);
     const reportId = reportHeader(req);
     const { outcome } = z
@@ -270,6 +441,7 @@ router.post(
       })
       .strict()
       .parse(req.body);
+    context(res).phase = "execution";
     await db.transaction(async tx => {
       const [run] = await tx
         .select()
@@ -282,8 +454,11 @@ router.post(
         )
         .for("update")
         .limit(1);
-      if (!run || run.reportId !== reportId)
-        throw new Error("Report/run non coerente");
+      context(res).checks.runFound = Boolean(run);
+      if (!run) throw new AmazonImportError("RUN_NOT_FOUND");
+      context(res).checks.reportIdMatches = run.reportId === reportId;
+      if (run.reportId !== reportId)
+        throw new AmazonImportError("REPORT_ID_MISMATCH");
       if (["completed", "processing"].includes(run.status)) return; // Una notifica in ritardo non riapre un documento acquisito.
       const status =
         outcome === "CANCELLED"
@@ -301,6 +476,20 @@ router.post(
     });
     res.json({ ok: true });
   })
+);
+
+// Body parser failures occur before endpoint(); return safe diagnostics for these too.
+router.use(
+  (error: unknown, req: Request, res: Response, _next: NextFunction) => {
+    context(res).phase = req.path === "/report-file" ? "document" : "metadata";
+    const normalized = amazonImportError(error);
+    void failure(
+      req,
+      res,
+      normalized,
+      normalized.code === "DOCUMENT_TOO_LARGE" ? 413 : 400
+    );
+  }
 );
 
 export default router;

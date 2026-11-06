@@ -31,6 +31,7 @@ import {
   type AmazonProductRequirement,
   type AmazonFefoAllocation,
 } from "./amazonOrderImportHelpers";
+import { AmazonImportError, amazonImportError } from "./amazonImportErrors";
 
 type Database = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -58,11 +59,10 @@ interface Snapshot {
   source: Record<string, string>;
   frozenMapping?: Mapping;
 }
-const message = (error: unknown) =>
-  error instanceof Error ? error.message : String(error);
+const message = (error: unknown) => amazonImportError(error).message;
 async function database(): Promise<Database> {
   const db = await getDb();
-  if (!db) throw new Error("Database not available");
+  if (!db) throw new AmazonImportError("DATABASE_UNAVAILABLE");
   return db;
 }
 
@@ -79,7 +79,7 @@ async function lockConfig(
     .where(eq(amazonImportConfigs.storeId, storeId))
     .limit(1)
     .for("update");
-  if (!config) throw new Error("Amazon import not configured");
+  if (!config) throw new AmazonImportError("STORE_UNCONFIGURED");
   const [scope] = await tx
     .select({
       channel: salesStores.channel,
@@ -99,9 +99,9 @@ async function lockConfig(
     !scope.companyActive ||
     scope.companyId !== EKETO_COMPANY_ID
   )
-    throw new Error("Amazon import requires active E-Keto Amazon store");
+    throw new AmazonImportError("STORE_SCOPE");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(config.purchaseCutoff))
-    throw new Error("Invalid Amazon purchase cutoff");
+    throw new AmazonImportError("INVALID_CUTOFF");
   return config;
 }
 
@@ -144,14 +144,14 @@ async function finishRun(
     )
     .limit(1)
     .for("update");
-  if (!run) throw new Error("Amazon run/store mismatch");
+  if (!run) throw new AmazonImportError("RUN_NOT_FOUND");
   const summary = await runSummary(tx, runId);
   if (!run.documentSha256 || ["fatal", "cancelled"].includes(run.status))
     return { ...summary, completed: false };
   await tx
     .update(amazonImportRuns)
     .set({
-      summary: { ...summary },
+      summary: sql`${amazonImportRuns.summary} || ${JSON.stringify(summary)}::jsonb`,
       status: summary.completed ? "completed" : "processing",
       updatedAt: new Date(),
     })
@@ -262,14 +262,15 @@ export async function ingestAmazonReport(input: {
   body: Buffer;
   compression?: string;
 }): Promise<AmazonImportSummary> {
-  if (!input.reportId.trim() || !input.reportDocumentId.trim())
-    throw new Error("Amazon report identifiers required");
+  if (!input.reportId.trim()) throw new AmazonImportError("REPORT_ID_INVALID");
+  if (!input.reportDocumentId.trim())
+    throw new AmazonImportError("DOCUMENT_ID_INVALID");
   const rows = parseAmazonReport(input.body, input.compression);
   const digest = createHash("sha256").update(input.body).digest("hex");
   const db = await database();
   return db.transaction(async tx => {
     const config = await lockConfig(tx, input.storeId);
-    if (!config.enabled) throw new Error("Amazon import disabled");
+    if (!config.enabled) throw new AmazonImportError("STORE_DISABLED");
     const [run] = await tx
       .select()
       .from(amazonImportRuns)
@@ -281,22 +282,20 @@ export async function ingestAmazonReport(input: {
       )
       .limit(1)
       .for("update");
-    if (!run) throw new Error("Amazon run/store mismatch");
+    if (!run) throw new AmazonImportError("RUN_NOT_FOUND");
+    if (run.reportId && run.reportId !== input.reportId)
+      throw new AmazonImportError("REPORT_ID_MISMATCH");
     if (run.documentSha256) {
       if (
         run.documentSha256 !== digest ||
         run.reportId !== input.reportId ||
         run.reportDocumentId !== input.reportDocumentId
       )
-        throw new Error(
-          "Amazon receipt replay differs from immutable document"
-        );
+        throw new AmazonImportError("DOCUMENT_REPLAY_MISMATCH");
       return runSummary(tx, run.id);
     }
     if (!["requested", "pending", "processing"].includes(run.status))
-      throw new Error("Amazon run does not accept a report");
-    if (run.reportId && run.reportId !== input.reportId)
-      throw new Error("Amazon report/run mismatch");
+      throw new AmazonImportError("EXECUTION_STATE");
     await tx
       .update(amazonImportRuns)
       .set({
