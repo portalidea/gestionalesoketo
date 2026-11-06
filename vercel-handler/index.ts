@@ -15,15 +15,24 @@ function bootOnce(): Promise<void> {
   if (bootPromise) return bootPromise;
   bootPromise = (async () => {
     try {
-      const [trpcAdapter, contextMod, ficRoutesMod, routersMod, amazonRoutesMod] = await Promise.all([
+      const [
+        trpcAdapter,
+        contextMod,
+        ficRoutesMod,
+        routersMod,
+        amazonRoutesMod,
+        amazonCronMod,
+      ] = await Promise.all([
         import("@trpc/server/adapters/express"),
         import("../server/_core/context"),
         import("../server/fattureincloud-routes"),
         import("../server/routers"),
         import("../server/amazon-import-routes"),
+        import("../server/amazon-processing-cron"),
       ]);
 
       const app = express();
+      app.use("/api/cron", amazonCronMod.amazonProcessingCron);
       app.use("/api/marketplace/amazon", amazonRoutesMod.default);
       app.use(express.json({ limit: "50mb" }));
       app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -33,7 +42,7 @@ function bootOnce(): Promise<void> {
         trpcAdapter.createExpressMiddleware({
           router: routersMod.appRouter,
           createContext: contextMod.createContext,
-        }),
+        })
       );
       cachedApp = app;
     } catch (err) {

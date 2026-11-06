@@ -16,9 +16,9 @@ import {
   salesStores,
 } from "../drizzle/schema";
 import {
-  ingestAmazonReport,
-  processPendingAmazonItems,
-} from "./services/amazonOrderImportService";
+  acquireAmazonReportDocument,
+  processAmazonReportBatch,
+} from "./services/amazonReportDocumentService";
 import { buildAmazonImportWindow } from "./services/amazonImportWindow";
 import {
   AmazonImportError,
@@ -238,20 +238,10 @@ function endpoint(action: (req: Request, res: Response) => Promise<void>) {
     }
   };
 }
-// Limite di lavoro per richiesta: i restanti elementi restano nel DB, mai in un job volatile.
-async function drain(storeId: string, maxPasses = 4) {
-  const deadline = Date.now() + 20_000;
-  for (let pass = 0; pass < maxPasses && Date.now() < deadline; pass++) {
-    await processPendingAmazonItems(storeId, 50);
-  }
-}
-
 router.get(
   "/import-window",
   endpoint(async (_req, res) => {
     const { db, storeId } = await scope(res);
-    context(res).phase = "processing";
-    await drain(storeId, 1);
     context(res).phase = "execution";
     const result = await db.transaction(async tx => {
       const [locked] = await tx
@@ -295,6 +285,8 @@ router.get(
     res.json({
       run_id: result.id,
       report_id: result.reportId,
+      document_acquired: Boolean(result.documentSha256),
+      processing_pending: result.status === "processing",
       window_start: result.windowStart.toISOString(),
       window_end: result.windowEnd.toISOString(),
     });
@@ -407,7 +399,7 @@ router.post(
     ctx.phase = "document";
     if (!Buffer.isBuffer(req.body))
       throw new AmazonImportError("DOCUMENT_BODY_INVALID");
-    const result = await ingestAmazonReport({
+    const result = await acquireAmazonReportDocument({
       storeId,
       runId,
       reportId,
@@ -415,9 +407,30 @@ router.post(
       body: req.body,
       compression,
     });
-    ctx.phase = "processing";
-    await drain(storeId);
-    res.status(200).json({ ok: true, durable: true, result });
+    res.status(result.completed ? 200 : 202).json({
+      ok: true,
+      durable: true,
+      result,
+      processing_pending: !result.completed,
+    });
+  })
+);
+
+// Ogni richiesta lavora un lotto breve; la coda vive nel DB, non nel processo.
+router.post(
+  "/process-batch",
+  express.json({ limit: "16kb" }),
+  endpoint(async (req, res) => {
+    const { storeId } = await scope(res);
+    z.object({ schema_version: z.literal(1) })
+      .strict()
+      .parse(req.body);
+    context(res).phase = "processing";
+    const result = await processAmazonReportBatch(storeId, {
+      rowLimit: 5,
+      timeBudgetMs: 12000,
+    });
+    res.json({ ok: true, result });
   })
 );
 

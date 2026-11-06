@@ -26,9 +26,9 @@ const mocks = vi.hoisted(() => ({
   persist: vi.fn(),
 }));
 vi.mock("./db", () => ({ getDb: mocks.db }));
-vi.mock("./services/amazonOrderImportService", () => ({
-  ingestAmazonReport: mocks.ingest,
-  processPendingAmazonItems: mocks.process,
+vi.mock("./services/amazonReportDocumentService", () => ({
+  acquireAmazonReportDocument: mocks.ingest,
+  processAmazonReportBatch: mocks.process,
 }));
 vi.mock("./services/amazonImportDiagnosticService", () => ({
   persistAmazonImportDiagnostic: mocks.persist,
@@ -181,8 +181,17 @@ beforeEach(() => {
   consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
   process.env.AMAZON_IMPORT_WEBHOOK_KEY = secret;
   process.env.AMAZON_IMPORT_STORE_ID = storeId;
-  mocks.ingest.mockResolvedValue({ accepted: 1 });
-  mocks.process.mockResolvedValue({ processed: 0 });
+  mocks.ingest.mockResolvedValue({
+    completed: false,
+    alreadyAcquired: false,
+    totalRows: 1,
+    ingestedRows: 0,
+  });
+  mocks.process.mockResolvedValue({
+    completed: false,
+    hasMore: true,
+    ingestedRows: 5,
+  });
   mocks.persist.mockResolvedValue(true);
   configRecord = {
     config: { storeId, enabled: true },
@@ -285,11 +294,17 @@ describe("webhook Amazon fail-closed", () => {
       "X-Company-Id": "untrusted-company",
       "X-Store-Id": "untrusted-store",
     });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(202);
     expect(await response.json()).toEqual({
       ok: true,
       durable: true,
-      result: { accepted: 1 },
+      result: {
+        completed: false,
+        alreadyAcquired: false,
+        totalRows: 1,
+        ingestedRows: 0,
+      },
+      processing_pending: true,
     });
     expect(mocks.ingest).toHaveBeenCalledTimes(1);
     expect(mocks.ingest).toHaveBeenCalledWith({
@@ -308,9 +323,47 @@ describe("webhook Amazon fail-closed", () => {
       status: expect.anything(),
       digest: expect.anything(),
     });
-    expect(mocks.process).toHaveBeenCalledTimes(4);
+    expect(mocks.process).not.toHaveBeenCalled();
     expect(mocks.persist).not.toHaveBeenCalled();
     expect(consoleError).not.toHaveBeenCalled();
+  });
+  it("un documento completo già acquisito risponde 200 senza worker", async () => {
+    mocks.ingest.mockResolvedValueOnce({
+      completed: true,
+      alreadyAcquired: true,
+    });
+    const response = await postReport();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ processing_pending: false });
+    expect(mocks.process).not.toHaveBeenCalled();
+  });
+  it("solo process-batch chiama il worker con quantità e budget server-side", async () => {
+    const response = await fetch(`${url}/process-batch`, {
+      method: "POST",
+      headers: {
+        "X-SoKeto-Amazon-Key": secret,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ schema_version: 1 }),
+    });
+    expect(response.status).toBe(200);
+    expect(mocks.process).toHaveBeenCalledWith(storeId, {
+      rowLimit: 5,
+      timeBudgetMs: 12000,
+    });
+    expect(mocks.ingest).not.toHaveBeenCalled();
+  });
+  it("process-batch non accetta store, budget o quantità arbitrari", async () => {
+    const response = await fetch(`${url}/process-batch`, {
+      method: "POST",
+      headers: {
+        "X-SoKeto-Amazon-Key": secret,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ schema_version: 1, storeId, rowLimit: 100000 }),
+    });
+    expect((await response.json()).errorCode).toBe("INVALID_INPUT");
+    expect(mocks.process).not.toHaveBeenCalled();
   });
   it("non importa un report non DONE", async () => {
     const data = await expectSafeFailure(

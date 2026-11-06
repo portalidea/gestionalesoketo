@@ -35,20 +35,24 @@ export async function persistAmazonImportDiagnostic(input: {
 }): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new AmazonImportError("DATABASE_UNAVAILABLE");
-  const [record] = await db
-    .update(amazonImportRuns)
-    .set({
-      error: sql`CASE WHEN ${amazonImportRuns.status} = 'completed' THEN ${amazonImportRuns.error} ELSE ${input.diagnostic.code} END`,
-      summary: sql`${amazonImportRuns.summary} || jsonb_build_object('lastDiagnostic', ${JSON.stringify(input.diagnostic)}::jsonb)`,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(amazonImportRuns.id, input.runId),
-        eq(amazonImportRuns.storeId, input.storeId),
-        sql`EXISTS (SELECT 1 FROM sales_stores s WHERE s.id = ${amazonImportRuns.storeId} AND s.channel = 'amazon' AND s."companyId" = ${EKETO_COMPANY_ID}::uuid LIMIT 1)`
+  return db.transaction(async tx => {
+    await tx.execute(sql`SET LOCAL lock_timeout = '1000ms'`);
+    await tx.execute(sql`SET LOCAL statement_timeout = '2000ms'`);
+    const [record] = await tx
+      .update(amazonImportRuns)
+      .set({
+        error: sql`CASE WHEN ${amazonImportRuns.status} = 'completed' THEN ${amazonImportRuns.error} ELSE ${input.diagnostic.code} END`,
+        summary: sql`${amazonImportRuns.summary} || jsonb_build_object('lastDiagnostic', ${JSON.stringify(input.diagnostic)}::jsonb)`,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(amazonImportRuns.id, input.runId),
+          eq(amazonImportRuns.storeId, input.storeId),
+          sql`EXISTS (SELECT 1 FROM sales_stores s WHERE s.id = ${amazonImportRuns.storeId} AND s.channel = 'amazon' AND s."companyId" = ${EKETO_COMPANY_ID}::uuid LIMIT 1)`
+        )
       )
-    )
-    .returning({ id: amazonImportRuns.id });
-  return Boolean(record);
+      .returning({ id: amazonImportRuns.id });
+    return Boolean(record);
+  });
 }

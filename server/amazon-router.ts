@@ -1,10 +1,15 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
-import { adminProcedure, router } from "./_core/trpc";
+import {
+  adminProcedure,
+  router,
+  staffProcedureLongRunning,
+} from "./_core/trpc";
 import { getDb } from "./db";
 import {
   amazonImportConfigs,
+  amazonImportDocuments,
   amazonImportRuns,
   amazonImportRowObservations,
   amazonStockAllocations,
@@ -19,6 +24,12 @@ import { EKETO_COMPANY_ID } from "../shared/const";
 import { uuidSchema } from "../shared/schemas";
 import { getAmazonImportProductSummary } from "./services/amazonImportSummaryService";
 import { safeAmazonRowDiagnostic } from "./services/amazonRowDiagnostic";
+import {
+  AMAZON_IMPORT_ERRORS,
+  amazonImportError,
+  safeAmazonDetails,
+  type AmazonImportErrorCode,
+} from "./services/amazonImportErrors";
 
 type Database = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 const dateInput = z
@@ -120,6 +131,61 @@ function jsonObject(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? Object.fromEntries(Object.entries(value))
     : {};
+}
+/** Only closed metadata leaves the admin API; historical summary/error JSON may
+ * contain raw provider text. Never return it or the durable document payload. */
+export function safeAmazonRunError(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "string" && Object.hasOwn(AMAZON_IMPORT_ERRORS, value))
+    return AMAZON_IMPORT_ERRORS[value as AmazonImportErrorCode];
+  const outcomes: Record<string, string> = {
+    CANCELLED: "Report Amazon cancellato",
+    FATAL: "Report Amazon non disponibile",
+    POLLING_EXHAUSTED: "Report Amazon ancora in preparazione",
+    UNEXPECTED_STATUS: "Stato report Amazon da verificare",
+  };
+  return typeof value === "string" && Object.hasOwn(outcomes, value)
+    ? outcomes[value]
+    : AMAZON_IMPORT_ERRORS.INTERNAL_ERROR;
+}
+export function safeAmazonRunSummary(value: unknown) {
+  const source = jsonObject(value);
+  const result: Record<string, unknown> = {};
+  for (const key of [
+    "rows",
+    "pending",
+    "reviewRequired",
+    "totalRows",
+    "ingestedRows",
+    "processingMs",
+  ]) {
+    const count = source[key];
+    if (typeof count === "number" && Number.isSafeInteger(count) && count >= 0)
+      result[key] = count;
+  }
+  if (typeof source.completed === "boolean")
+    result.completed = source.completed;
+  const outcomes = jsonObject(source.outcomes);
+  result.outcomes = Object.fromEntries(
+    stockStatus.options.flatMap(key => {
+      const count = outcomes[key];
+      return typeof count === "number" &&
+        Number.isSafeInteger(count) &&
+        count >= 0
+        ? [[key, count]]
+        : [];
+    })
+  );
+  const diagnostic = jsonObject(source.lastDiagnostic);
+  if (
+    typeof diagnostic.code === "string" &&
+    Object.hasOwn(AMAZON_IMPORT_ERRORS, diagnostic.code)
+  )
+    result.lastDiagnostic = {
+      code: diagnostic.code,
+      details: safeAmazonDetails(jsonObject(diagnostic.details)),
+    };
+  return result;
 }
 function sourceText(value: unknown, ...keys: string[]): string | null {
   const row = jsonObject(value);
@@ -463,13 +529,58 @@ export const amazonRouter = router({
             summary: amazonImportRuns.summary,
             error: amazonImportRuns.error,
             createdAt: amazonImportRuns.createdAt,
+            documentRunId: amazonImportDocuments.runId,
+            totalRows: amazonImportDocuments.totalRows,
+            ingestedRows: amazonImportDocuments.ingestedRows,
+            acquiredAt: amazonImportDocuments.acquiredAt,
+            ingestStartedAt: amazonImportDocuments.ingestStartedAt,
+            ingestCompletedAt: amazonImportDocuments.ingestCompletedAt,
+            processingCompletedAt: amazonImportDocuments.processingCompletedAt,
+            processingMs: amazonImportDocuments.processingMs,
+            lastError: amazonImportDocuments.lastError,
           })
           .from(amazonImportRuns)
+          .leftJoin(
+            amazonImportDocuments,
+            eq(amazonImportDocuments.runId, amazonImportRuns.id)
+          )
           .where(filter)
           .orderBy(desc(amazonImportRuns.createdAt), desc(amazonImportRuns.id))
           .limit(input.limit)
           .offset(input.offset);
-        return { items, total: count?.total ?? 0 };
+        return {
+          items: items.map(
+            ({
+              documentRunId,
+              totalRows,
+              ingestedRows,
+              acquiredAt,
+              ingestStartedAt,
+              ingestCompletedAt,
+              processingCompletedAt,
+              processingMs,
+              lastError,
+              ...run
+            }) => ({
+              ...run,
+              summary: safeAmazonRunSummary(run.summary),
+              error: safeAmazonRunError(run.error),
+              document: documentRunId
+                ? {
+                    totalRows,
+                    ingestedRows,
+                    acquiredAt,
+                    ingestStartedAt,
+                    ingestCompletedAt,
+                    processingCompletedAt,
+                    processingMs,
+                    lastError: safeAmazonRunError(lastError),
+                  }
+                : null,
+            })
+          ),
+          total: count?.total ?? 0,
+        };
       }),
     observations: adminProcedure
       .input(
@@ -783,10 +894,96 @@ export const amazonRouter = router({
         });
         return {
           message:
-            "Riga rimessa in coda. Nessuno stock scaricato: usa Processa coda dopo la verifica della mappatura e della disponibilità.",
+            "Riga rimessa in coda. Nessuno stock scaricato: elabora il prossimo lotto dopo la verifica della mappatura e della disponibilità.",
         };
       }),
   }),
+  // The ordinary tRPC timeout is 8s; this explicitly started worker has a 12s
+  // cooperative budget. Staff auth/company context remain enforced, no viewers.
+  processBatch: staffProcedureLongRunning
+    .use(({ ctx, next }) => {
+      if (!ctx.user || !["admin", "operator"].includes(ctx.user.role))
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Elaborazione riservata allo staff con permessi di scrittura",
+        });
+      return next();
+    })
+    .input(
+      z
+        .object({
+          storeId: uuidSchema,
+          confirmRealStock: z.boolean().default(false),
+        })
+        .strict()
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await database();
+      const store = await authorizedStore(
+        db,
+        ctx.activeCompanyId,
+        input.storeId
+      );
+      if (!store.enabled)
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Abilita l’import Amazon prima di elaborare i lotti",
+        });
+      if (!input.confirmRealStock)
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Conferma l’elaborazione e il possibile scarico reale secondo la configurazione server",
+        });
+      try {
+        const { processAmazonReportBatch } = await import(
+          "./services/amazonReportDocumentService"
+        );
+        const result = await processAmazonReportBatch(input.storeId, {
+          rowLimit: 5,
+          timeBudgetMs: 12000,
+        });
+        return {
+          result: {
+            runId: result.runId,
+            totalRows: result.totalRows,
+            ingestedRows: result.ingestedRows,
+            ingestedThisBatch: result.ingestedThisBatch,
+            completed: result.completed,
+            hasMore: result.hasMore,
+            disabled: result.disabled,
+            acquiredAt: result.acquiredAt,
+            ingestStartedAt: result.ingestStartedAt,
+            ingestCompletedAt: result.ingestCompletedAt,
+            processingCompletedAt: result.processingCompletedAt,
+            processingMs: result.processingMs,
+            lastError: safeAmazonRunError(result.lastError),
+            worker: {
+              attempted: result.worker.attempted,
+              processed: result.worker.processed,
+              dryRun: result.worker.dryRun,
+              reviewRequired: result.worker.reviewRequired,
+              skipped: result.worker.skipped,
+              errors: result.worker.errors.map(error => ({
+                itemId: uuidSchema.safeParse(error.itemId).success
+                  ? error.itemId
+                  : null,
+                message: safeAmazonRunError(error.message),
+              })),
+            },
+          },
+          message:
+            "Lotto elaborato. Verifica avanzamento e registro stock; la modalità prova non è stata modificata.",
+        };
+      } catch (error) {
+        const safe = amazonImportError(error);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `${safe.code}: ${safe.message}`,
+        });
+      }
+    }),
   processQueue: adminProcedure
     .input(
       z.object({

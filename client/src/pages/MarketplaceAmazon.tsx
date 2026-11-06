@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
@@ -71,6 +71,50 @@ const formatDate = (value: string | Date | null | undefined) =>
   value
     ? new Date(value).toLocaleString("it-IT", { timeZone: "Europe/Rome" })
     : "—";
+type RunProgress = {
+  status: string;
+  dryRun: boolean;
+  document: {
+    totalRows: number | null;
+    ingestedRows: number | null;
+    acquiredAt: string | Date | null;
+    ingestStartedAt: string | Date | null;
+    ingestCompletedAt: string | Date | null;
+    processingCompletedAt: string | Date | null;
+    processingMs: number | null;
+    lastError: string | null;
+  } | null;
+};
+export const isAmazonRunActive = (run: { status: string }) =>
+  ["requested", "pending", "processing"].includes(run.status);
+export function amazonDocumentStage(run: RunProgress): string {
+  const document = run.document;
+  if (!document) {
+    if (["requested", "pending"].includes(run.status))
+      return "In attesa del documento Amazon";
+    return "Import legacy: documento persistito non disponibile";
+  }
+  if (run.status === "fatal" || document.lastError)
+    return "Elaborazione interrotta: verificare l’errore";
+  if (document.processingCompletedAt)
+    return document.totalRows === 0
+      ? "Completato: documento senza righe"
+      : "Elaborazione completata";
+  if (!document.ingestStartedAt && !document.ingestCompletedAt)
+    return "Documento ricevuto / in coda";
+  if (!document.ingestCompletedAt)
+    return `Ingestione ${document.ingestedRows ?? 0}/${document.totalRows ?? "—"}`;
+  return run.dryRun
+    ? "Elaborazione stock in prova (dry-run): nessuno scarico"
+    : "Elaborazione stock reale";
+}
+export function amazonProcessingDuration(
+  value: number | null | undefined
+): string {
+  return value !== null && value !== undefined && Number.isFinite(value)
+    ? `${new Intl.NumberFormat("it-IT", { maximumFractionDigits: 2 }).format(value / 1000)} s`
+    : "—";
+}
 function jsonText(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
@@ -125,7 +169,7 @@ export default function MarketplaceAmazon() {
   const [enabled, setEnabled] = useState(false);
   const [dryRun, setDryRun] = useState(true);
   const [confirmation, setConfirmation] = useState<
-    "save" | "process" | "toggle" | null
+    "save" | "process" | "processLoop" | "toggle" | null
   >(null);
   const [dateFrom, setDateFrom] = useState(
     () =>
@@ -142,6 +186,26 @@ export default function MarketplaceAmazon() {
   const [runId, setRunId] = useState("");
   const [status, setStatus] = useState<StockStatus | "all">("all");
   const [requeueItem, setRequeueItem] = useState<string | null>(null);
+  const [batchLoopActive, setBatchLoopActive] = useState(false);
+  const batchGeneration = useRef(0);
+  const batchInFlight = useRef(false);
+  const batchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function cancelScheduledBatch() {
+    batchGeneration.current += 1;
+    if (batchTimer.current !== null) clearTimeout(batchTimer.current);
+    batchTimer.current = null;
+  }
+  function pauseBatchLoop() {
+    cancelScheduledBatch();
+    setBatchLoopActive(false);
+  }
+  // A store change or unmount cancels only future calls. The already submitted
+  // transaction may finish safely; do not pretend that pausing rolls it back.
+  useEffect(() => {
+    setBatchLoopActive(false);
+    setConfirmation(null);
+    return cancelScheduledBatch;
+  }, [storeId]);
 
   useEffect(() => {
     if (!storeId && config.data?.stores[0])
@@ -160,10 +224,18 @@ export default function MarketplaceAmazon() {
   const period = { storeId, dateFrom, dateTo };
   const summary = trpc.amazon.summary.useQuery(period, {
     enabled: periodValid,
+    refetchInterval: query =>
+      query.state.data?.daily.some(isAmazonRunActive) ? 5_000 : false,
+    refetchIntervalInBackground: false,
   });
   const runs = trpc.amazon.runs.list.useQuery(
     { ...period, limit: PAGE_SIZE, offset: runOffset },
-    { enabled: periodValid }
+    {
+      enabled: periodValid,
+      refetchInterval: query =>
+        query.state.data?.items.some(isAmazonRunActive) ? 5_000 : false,
+      refetchIntervalInBackground: false,
+    }
   );
   const orders = trpc.amazon.orders.list.useQuery(
     {
@@ -190,16 +262,63 @@ export default function MarketplaceAmazon() {
     },
     onError: error => toast.error(error.message),
   });
-  const processQueue = trpc.amazon.processQueue.useMutation({
-    onSuccess: data => {
-      toast.success(data.message);
+  const processBatch = trpc.amazon.processBatch.useMutation({ retry: false });
+  async function executeBatch(repeat: boolean, generation: number) {
+    if (batchInFlight.current || generation !== batchGeneration.current) return;
+    batchInFlight.current = true;
+    try {
+      const data = await processBatch.mutateAsync({
+        storeId,
+        confirmRealStock: true,
+      });
+      if (generation !== batchGeneration.current) return;
       refresh();
-    },
-    onError: error => {
-      toast.error(error.message);
+      if (
+        data.result.disabled ||
+        data.result.lastError ||
+        data.result.worker.errors.length
+      ) {
+        pauseBatchLoop();
+        toast.error(
+          data.result.disabled
+            ? "Import disabilitato: elaborazione a lotti in pausa."
+            : "Errore nel lotto: elaborazione in pausa. Verifica la cronologia prima di riprovare."
+        );
+        return;
+      }
+      if (repeat && data.result.hasMore) {
+        // Exactly one request at a time, with a gap between bounded lots.
+        batchTimer.current = setTimeout(() => {
+          batchTimer.current = null;
+          void executeBatch(true, generation);
+        }, 1_000);
+      } else {
+        setBatchLoopActive(false);
+        toast.success(
+          data.result.hasMore
+            ? "Lotto completato. Restano righe: elabora il prossimo lotto o avvia i lotti sequenziali."
+            : "Elaborazione terminata: nessun altro lavoro disponibile nello store."
+        );
+      }
+    } catch (error) {
+      if (generation !== batchGeneration.current) return;
+      pauseBatchLoop();
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Elaborazione interrotta: aggiorna gli esiti prima di riprovare"
+      );
       refresh();
-    },
-  });
+    } finally {
+      batchInFlight.current = false;
+    }
+  }
+  function startBatch(repeat: boolean) {
+    if (batchInFlight.current) return;
+    cancelScheduledBatch();
+    setBatchLoopActive(repeat);
+    void executeBatch(repeat, batchGeneration.current);
+  }
   const requeue = trpc.amazon.orders.requeueReview.useMutation({
     onSuccess: data => {
       toast.success(data.message);
@@ -309,6 +428,12 @@ export default function MarketplaceAmazon() {
             <p>
               La modalità prova resta attiva finché un admin la disattiva
               manualmente: nessuna scadenza automatica.
+            </p>
+            <p>
+              Upload HTTP 202 = documento ricevuto e salvato in modo durevole,
+              non import completato. L’ingestione delle righe e l’elaborazione
+              stock avvengono in lotti separati. Aprire questa pagina non avvia
+              alcun worker: l’aggiornamento ogni 5 secondi legge solo gli stati.
             </p>
           </CardContent>
         </Card>
@@ -469,13 +594,45 @@ export default function MarketplaceAmazon() {
                     </Badge>
                   </div>
                   <Button
-                    disabled={!store.enabled || processQueue.isPending}
+                    disabled={
+                      !store.enabled ||
+                      processBatch.isPending ||
+                      batchLoopActive
+                    }
                     onClick={() => setConfirmation("process")}
                   >
-                    {processQueue.isPending
-                      ? "Elaborazione…"
-                      : "Processa coda (max 50 righe)"}
+                    {processBatch.isPending
+                      ? "Elaborazione lotto…"
+                      : "Elabora prossimo lotto"}
                   </Button>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      disabled={
+                        !store.enabled ||
+                        processBatch.isPending ||
+                        batchLoopActive
+                      }
+                      onClick={() => setConfirmation("processLoop")}
+                    >
+                      Avvia elaborazione a lotti
+                    </Button>
+                    {batchLoopActive && (
+                      <Button variant="outline" onClick={pauseBatchLoop}>
+                        Pausa
+                      </Button>
+                    )}
+                  </div>
+                  <p
+                    className="max-w-md text-xs text-muted-foreground"
+                    role="status"
+                  >
+                    {batchLoopActive
+                      ? "Lotti sequenziali attivi: massimo 5 righe per chiamata, budget 12 secondi. Mantieni aperta la pagina."
+                      : "Avvio solo manuale; massimo 5 righe per chiamata. Il worker elabora prima i documenti, poi la coda stock."}{" "}
+                    Pausa o cambio store fermano le chiamate successive, non il
+                    lotto già inviato.
+                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -694,6 +851,12 @@ export default function MarketplaceAmazon() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Cronologia import</CardTitle>
+                <CardDescription>
+                  Acquisizione, ingestione e stock sono fasi separate. Durata =
+                  tempo cumulativo dei lotti worker, esclusi upload e attesa in
+                  coda. Import legacy senza documento non equivalgono a report
+                  vuoti.
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <Table>
@@ -702,6 +865,8 @@ export default function MarketplaceAmazon() {
                       <TableHead>Creato</TableHead>
                       <TableHead>Finestra</TableHead>
                       <TableHead>Esito</TableHead>
+                      <TableHead>Documento / avanzamento</TableHead>
+                      <TableHead>Durata worker</TableHead>
                       <TableHead>Riepilogo</TableHead>
                       <TableHead>Righe</TableHead>
                     </TableRow>
@@ -729,6 +894,56 @@ export default function MarketplaceAmazon() {
                           )}
                         </TableCell>
                         <TableCell>
+                          <p className="font-medium" role="status">
+                            {amazonDocumentStage({
+                              ...entry,
+                              dryRun: store.dryRun,
+                            })}
+                          </p>
+                          {entry.document && (
+                            <div className="space-y-1 text-xs text-muted-foreground mt-1">
+                              <p>
+                                Ricevuto:{" "}
+                                {formatDate(entry.document.acquiredAt)}
+                              </p>
+                              <p>
+                                Ingestione {entry.document.ingestedRows ?? 0}/
+                                {entry.document.totalRows ?? "—"}
+                              </p>
+                              <p>
+                                Inizio ingestione:{" "}
+                                {formatDate(entry.document.ingestStartedAt)}
+                              </p>
+                              <p>
+                                Fine ingestione:{" "}
+                                {formatDate(entry.document.ingestCompletedAt)}
+                              </p>
+                              <p>
+                                Fine elaborazione:{" "}
+                                {formatDate(
+                                  entry.document.processingCompletedAt
+                                )}
+                              </p>
+                              {entry.document.lastError && (
+                                <p className="text-destructive">
+                                  {entry.document.lastError}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {amazonProcessingDuration(
+                            entry.document?.processingMs
+                          )}
+                          {entry.document &&
+                            !entry.document.processingCompletedAt && (
+                              <p className="text-xs text-muted-foreground">
+                                Parziale / in corso
+                              </p>
+                            )}
+                        </TableCell>
+                        <TableCell>
                           <details>
                             <summary className="cursor-pointer">
                               Dettagli
@@ -754,8 +969,9 @@ export default function MarketplaceAmazon() {
                     ))}
                     {!runs.data?.items.length && (
                       <TableRow>
-                        <TableCell colSpan={5}>
-                          Nessun import nel periodo.
+                        <TableCell colSpan={7}>
+                          Nessun import nel periodo: nessun documento ricevuto
+                          visibile.
                         </TableCell>
                       </TableRow>
                     )}
@@ -1047,8 +1263,12 @@ export default function MarketplaceAmazon() {
                 storici idonei saranno eleggibili allo scarico reale, anche se
                 elaborati in precedenza senza movimenti. Non c’è una scadenza
                 automatica della prova. Il salvataggio non processa la coda;
-                Processa coda può creare movimenti reali. Cancellazioni e resi
-                non vengono stornati automaticamente.
+                ogni lotto può creare movimenti reali. “Elabora prossimo lotto”
+                esegue una sola chiamata; “Avvia elaborazione a lotti” ripete
+                chiamate sequenziali finché c’è lavoro, la pagina resta aperta e
+                non premi Pausa. Nessuna modalità viene cambiata
+                automaticamente. Cancellazioni e resi non vengono stornati
+                automaticamente.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -1057,12 +1277,8 @@ export default function MarketplaceAmazon() {
                 onClick={() => {
                   if (confirmation === "toggle") setDryRun(false);
                   if (confirmation === "save") save(true);
-                  if (confirmation === "process")
-                    processQueue.mutate({
-                      storeId,
-                      limit: 50,
-                      confirmRealStock: true,
-                    });
+                  if (confirmation === "process") startBatch(false);
+                  if (confirmation === "processLoop") startBatch(true);
                   setConfirmation(null);
                 }}
               >

@@ -35,6 +35,20 @@ const reportHeaders = (id: string, reportId: string) => ({
   "Content-Type": "application/json",
 });
 
+async function finishBatches() {
+  for (let i = 0; i < 50; i++) {
+    const response = await fetch(`${base}/process-batch`, {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ schema_version: 1 }),
+    });
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    if (!data.result.hasMore) return;
+  }
+  throw new Error("Test batch queue did not converge");
+}
+
 describe.skipIf(!enabled)(
   "checkpoint Make Amazon — HTTP e PostgreSQL isolato",
   () => {
@@ -150,7 +164,9 @@ describe.skipIf(!enabled)(
           headers: fileHeaders,
           body: `${columns.join("\t")}\n`,
         });
-      expect((await upload()).status).toBe(200);
+      expect((await upload()).status).toBe(202);
+      expect((await upload()).status).toBe(202);
+      await finishBatches();
       expect((await upload()).status).toBe(200);
       [config] = await db
         .select()
@@ -304,7 +320,8 @@ describe.skipIf(!enabled)(
       ];
       const correct = `${columns.join("\t")}\n`;
       const uploads = await Promise.all([upload(correct), upload(correct)]);
-      expect(uploads.map(result => result.status)).toEqual([200, 200]);
+      expect(uploads.map(result => result.status)).toEqual([202, 202]);
+      await finishBatches();
       [run] = await db
         .select()
         .from(amazonImportRuns)
@@ -408,7 +425,21 @@ describe.skipIf(!enabled)(
           body,
         });
       const response = await upload();
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(202);
+      const beforeRows = await db
+        .select()
+        .from(amazonImportRowObservations)
+        .where(eq(amazonImportRowObservations.runId, id));
+      expect(beforeRows).toHaveLength(0);
+      const [beforeConfig] = await db
+        .select()
+        .from(amazonImportConfigs)
+        .where(eq(amazonImportConfigs.storeId, storeId))
+        .limit(1);
+      expect(beforeConfig.checkpointAt?.toISOString()).not.toBe(
+        window.window_end
+      );
+      await finishBatches();
       const accepted = await response.json();
       expect(accepted.ok).toBe(true);
       const [run] = await db
