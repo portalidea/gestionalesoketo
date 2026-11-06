@@ -39,26 +39,7 @@
                     "x": 0,
                     "y": 0
                 }
-            },
-            "onerror": [
-                {
-                    "id": 20,
-                    "module": "builtin:Break",
-                    "version": 1,
-                    "parameters": {},
-                    "mapper": {
-                        "retry": true,
-                        "count": "3",
-                        "interval": "1"
-                    },
-                    "metadata": {
-                        "designer": {
-                            "x": 0,
-                            "y": 150
-                        }
-                    }
-                }
-            ]
+            }
         },
         {
             "id": 2,
@@ -111,25 +92,6 @@
                                     }
                                 }
                             },
-                            "onerror": [
-                                {
-                                    "id": 21,
-                                    "module": "builtin:Break",
-                                    "version": 1,
-                                    "parameters": {},
-                                    "mapper": {
-                                        "retry": false,
-                                        "count": "1",
-                                        "interval": "1"
-                                    },
-                                    "metadata": {
-                                        "designer": {
-                                            "x": 200,
-                                            "y": 150
-                                        }
-                                    }
-                                }
-                            ],
                             "filter": {
                                 "name": "Nessun report pending: crea una sola richiesta",
                                 "conditions": [
@@ -207,26 +169,7 @@
                                     "x": 400,
                                     "y": -200
                                 }
-                            },
-                            "onerror": [
-                                {
-                                    "id": 22,
-                                    "module": "builtin:Break",
-                                    "version": 1,
-                                    "parameters": {},
-                                    "mapper": {
-                                        "retry": true,
-                                        "count": "3",
-                                        "interval": "1"
-                                    },
-                                    "metadata": {
-                                        "designer": {
-                                            "x": 400,
-                                            "y": -50
-                                        }
-                                    }
-                                }
-                            ]
+                            }
                         },
                         {
                             "id": 23,
@@ -272,26 +215,7 @@
                                         }
                                     }
                                 }
-                            },
-                            "onerror": [
-                                {
-                                    "id": 26,
-                                    "module": "builtin:Break",
-                                    "version": 1,
-                                    "parameters": {},
-                                    "mapper": {
-                                        "retry": true,
-                                        "count": "2",
-                                        "interval": "1"
-                                    },
-                                    "metadata": {
-                                        "designer": {
-                                            "x": 800,
-                                            "y": -50
-                                        }
-                                    }
-                                }
-                            ]
+                            }
                         },
                         {
                             "id": 25,
@@ -338,25 +262,6 @@
                                                     }
                                                 }
                                             },
-                                            "onerror": [
-                                                {
-                                                    "id": 28,
-                                                    "module": "builtin:Break",
-                                                    "version": 1,
-                                                    "parameters": {},
-                                                    "mapper": {
-                                                        "retry": true,
-                                                        "count": "2",
-                                                        "interval": "1"
-                                                    },
-                                                    "metadata": {
-                                                        "designer": {
-                                                            "x": 1200,
-                                                            "y": -200
-                                                        }
-                                                    }
-                                                }
-                                            ],
                                             "filter": {
                                                 "name": "DONE: scarica il documento originale una volta",
                                                 "conditions": [
@@ -389,26 +294,7 @@
                                                     "x": 1400,
                                                     "y": -350
                                                 }
-                                            },
-                                            "onerror": [
-                                                {
-                                                    "id": 30,
-                                                    "module": "builtin:Break",
-                                                    "version": 1,
-                                                    "parameters": {},
-                                                    "mapper": {
-                                                        "retry": true,
-                                                        "count": "2",
-                                                        "interval": "1"
-                                                    },
-                                                    "metadata": {
-                                                        "designer": {
-                                                            "x": 1400,
-                                                            "y": -200
-                                                        }
-                                                    }
-                                                }
-                                            ]
+                                            }
                                         },
                                         {
                                             "id": 31,
@@ -494,26 +380,7 @@
                                                     "x": 1600,
                                                     "y": -350
                                                 }
-                                            },
-                                            "onerror": [
-                                                {
-                                                    "id": 32,
-                                                    "module": "builtin:Break",
-                                                    "version": 1,
-                                                    "parameters": {},
-                                                    "mapper": {
-                                                        "retry": true,
-                                                        "count": "3",
-                                                        "interval": "1"
-                                                    },
-                                                    "metadata": {
-                                                        "designer": {
-                                                            "x": 1600,
-                                                            "y": -200
-                                                        }
-                                                    }
-                                                }
-                                            ]
+                                            }
                                         }
                                     ]
                                 },
@@ -592,25 +459,6 @@
                                                     "y": -150
                                                 }
                                             },
-                                            "onerror": [
-                                                {
-                                                    "id": 34,
-                                                    "module": "builtin:Break",
-                                                    "version": 1,
-                                                    "parameters": {},
-                                                    "mapper": {
-                                                        "retry": true,
-                                                        "count": "3",
-                                                        "interval": "1"
-                                                    },
-                                                    "metadata": {
-                                                        "designer": {
-                                                            "x": 1200,
-                                                            "y": 0
-                                                        }
-                                                    }
-                                                }
-                                            ],
                                             "filter": {
                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
                                                 "conditions": [
@@ -701,25 +549,6 @@
                                                     "y": 50
                                                 }
                                             },
-                                            "onerror": [
-                                                {
-                                                    "id": 36,
-                                                    "module": "builtin:Break",
-                                                    "version": 1,
-                                                    "parameters": {},
-                                                    "mapper": {
-                                                        "retry": true,
-                                                        "count": "3",
-                                                        "interval": "1"
-                                                    },
-                                                    "metadata": {
-                                                        "designer": {
-                                                            "x": 1200,
-                                                            "y": 200
-                                                        }
-                                                    }
-                                                }
-                                            ],
                                             "filter": {
                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
                                                 "conditions": [
@@ -793,26 +622,7 @@
                                                         }
                                                     }
                                                 }
-                                            },
-                                            "onerror": [
-                                                {
-                                                    "id": 42,
-                                                    "module": "builtin:Break",
-                                                    "version": 1,
-                                                    "parameters": {},
-                                                    "mapper": {
-                                                        "retry": true,
-                                                        "count": "2",
-                                                        "interval": "1"
-                                                    },
-                                                    "metadata": {
-                                                        "designer": {
-                                                            "x": 1400,
-                                                            "y": 400
-                                                        }
-                                                    }
-                                                }
-                                            ]
+                                            }
                                         },
                                         {
                                             "id": 41,
@@ -859,25 +669,6 @@
                                                                     }
                                                                 }
                                                             },
-                                                            "onerror": [
-                                                                {
-                                                                    "id": 44,
-                                                                    "module": "builtin:Break",
-                                                                    "version": 1,
-                                                                    "parameters": {},
-                                                                    "mapper": {
-                                                                        "retry": true,
-                                                                        "count": "2",
-                                                                        "interval": "1"
-                                                                    },
-                                                                    "metadata": {
-                                                                        "designer": {
-                                                                            "x": 1800,
-                                                                            "y": 250
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ],
                                                             "filter": {
                                                                 "name": "DONE: scarica il documento originale una volta",
                                                                 "conditions": [
@@ -910,26 +701,7 @@
                                                                     "x": 2000,
                                                                     "y": 100
                                                                 }
-                                                            },
-                                                            "onerror": [
-                                                                {
-                                                                    "id": 46,
-                                                                    "module": "builtin:Break",
-                                                                    "version": 1,
-                                                                    "parameters": {},
-                                                                    "mapper": {
-                                                                        "retry": true,
-                                                                        "count": "2",
-                                                                        "interval": "1"
-                                                                    },
-                                                                    "metadata": {
-                                                                        "designer": {
-                                                                            "x": 2000,
-                                                                            "y": 250
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ]
+                                                            }
                                                         },
                                                         {
                                                             "id": 47,
@@ -1015,26 +787,7 @@
                                                                     "x": 2200,
                                                                     "y": 100
                                                                 }
-                                                            },
-                                                            "onerror": [
-                                                                {
-                                                                    "id": 48,
-                                                                    "module": "builtin:Break",
-                                                                    "version": 1,
-                                                                    "parameters": {},
-                                                                    "mapper": {
-                                                                        "retry": true,
-                                                                        "count": "3",
-                                                                        "interval": "1"
-                                                                    },
-                                                                    "metadata": {
-                                                                        "designer": {
-                                                                            "x": 2200,
-                                                                            "y": 250
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ]
+                                                            }
                                                         }
                                                     ]
                                                 },
@@ -1113,25 +866,6 @@
                                                                     "y": 300
                                                                 }
                                                             },
-                                                            "onerror": [
-                                                                {
-                                                                    "id": 50,
-                                                                    "module": "builtin:Break",
-                                                                    "version": 1,
-                                                                    "parameters": {},
-                                                                    "mapper": {
-                                                                        "retry": true,
-                                                                        "count": "3",
-                                                                        "interval": "1"
-                                                                    },
-                                                                    "metadata": {
-                                                                        "designer": {
-                                                                            "x": 1800,
-                                                                            "y": 450
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ],
                                                             "filter": {
                                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
                                                                 "conditions": [
@@ -1222,25 +956,6 @@
                                                                     "y": 500
                                                                 }
                                                             },
-                                                            "onerror": [
-                                                                {
-                                                                    "id": 52,
-                                                                    "module": "builtin:Break",
-                                                                    "version": 1,
-                                                                    "parameters": {},
-                                                                    "mapper": {
-                                                                        "retry": true,
-                                                                        "count": "3",
-                                                                        "interval": "1"
-                                                                    },
-                                                                    "metadata": {
-                                                                        "designer": {
-                                                                            "x": 1800,
-                                                                            "y": 650
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ],
                                                             "filter": {
                                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
                                                                 "conditions": [
@@ -1314,26 +1029,7 @@
                                                                         }
                                                                     }
                                                                 }
-                                                            },
-                                                            "onerror": [
-                                                                {
-                                                                    "id": 58,
-                                                                    "module": "builtin:Break",
-                                                                    "version": 1,
-                                                                    "parameters": {},
-                                                                    "mapper": {
-                                                                        "retry": true,
-                                                                        "count": "2",
-                                                                        "interval": "1"
-                                                                    },
-                                                                    "metadata": {
-                                                                        "designer": {
-                                                                            "x": 2000,
-                                                                            "y": 850
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ]
+                                                            }
                                                         },
                                                         {
                                                             "id": 57,
@@ -1380,25 +1076,6 @@
                                                                                     }
                                                                                 }
                                                                             },
-                                                                            "onerror": [
-                                                                                {
-                                                                                    "id": 60,
-                                                                                    "module": "builtin:Break",
-                                                                                    "version": 1,
-                                                                                    "parameters": {},
-                                                                                    "mapper": {
-                                                                                        "retry": true,
-                                                                                        "count": "2",
-                                                                                        "interval": "1"
-                                                                                    },
-                                                                                    "metadata": {
-                                                                                        "designer": {
-                                                                                            "x": 2400,
-                                                                                            "y": 700
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ],
                                                                             "filter": {
                                                                                 "name": "DONE: scarica il documento originale una volta",
                                                                                 "conditions": [
@@ -1431,26 +1108,7 @@
                                                                                     "x": 2600,
                                                                                     "y": 550
                                                                                 }
-                                                                            },
-                                                                            "onerror": [
-                                                                                {
-                                                                                    "id": 62,
-                                                                                    "module": "builtin:Break",
-                                                                                    "version": 1,
-                                                                                    "parameters": {},
-                                                                                    "mapper": {
-                                                                                        "retry": true,
-                                                                                        "count": "2",
-                                                                                        "interval": "1"
-                                                                                    },
-                                                                                    "metadata": {
-                                                                                        "designer": {
-                                                                                            "x": 2600,
-                                                                                            "y": 700
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ]
+                                                                            }
                                                                         },
                                                                         {
                                                                             "id": 63,
@@ -1536,26 +1194,7 @@
                                                                                     "x": 2800,
                                                                                     "y": 550
                                                                                 }
-                                                                            },
-                                                                            "onerror": [
-                                                                                {
-                                                                                    "id": 64,
-                                                                                    "module": "builtin:Break",
-                                                                                    "version": 1,
-                                                                                    "parameters": {},
-                                                                                    "mapper": {
-                                                                                        "retry": true,
-                                                                                        "count": "3",
-                                                                                        "interval": "1"
-                                                                                    },
-                                                                                    "metadata": {
-                                                                                        "designer": {
-                                                                                            "x": 2800,
-                                                                                            "y": 700
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ]
+                                                                            }
                                                                         }
                                                                     ]
                                                                 },
@@ -1634,25 +1273,6 @@
                                                                                     "y": 750
                                                                                 }
                                                                             },
-                                                                            "onerror": [
-                                                                                {
-                                                                                    "id": 66,
-                                                                                    "module": "builtin:Break",
-                                                                                    "version": 1,
-                                                                                    "parameters": {},
-                                                                                    "mapper": {
-                                                                                        "retry": true,
-                                                                                        "count": "3",
-                                                                                        "interval": "1"
-                                                                                    },
-                                                                                    "metadata": {
-                                                                                        "designer": {
-                                                                                            "x": 2400,
-                                                                                            "y": 900
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ],
                                                                             "filter": {
                                                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
                                                                                 "conditions": [
@@ -1743,25 +1363,6 @@
                                                                                     "y": 950
                                                                                 }
                                                                             },
-                                                                            "onerror": [
-                                                                                {
-                                                                                    "id": 68,
-                                                                                    "module": "builtin:Break",
-                                                                                    "version": 1,
-                                                                                    "parameters": {},
-                                                                                    "mapper": {
-                                                                                        "retry": true,
-                                                                                        "count": "3",
-                                                                                        "interval": "1"
-                                                                                    },
-                                                                                    "metadata": {
-                                                                                        "designer": {
-                                                                                            "x": 2400,
-                                                                                            "y": 1100
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ],
                                                                             "filter": {
                                                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
                                                                                 "conditions": [
@@ -1835,26 +1436,7 @@
                                                                                         }
                                                                                     }
                                                                                 }
-                                                                            },
-                                                                            "onerror": [
-                                                                                {
-                                                                                    "id": 74,
-                                                                                    "module": "builtin:Break",
-                                                                                    "version": 1,
-                                                                                    "parameters": {},
-                                                                                    "mapper": {
-                                                                                        "retry": true,
-                                                                                        "count": "2",
-                                                                                        "interval": "1"
-                                                                                    },
-                                                                                    "metadata": {
-                                                                                        "designer": {
-                                                                                            "x": 2600,
-                                                                                            "y": 1300
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ]
+                                                                            }
                                                                         },
                                                                         {
                                                                             "id": 73,
@@ -1901,25 +1483,6 @@
                                                                                                     }
                                                                                                 }
                                                                                             },
-                                                                                            "onerror": [
-                                                                                                {
-                                                                                                    "id": 76,
-                                                                                                    "module": "builtin:Break",
-                                                                                                    "version": 1,
-                                                                                                    "parameters": {},
-                                                                                                    "mapper": {
-                                                                                                        "retry": true,
-                                                                                                        "count": "2",
-                                                                                                        "interval": "1"
-                                                                                                    },
-                                                                                                    "metadata": {
-                                                                                                        "designer": {
-                                                                                                            "x": 3000,
-                                                                                                            "y": 1150
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            ],
                                                                                             "filter": {
                                                                                                 "name": "DONE: scarica il documento originale una volta",
                                                                                                 "conditions": [
@@ -1952,26 +1515,7 @@
                                                                                                     "x": 3200,
                                                                                                     "y": 1000
                                                                                                 }
-                                                                                            },
-                                                                                            "onerror": [
-                                                                                                {
-                                                                                                    "id": 78,
-                                                                                                    "module": "builtin:Break",
-                                                                                                    "version": 1,
-                                                                                                    "parameters": {},
-                                                                                                    "mapper": {
-                                                                                                        "retry": true,
-                                                                                                        "count": "2",
-                                                                                                        "interval": "1"
-                                                                                                    },
-                                                                                                    "metadata": {
-                                                                                                        "designer": {
-                                                                                                            "x": 3200,
-                                                                                                            "y": 1150
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            ]
+                                                                                            }
                                                                                         },
                                                                                         {
                                                                                             "id": 79,
@@ -2057,26 +1601,7 @@
                                                                                                     "x": 3400,
                                                                                                     "y": 1000
                                                                                                 }
-                                                                                            },
-                                                                                            "onerror": [
-                                                                                                {
-                                                                                                    "id": 80,
-                                                                                                    "module": "builtin:Break",
-                                                                                                    "version": 1,
-                                                                                                    "parameters": {},
-                                                                                                    "mapper": {
-                                                                                                        "retry": true,
-                                                                                                        "count": "3",
-                                                                                                        "interval": "1"
-                                                                                                    },
-                                                                                                    "metadata": {
-                                                                                                        "designer": {
-                                                                                                            "x": 3400,
-                                                                                                            "y": 1150
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            ]
+                                                                                            }
                                                                                         }
                                                                                     ]
                                                                                 },
@@ -2155,25 +1680,6 @@
                                                                                                     "y": 1200
                                                                                                 }
                                                                                             },
-                                                                                            "onerror": [
-                                                                                                {
-                                                                                                    "id": 82,
-                                                                                                    "module": "builtin:Break",
-                                                                                                    "version": 1,
-                                                                                                    "parameters": {},
-                                                                                                    "mapper": {
-                                                                                                        "retry": true,
-                                                                                                        "count": "3",
-                                                                                                        "interval": "1"
-                                                                                                    },
-                                                                                                    "metadata": {
-                                                                                                        "designer": {
-                                                                                                            "x": 3000,
-                                                                                                            "y": 1350
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            ],
                                                                                             "filter": {
                                                                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
                                                                                                 "conditions": [
@@ -2264,25 +1770,6 @@
                                                                                                     "y": 1400
                                                                                                 }
                                                                                             },
-                                                                                            "onerror": [
-                                                                                                {
-                                                                                                    "id": 84,
-                                                                                                    "module": "builtin:Break",
-                                                                                                    "version": 1,
-                                                                                                    "parameters": {},
-                                                                                                    "mapper": {
-                                                                                                        "retry": true,
-                                                                                                        "count": "3",
-                                                                                                        "interval": "1"
-                                                                                                    },
-                                                                                                    "metadata": {
-                                                                                                        "designer": {
-                                                                                                            "x": 3000,
-                                                                                                            "y": 1550
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            ],
                                                                                             "filter": {
                                                                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
                                                                                                 "conditions": [
@@ -2373,25 +1860,6 @@
                                                                                                     "y": 1600
                                                                                                 }
                                                                                             },
-                                                                                            "onerror": [
-                                                                                                {
-                                                                                                    "id": 88,
-                                                                                                    "module": "builtin:Break",
-                                                                                                    "version": 1,
-                                                                                                    "parameters": {},
-                                                                                                    "mapper": {
-                                                                                                        "retry": true,
-                                                                                                        "count": "3",
-                                                                                                        "interval": "1"
-                                                                                                    },
-                                                                                                    "metadata": {
-                                                                                                        "designer": {
-                                                                                                            "x": 3000,
-                                                                                                            "y": 1750
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            ],
                                                                                             "filter": {
                                                                                                 "name": "Ancora pending dopo quattro controlli: segnala",
                                                                                                 "conditions": [
@@ -2482,25 +1950,6 @@
                                                                                                     "y": 1800
                                                                                                 }
                                                                                             },
-                                                                                            "onerror": [
-                                                                                                {
-                                                                                                    "id": 86,
-                                                                                                    "module": "builtin:Break",
-                                                                                                    "version": 1,
-                                                                                                    "parameters": {},
-                                                                                                    "mapper": {
-                                                                                                        "retry": true,
-                                                                                                        "count": "3",
-                                                                                                        "interval": "1"
-                                                                                                    },
-                                                                                                    "metadata": {
-                                                                                                        "designer": {
-                                                                                                            "x": 3000,
-                                                                                                            "y": 1950
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            ],
                                                                                             "filter": {
                                                                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
                                                                                                 "conditions": [
@@ -2595,25 +2044,6 @@
                                                                                     "y": 1350
                                                                                 }
                                                                             },
-                                                                            "onerror": [
-                                                                                {
-                                                                                    "id": 70,
-                                                                                    "module": "builtin:Break",
-                                                                                    "version": 1,
-                                                                                    "parameters": {},
-                                                                                    "mapper": {
-                                                                                        "retry": true,
-                                                                                        "count": "3",
-                                                                                        "interval": "1"
-                                                                                    },
-                                                                                    "metadata": {
-                                                                                        "designer": {
-                                                                                            "x": 2400,
-                                                                                            "y": 1500
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ],
                                                                             "filter": {
                                                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
                                                                                 "conditions": [
@@ -2708,25 +2138,6 @@
                                                                     "y": 900
                                                                 }
                                                             },
-                                                            "onerror": [
-                                                                {
-                                                                    "id": 54,
-                                                                    "module": "builtin:Break",
-                                                                    "version": 1,
-                                                                    "parameters": {},
-                                                                    "mapper": {
-                                                                        "retry": true,
-                                                                        "count": "3",
-                                                                        "interval": "1"
-                                                                    },
-                                                                    "metadata": {
-                                                                        "designer": {
-                                                                            "x": 1800,
-                                                                            "y": 1050
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ],
                                                             "filter": {
                                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
                                                                 "conditions": [
@@ -2821,25 +2232,6 @@
                                                     "y": 450
                                                 }
                                             },
-                                            "onerror": [
-                                                {
-                                                    "id": 38,
-                                                    "module": "builtin:Break",
-                                                    "version": 1,
-                                                    "parameters": {},
-                                                    "mapper": {
-                                                        "retry": true,
-                                                        "count": "3",
-                                                        "interval": "1"
-                                                    },
-                                                    "metadata": {
-                                                        "designer": {
-                                                            "x": 1200,
-                                                            "y": 600
-                                                        }
-                                                    }
-                                                }
-                                            ],
                                             "filter": {
                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
                                                 "conditions": [
@@ -2917,26 +2309,7 @@
                                         }
                                     }
                                 }
-                            },
-                            "onerror": [
-                                {
-                                    "id": 92,
-                                    "module": "builtin:Break",
-                                    "version": 1,
-                                    "parameters": {},
-                                    "mapper": {
-                                        "retry": true,
-                                        "count": "2",
-                                        "interval": "1"
-                                    },
-                                    "metadata": {
-                                        "designer": {
-                                            "x": 800,
-                                            "y": 350
-                                        }
-                                    }
-                                }
-                            ]
+                            }
                         },
                         {
                             "id": 91,
@@ -2983,25 +2356,6 @@
                                                     }
                                                 }
                                             },
-                                            "onerror": [
-                                                {
-                                                    "id": 94,
-                                                    "module": "builtin:Break",
-                                                    "version": 1,
-                                                    "parameters": {},
-                                                    "mapper": {
-                                                        "retry": true,
-                                                        "count": "2",
-                                                        "interval": "1"
-                                                    },
-                                                    "metadata": {
-                                                        "designer": {
-                                                            "x": 1200,
-                                                            "y": 200
-                                                        }
-                                                    }
-                                                }
-                                            ],
                                             "filter": {
                                                 "name": "DONE: scarica il documento originale una volta",
                                                 "conditions": [
@@ -3034,26 +2388,7 @@
                                                     "x": 1400,
                                                     "y": 50
                                                 }
-                                            },
-                                            "onerror": [
-                                                {
-                                                    "id": 96,
-                                                    "module": "builtin:Break",
-                                                    "version": 1,
-                                                    "parameters": {},
-                                                    "mapper": {
-                                                        "retry": true,
-                                                        "count": "2",
-                                                        "interval": "1"
-                                                    },
-                                                    "metadata": {
-                                                        "designer": {
-                                                            "x": 1400,
-                                                            "y": 200
-                                                        }
-                                                    }
-                                                }
-                                            ]
+                                            }
                                         },
                                         {
                                             "id": 97,
@@ -3139,26 +2474,7 @@
                                                     "x": 1600,
                                                     "y": 50
                                                 }
-                                            },
-                                            "onerror": [
-                                                {
-                                                    "id": 98,
-                                                    "module": "builtin:Break",
-                                                    "version": 1,
-                                                    "parameters": {},
-                                                    "mapper": {
-                                                        "retry": true,
-                                                        "count": "3",
-                                                        "interval": "1"
-                                                    },
-                                                    "metadata": {
-                                                        "designer": {
-                                                            "x": 1600,
-                                                            "y": 200
-                                                        }
-                                                    }
-                                                }
-                                            ]
+                                            }
                                         }
                                     ]
                                 },
@@ -3237,25 +2553,6 @@
                                                     "y": 250
                                                 }
                                             },
-                                            "onerror": [
-                                                {
-                                                    "id": 100,
-                                                    "module": "builtin:Break",
-                                                    "version": 1,
-                                                    "parameters": {},
-                                                    "mapper": {
-                                                        "retry": true,
-                                                        "count": "3",
-                                                        "interval": "1"
-                                                    },
-                                                    "metadata": {
-                                                        "designer": {
-                                                            "x": 1200,
-                                                            "y": 400
-                                                        }
-                                                    }
-                                                }
-                                            ],
                                             "filter": {
                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
                                                 "conditions": [
@@ -3346,25 +2643,6 @@
                                                     "y": 450
                                                 }
                                             },
-                                            "onerror": [
-                                                {
-                                                    "id": 102,
-                                                    "module": "builtin:Break",
-                                                    "version": 1,
-                                                    "parameters": {},
-                                                    "mapper": {
-                                                        "retry": true,
-                                                        "count": "3",
-                                                        "interval": "1"
-                                                    },
-                                                    "metadata": {
-                                                        "designer": {
-                                                            "x": 1200,
-                                                            "y": 600
-                                                        }
-                                                    }
-                                                }
-                                            ],
                                             "filter": {
                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
                                                 "conditions": [
@@ -3438,26 +2716,7 @@
                                                         }
                                                     }
                                                 }
-                                            },
-                                            "onerror": [
-                                                {
-                                                    "id": 108,
-                                                    "module": "builtin:Break",
-                                                    "version": 1,
-                                                    "parameters": {},
-                                                    "mapper": {
-                                                        "retry": true,
-                                                        "count": "2",
-                                                        "interval": "1"
-                                                    },
-                                                    "metadata": {
-                                                        "designer": {
-                                                            "x": 1400,
-                                                            "y": 800
-                                                        }
-                                                    }
-                                                }
-                                            ]
+                                            }
                                         },
                                         {
                                             "id": 107,
@@ -3504,25 +2763,6 @@
                                                                     }
                                                                 }
                                                             },
-                                                            "onerror": [
-                                                                {
-                                                                    "id": 110,
-                                                                    "module": "builtin:Break",
-                                                                    "version": 1,
-                                                                    "parameters": {},
-                                                                    "mapper": {
-                                                                        "retry": true,
-                                                                        "count": "2",
-                                                                        "interval": "1"
-                                                                    },
-                                                                    "metadata": {
-                                                                        "designer": {
-                                                                            "x": 1800,
-                                                                            "y": 650
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ],
                                                             "filter": {
                                                                 "name": "DONE: scarica il documento originale una volta",
                                                                 "conditions": [
@@ -3555,26 +2795,7 @@
                                                                     "x": 2000,
                                                                     "y": 500
                                                                 }
-                                                            },
-                                                            "onerror": [
-                                                                {
-                                                                    "id": 112,
-                                                                    "module": "builtin:Break",
-                                                                    "version": 1,
-                                                                    "parameters": {},
-                                                                    "mapper": {
-                                                                        "retry": true,
-                                                                        "count": "2",
-                                                                        "interval": "1"
-                                                                    },
-                                                                    "metadata": {
-                                                                        "designer": {
-                                                                            "x": 2000,
-                                                                            "y": 650
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ]
+                                                            }
                                                         },
                                                         {
                                                             "id": 113,
@@ -3660,26 +2881,7 @@
                                                                     "x": 2200,
                                                                     "y": 500
                                                                 }
-                                                            },
-                                                            "onerror": [
-                                                                {
-                                                                    "id": 114,
-                                                                    "module": "builtin:Break",
-                                                                    "version": 1,
-                                                                    "parameters": {},
-                                                                    "mapper": {
-                                                                        "retry": true,
-                                                                        "count": "3",
-                                                                        "interval": "1"
-                                                                    },
-                                                                    "metadata": {
-                                                                        "designer": {
-                                                                            "x": 2200,
-                                                                            "y": 650
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ]
+                                                            }
                                                         }
                                                     ]
                                                 },
@@ -3758,25 +2960,6 @@
                                                                     "y": 700
                                                                 }
                                                             },
-                                                            "onerror": [
-                                                                {
-                                                                    "id": 116,
-                                                                    "module": "builtin:Break",
-                                                                    "version": 1,
-                                                                    "parameters": {},
-                                                                    "mapper": {
-                                                                        "retry": true,
-                                                                        "count": "3",
-                                                                        "interval": "1"
-                                                                    },
-                                                                    "metadata": {
-                                                                        "designer": {
-                                                                            "x": 1800,
-                                                                            "y": 850
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ],
                                                             "filter": {
                                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
                                                                 "conditions": [
@@ -3867,25 +3050,6 @@
                                                                     "y": 900
                                                                 }
                                                             },
-                                                            "onerror": [
-                                                                {
-                                                                    "id": 118,
-                                                                    "module": "builtin:Break",
-                                                                    "version": 1,
-                                                                    "parameters": {},
-                                                                    "mapper": {
-                                                                        "retry": true,
-                                                                        "count": "3",
-                                                                        "interval": "1"
-                                                                    },
-                                                                    "metadata": {
-                                                                        "designer": {
-                                                                            "x": 1800,
-                                                                            "y": 1050
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ],
                                                             "filter": {
                                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
                                                                 "conditions": [
@@ -3959,26 +3123,7 @@
                                                                         }
                                                                     }
                                                                 }
-                                                            },
-                                                            "onerror": [
-                                                                {
-                                                                    "id": 124,
-                                                                    "module": "builtin:Break",
-                                                                    "version": 1,
-                                                                    "parameters": {},
-                                                                    "mapper": {
-                                                                        "retry": true,
-                                                                        "count": "2",
-                                                                        "interval": "1"
-                                                                    },
-                                                                    "metadata": {
-                                                                        "designer": {
-                                                                            "x": 2000,
-                                                                            "y": 1250
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ]
+                                                            }
                                                         },
                                                         {
                                                             "id": 123,
@@ -4025,25 +3170,6 @@
                                                                                     }
                                                                                 }
                                                                             },
-                                                                            "onerror": [
-                                                                                {
-                                                                                    "id": 126,
-                                                                                    "module": "builtin:Break",
-                                                                                    "version": 1,
-                                                                                    "parameters": {},
-                                                                                    "mapper": {
-                                                                                        "retry": true,
-                                                                                        "count": "2",
-                                                                                        "interval": "1"
-                                                                                    },
-                                                                                    "metadata": {
-                                                                                        "designer": {
-                                                                                            "x": 2400,
-                                                                                            "y": 1100
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ],
                                                                             "filter": {
                                                                                 "name": "DONE: scarica il documento originale una volta",
                                                                                 "conditions": [
@@ -4076,26 +3202,7 @@
                                                                                     "x": 2600,
                                                                                     "y": 950
                                                                                 }
-                                                                            },
-                                                                            "onerror": [
-                                                                                {
-                                                                                    "id": 128,
-                                                                                    "module": "builtin:Break",
-                                                                                    "version": 1,
-                                                                                    "parameters": {},
-                                                                                    "mapper": {
-                                                                                        "retry": true,
-                                                                                        "count": "2",
-                                                                                        "interval": "1"
-                                                                                    },
-                                                                                    "metadata": {
-                                                                                        "designer": {
-                                                                                            "x": 2600,
-                                                                                            "y": 1100
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ]
+                                                                            }
                                                                         },
                                                                         {
                                                                             "id": 129,
@@ -4181,26 +3288,7 @@
                                                                                     "x": 2800,
                                                                                     "y": 950
                                                                                 }
-                                                                            },
-                                                                            "onerror": [
-                                                                                {
-                                                                                    "id": 130,
-                                                                                    "module": "builtin:Break",
-                                                                                    "version": 1,
-                                                                                    "parameters": {},
-                                                                                    "mapper": {
-                                                                                        "retry": true,
-                                                                                        "count": "3",
-                                                                                        "interval": "1"
-                                                                                    },
-                                                                                    "metadata": {
-                                                                                        "designer": {
-                                                                                            "x": 2800,
-                                                                                            "y": 1100
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ]
+                                                                            }
                                                                         }
                                                                     ]
                                                                 },
@@ -4279,25 +3367,6 @@
                                                                                     "y": 1150
                                                                                 }
                                                                             },
-                                                                            "onerror": [
-                                                                                {
-                                                                                    "id": 132,
-                                                                                    "module": "builtin:Break",
-                                                                                    "version": 1,
-                                                                                    "parameters": {},
-                                                                                    "mapper": {
-                                                                                        "retry": true,
-                                                                                        "count": "3",
-                                                                                        "interval": "1"
-                                                                                    },
-                                                                                    "metadata": {
-                                                                                        "designer": {
-                                                                                            "x": 2400,
-                                                                                            "y": 1300
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ],
                                                                             "filter": {
                                                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
                                                                                 "conditions": [
@@ -4388,25 +3457,6 @@
                                                                                     "y": 1350
                                                                                 }
                                                                             },
-                                                                            "onerror": [
-                                                                                {
-                                                                                    "id": 134,
-                                                                                    "module": "builtin:Break",
-                                                                                    "version": 1,
-                                                                                    "parameters": {},
-                                                                                    "mapper": {
-                                                                                        "retry": true,
-                                                                                        "count": "3",
-                                                                                        "interval": "1"
-                                                                                    },
-                                                                                    "metadata": {
-                                                                                        "designer": {
-                                                                                            "x": 2400,
-                                                                                            "y": 1500
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ],
                                                                             "filter": {
                                                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
                                                                                 "conditions": [
@@ -4480,26 +3530,7 @@
                                                                                         }
                                                                                     }
                                                                                 }
-                                                                            },
-                                                                            "onerror": [
-                                                                                {
-                                                                                    "id": 140,
-                                                                                    "module": "builtin:Break",
-                                                                                    "version": 1,
-                                                                                    "parameters": {},
-                                                                                    "mapper": {
-                                                                                        "retry": true,
-                                                                                        "count": "2",
-                                                                                        "interval": "1"
-                                                                                    },
-                                                                                    "metadata": {
-                                                                                        "designer": {
-                                                                                            "x": 2600,
-                                                                                            "y": 1700
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ]
+                                                                            }
                                                                         },
                                                                         {
                                                                             "id": 139,
@@ -4546,25 +3577,6 @@
                                                                                                     }
                                                                                                 }
                                                                                             },
-                                                                                            "onerror": [
-                                                                                                {
-                                                                                                    "id": 142,
-                                                                                                    "module": "builtin:Break",
-                                                                                                    "version": 1,
-                                                                                                    "parameters": {},
-                                                                                                    "mapper": {
-                                                                                                        "retry": true,
-                                                                                                        "count": "2",
-                                                                                                        "interval": "1"
-                                                                                                    },
-                                                                                                    "metadata": {
-                                                                                                        "designer": {
-                                                                                                            "x": 3000,
-                                                                                                            "y": 1550
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            ],
                                                                                             "filter": {
                                                                                                 "name": "DONE: scarica il documento originale una volta",
                                                                                                 "conditions": [
@@ -4597,26 +3609,7 @@
                                                                                                     "x": 3200,
                                                                                                     "y": 1400
                                                                                                 }
-                                                                                            },
-                                                                                            "onerror": [
-                                                                                                {
-                                                                                                    "id": 144,
-                                                                                                    "module": "builtin:Break",
-                                                                                                    "version": 1,
-                                                                                                    "parameters": {},
-                                                                                                    "mapper": {
-                                                                                                        "retry": true,
-                                                                                                        "count": "2",
-                                                                                                        "interval": "1"
-                                                                                                    },
-                                                                                                    "metadata": {
-                                                                                                        "designer": {
-                                                                                                            "x": 3200,
-                                                                                                            "y": 1550
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            ]
+                                                                                            }
                                                                                         },
                                                                                         {
                                                                                             "id": 145,
@@ -4702,26 +3695,7 @@
                                                                                                     "x": 3400,
                                                                                                     "y": 1400
                                                                                                 }
-                                                                                            },
-                                                                                            "onerror": [
-                                                                                                {
-                                                                                                    "id": 146,
-                                                                                                    "module": "builtin:Break",
-                                                                                                    "version": 1,
-                                                                                                    "parameters": {},
-                                                                                                    "mapper": {
-                                                                                                        "retry": true,
-                                                                                                        "count": "3",
-                                                                                                        "interval": "1"
-                                                                                                    },
-                                                                                                    "metadata": {
-                                                                                                        "designer": {
-                                                                                                            "x": 3400,
-                                                                                                            "y": 1550
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            ]
+                                                                                            }
                                                                                         }
                                                                                     ]
                                                                                 },
@@ -4800,25 +3774,6 @@
                                                                                                     "y": 1600
                                                                                                 }
                                                                                             },
-                                                                                            "onerror": [
-                                                                                                {
-                                                                                                    "id": 148,
-                                                                                                    "module": "builtin:Break",
-                                                                                                    "version": 1,
-                                                                                                    "parameters": {},
-                                                                                                    "mapper": {
-                                                                                                        "retry": true,
-                                                                                                        "count": "3",
-                                                                                                        "interval": "1"
-                                                                                                    },
-                                                                                                    "metadata": {
-                                                                                                        "designer": {
-                                                                                                            "x": 3000,
-                                                                                                            "y": 1750
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            ],
                                                                                             "filter": {
                                                                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
                                                                                                 "conditions": [
@@ -4909,25 +3864,6 @@
                                                                                                     "y": 1800
                                                                                                 }
                                                                                             },
-                                                                                            "onerror": [
-                                                                                                {
-                                                                                                    "id": 150,
-                                                                                                    "module": "builtin:Break",
-                                                                                                    "version": 1,
-                                                                                                    "parameters": {},
-                                                                                                    "mapper": {
-                                                                                                        "retry": true,
-                                                                                                        "count": "3",
-                                                                                                        "interval": "1"
-                                                                                                    },
-                                                                                                    "metadata": {
-                                                                                                        "designer": {
-                                                                                                            "x": 3000,
-                                                                                                            "y": 1950
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            ],
                                                                                             "filter": {
                                                                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
                                                                                                 "conditions": [
@@ -5018,25 +3954,6 @@
                                                                                                     "y": 2000
                                                                                                 }
                                                                                             },
-                                                                                            "onerror": [
-                                                                                                {
-                                                                                                    "id": 154,
-                                                                                                    "module": "builtin:Break",
-                                                                                                    "version": 1,
-                                                                                                    "parameters": {},
-                                                                                                    "mapper": {
-                                                                                                        "retry": true,
-                                                                                                        "count": "3",
-                                                                                                        "interval": "1"
-                                                                                                    },
-                                                                                                    "metadata": {
-                                                                                                        "designer": {
-                                                                                                            "x": 3000,
-                                                                                                            "y": 2150
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            ],
                                                                                             "filter": {
                                                                                                 "name": "Ancora pending dopo quattro controlli: segnala",
                                                                                                 "conditions": [
@@ -5127,25 +4044,6 @@
                                                                                                     "y": 2200
                                                                                                 }
                                                                                             },
-                                                                                            "onerror": [
-                                                                                                {
-                                                                                                    "id": 152,
-                                                                                                    "module": "builtin:Break",
-                                                                                                    "version": 1,
-                                                                                                    "parameters": {},
-                                                                                                    "mapper": {
-                                                                                                        "retry": true,
-                                                                                                        "count": "3",
-                                                                                                        "interval": "1"
-                                                                                                    },
-                                                                                                    "metadata": {
-                                                                                                        "designer": {
-                                                                                                            "x": 3000,
-                                                                                                            "y": 2350
-                                                                                                        }
-                                                                                                    }
-                                                                                                }
-                                                                                            ],
                                                                                             "filter": {
                                                                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
                                                                                                 "conditions": [
@@ -5240,25 +4138,6 @@
                                                                                     "y": 1750
                                                                                 }
                                                                             },
-                                                                            "onerror": [
-                                                                                {
-                                                                                    "id": 136,
-                                                                                    "module": "builtin:Break",
-                                                                                    "version": 1,
-                                                                                    "parameters": {},
-                                                                                    "mapper": {
-                                                                                        "retry": true,
-                                                                                        "count": "3",
-                                                                                        "interval": "1"
-                                                                                    },
-                                                                                    "metadata": {
-                                                                                        "designer": {
-                                                                                            "x": 2400,
-                                                                                            "y": 1900
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            ],
                                                                             "filter": {
                                                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
                                                                                 "conditions": [
@@ -5353,25 +4232,6 @@
                                                                     "y": 1300
                                                                 }
                                                             },
-                                                            "onerror": [
-                                                                {
-                                                                    "id": 120,
-                                                                    "module": "builtin:Break",
-                                                                    "version": 1,
-                                                                    "parameters": {},
-                                                                    "mapper": {
-                                                                        "retry": true,
-                                                                        "count": "3",
-                                                                        "interval": "1"
-                                                                    },
-                                                                    "metadata": {
-                                                                        "designer": {
-                                                                            "x": 1800,
-                                                                            "y": 1450
-                                                                        }
-                                                                    }
-                                                                }
-                                                            ],
                                                             "filter": {
                                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
                                                                 "conditions": [
@@ -5466,25 +4326,6 @@
                                                     "y": 850
                                                 }
                                             },
-                                            "onerror": [
-                                                {
-                                                    "id": 104,
-                                                    "module": "builtin:Break",
-                                                    "version": 1,
-                                                    "parameters": {},
-                                                    "mapper": {
-                                                        "retry": true,
-                                                        "count": "3",
-                                                        "interval": "1"
-                                                    },
-                                                    "metadata": {
-                                                        "designer": {
-                                                            "x": 1200,
-                                                            "y": 1000
-                                                        }
-                                                    }
-                                                }
-                                            ],
                                             "filter": {
                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
                                                 "conditions": [
@@ -5519,7 +4360,7 @@
             "slots": null,
             "confidential": true,
             "dataloss": false,
-            "dlq": true,
+            "dlq": false,
             "freshVariables": false
         },
         "designer": {

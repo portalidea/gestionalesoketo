@@ -2,7 +2,8 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "git": {
     "deploymentEnabled": {
-      "docs/amazon-make-native-filters": false
+      "docs/amazon-make-native-filters": false,
+      "docs/amazon-make-checkpoint-recovery": false
     }
   },
   "buildCommand": "pnpm build",
