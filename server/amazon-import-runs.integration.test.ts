@@ -9,6 +9,7 @@ import { EKETO_COMPANY_ID } from "../shared/const";
 import {
   amazonImportConfigs,
   amazonImportRuns,
+  amazonImportRowObservations,
   companies,
   salesStores,
 } from "../drizzle/schema";
@@ -335,6 +336,131 @@ describe.skipIf(!enabled)(
       expect(run.summary).toMatchObject({
         lastDiagnostic: { code: "DOCUMENT_REPLAY_MISMATCH" },
       });
+    });
+    it("POST report-file accetta un TSV misto: due righe strutturali in revisione, documento persistito e retry senza doppioni", async () => {
+      const window = await (
+        await fetch(`${base}/import-window`, { headers: auth })
+      ).json();
+      const id = window.run_id as string;
+      const reportId = "tsv-row-quarantine-local";
+      expect(
+        (
+          await fetch(`${base}/report-created`, {
+            method: "POST",
+            headers: reportHeaders(id, reportId),
+            body: JSON.stringify({
+              schema_version: 1,
+              outcome: "REPORT_CREATED",
+            }),
+          })
+        ).status
+      ).toBe(200);
+      const columns = [
+        "amazon-order-id",
+        "order-item-id",
+        "purchase-date",
+        "last-updated-date",
+        "order-status",
+        "item-status",
+        "fulfillment-channel",
+        "sku",
+        "quantity",
+        "currency",
+        "item-price",
+        "product-name",
+      ];
+      const values = [
+        "local-tsv-order",
+        "local-before",
+        "2026-09-02T12:00:00+02:00",
+        "2026-09-03T12:00:00+02:00",
+        "Shipped",
+        "Shipped",
+        "Merchant",
+        "LOCAL_UNMAPPED",
+        "1",
+        "EUR",
+        "12.00",
+        'Titolo "test"',
+      ];
+      const after = [...values];
+      after[1] = "local-after";
+      after[11] = 'Titolo "aperto';
+      const body =
+        "\uFEFF" +
+        [
+          columns.join("\t"),
+          values.join("\t"),
+          values.slice(0, -1).join("\t"),
+          [...values, "PRIVATE_VALUE"].join("\t"),
+          after.join("\t"),
+        ].join("\r\n") +
+        "\r\n";
+      const upload = () =>
+        fetch(`${base}/report-file`, {
+          method: "POST",
+          headers: {
+            ...reportHeaders(id, reportId),
+            "Content-Type": "text/plain",
+            "X-Amazon-Report-Document-Id": "local-tsv-document",
+            "X-Amazon-Processing-Status": "DONE",
+          },
+          body,
+        });
+      const response = await upload();
+      expect(response.status).toBe(200);
+      const accepted = await response.json();
+      expect(accepted.ok).toBe(true);
+      const [run] = await db
+        .select()
+        .from(amazonImportRuns)
+        .where(eq(amazonImportRuns.id, id))
+        .limit(1);
+      expect(run.documentSha256).not.toBeNull();
+      expect(run.error).toBeNull();
+      expect(run.status).toBe("completed");
+      const rows = await db
+        .select()
+        .from(amazonImportRowObservations)
+        .where(eq(amazonImportRowObservations.runId, id))
+        .orderBy(amazonImportRowObservations.rowKey);
+      expect(rows).toHaveLength(4);
+      expect(rows[1]).toMatchObject({
+        outcome: "review_required",
+        itemId: null,
+        sourceRow: {
+          _diagnostic: {
+            rowNumber: 3,
+            expectedColumns: 12,
+            actualColumns: 11,
+            code: "DOCUMENT_ROW_INVALID",
+            field: "column-count",
+          },
+        },
+      });
+      expect(rows[2]).toMatchObject({
+        outcome: "review_required",
+        itemId: null,
+        sourceRow: {
+          _diagnostic: {
+            rowNumber: 4,
+            expectedColumns: 12,
+            actualColumns: 13,
+            code: "DOCUMENT_ROW_INVALID",
+            field: "column-count",
+          },
+        },
+      });
+      expect(rows[0].itemId).not.toBeNull();
+      expect(rows[3].itemId).not.toBeNull();
+      expect(JSON.stringify(rows)).not.toContain("PRIVATE_VALUE");
+      expect((await upload()).status).toBe(200);
+      expect(
+        await db
+          .select()
+          .from(amazonImportRowObservations)
+          .where(eq(amazonImportRowObservations.runId, id))
+      ).toHaveLength(4);
     });
     it("rifiuta lo stato terminale e non scrive diagnostica sul run di un altro store", async () => {
       const [terminal] = await db

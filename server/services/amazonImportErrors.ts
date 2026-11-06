@@ -57,6 +57,9 @@ export type AmazonImportPhase =
 export interface AmazonDiagnosticDetails {
   missingHeader?: string;
   rowNumber?: number;
+  expectedColumns?: number;
+  actualColumns?: number;
+  field?: string;
   bytes?: number;
   wireFormat?: "gzip" | "plain" | "empty";
   compression?: "GZIP" | "NONE";
@@ -73,13 +76,26 @@ const safeHeaders = new Set([
   "currency",
   "item-price",
 ]);
+const safeRowFields = new Set([
+  ...Array.from(safeHeaders),
+  "amazon-order-id",
+  "order-item-id",
+  "item-tax",
+  "column-count",
+]);
 export function safeAmazonDetails(
   input: AmazonDiagnosticDetails = {}
 ): AmazonDiagnosticDetails {
   const result: AmazonDiagnosticDetails = {};
   if (input.missingHeader && safeHeaders.has(input.missingHeader))
     result.missingHeader = input.missingHeader;
-  for (const key of ["rowNumber", "bytes"] as const) {
+  if (input.field && safeRowFields.has(input.field)) result.field = input.field;
+  for (const key of [
+    "rowNumber",
+    "bytes",
+    "expectedColumns",
+    "actualColumns",
+  ] as const) {
     const value = input[key];
     if (Number.isSafeInteger(value) && value! >= 0) result[key] = value;
   }

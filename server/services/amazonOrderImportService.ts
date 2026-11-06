@@ -25,6 +25,7 @@ import {
   amazonRomeDate,
   classifyAmazonRow,
   parseAmazonReport,
+  parseAmazonTimestamp,
   planAmazonFefo,
   type AmazonReportRow,
   type AmazonStockStatus,
@@ -32,6 +33,7 @@ import {
   type AmazonFefoAllocation,
 } from "./amazonOrderImportHelpers";
 import { AmazonImportError, amazonImportError } from "./amazonImportErrors";
+import { safeAmazonRowDiagnostic } from "./amazonRowDiagnostic";
 
 type Database = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -199,11 +201,15 @@ async function observe(
   reason: string | null,
   plan: AmazonFefoAllocation[] = []
 ) {
+  const diagnostic = safeAmazonRowDiagnostic(row.rowDiagnostics);
   await tx.insert(amazonImportRowObservations).values({
     runId,
     rowKey: row.rowKey,
     itemId,
-    sourceRow: row.source,
+    sourceRow: {
+      ...row.source,
+      ...(diagnostic ? { _diagnostic: diagnostic } : {}),
+    },
     outcome,
     reason,
     plannedAllocations: plan,
@@ -312,10 +318,17 @@ export async function ingestAmazonReport(input: {
     for (const row of rows) {
       // Le righe già gestite a mano non diventano vendite marketplace importate:
       // restano soltanto nell'audit del report, anche se ripetute/annullate.
-      if (
-        row.source["purchase-date"] &&
-        amazonRomeDate(row.purchaseDate) < config.purchaseCutoff
-      ) {
+      let beforeCutoff = false;
+      if (row.source["purchase-date"]) {
+        try {
+          beforeCutoff =
+            amazonRomeDate(parseAmazonTimestamp(row.source["purchase-date"])) <
+            config.purchaseCutoff;
+        } catch {
+          // Invalid dates are row review, never the epoch placeholder's cutoff.
+        }
+      }
+      if (beforeCutoff) {
         await observe(
           tx,
           run.id,

@@ -1678,7 +1678,7 @@ export const amazonImportRowObservations = pgTable("amazon_import_row_observatio
   runId: uuid("run_id").notNull().references(() => amazonImportRuns.id, { onDelete: "restrict" }),
   rowKey: text("row_key").notNull(),
   itemId: uuid("item_id").references(() => marketplaceOrderItems.id, { onDelete: "restrict" }),
-  sourceRow: jsonb("source_row").$type<Record<string, string>>().notNull(),
+  sourceRow: jsonb("source_row").$type<Record<string, unknown>>().notNull(),
   outcome: text("outcome").notNull(),
   reason: text("reason"),
   plannedAllocations: jsonb("planned_allocations").notNull().default(sql`'[]'::jsonb`),
