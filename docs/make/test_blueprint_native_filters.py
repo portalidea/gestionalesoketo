@@ -74,15 +74,15 @@ class NativeFiltersTests(unittest.TestCase):
 
     def test_headers_keep_private_configuration_out_of_blueprint(self):
         calls = [node for node in dictionaries(self.data)
-                 if node.get("module") == "http:ActionSendData"
+                 if node.get("module") == "http:ActionSendDataAPIKeyAuth"
                  and node.get("mapper", {}).get("url", "").startswith(
                      "https://gestionale.soketo.it/api/marketplace/amazon/")]
         self.assertEqual(len(calls), 36)
         for node in calls:
             headers = node["mapper"]["headers"]
             key = [h for h in headers if h["name"] == "X-SoKeto-Amazon-Key"]
-            self.assertEqual(len(key), 1)
-            self.assertEqual(key[0]["value"], "DA_CONFIGURARE")
+            self.assertEqual(key, [])
+            self.assertEqual(node["parameters"]["auth"], 0)
 
     def test_module_ids_and_single_create_request(self):
         modules = [n for n in dictionaries(self.data) if "module" in n]

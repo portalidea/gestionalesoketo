@@ -3,7 +3,8 @@
   "git": {
     "deploymentEnabled": {
       "docs/amazon-make-native-filters": false,
-      "docs/amazon-make-checkpoint-recovery": false
+      "docs/amazon-make-checkpoint-recovery": false,
+      "docs/amazon-single-secret": false
     }
   },
   "buildCommand": "pnpm build",

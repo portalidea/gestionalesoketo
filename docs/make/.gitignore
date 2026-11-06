@@ -1,0 +1,2 @@
+# Gli export collegati a Make Keys restano solo sul dispositivo dell'utente.
+*.privato.blueprint.json

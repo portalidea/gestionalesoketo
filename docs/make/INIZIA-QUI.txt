@@ -1,0 +1,23 @@
+SoKeto — Amazon giornaliero con una sola Make Key
+
+1. Leggi MAKE-KEYS-SECRETO-UNICO.md prima di importare o eseguire.
+2. Il valore del segreto va SOLO in Make Credentials > Keys, mai in chat.
+3. Importa il piccolo CollegaChiaveMake-SoKeto.blueprint.json in uno scenario
+   temporaneo OFF, seleziona/crea la Key una volta ed esportalo privatamente.
+   NON premere Run once. Il piccolo scenario punta solo alla GET /api/health.
+4. Nella cartella estratta, usa Python 3:
+
+   python3 collega_chiave_make.py --export-chiave chiave-make.privato.blueprint.json --output Amazon-Giornaliero-Keys.privato.blueprint.json
+
+5. Importa il file locale generato in un NUOVO collector OFF. Verifica la
+   connessione Amazon esistente e che Make mostri la tua Key nei moduli.
+6. Keep data confidential Yes; Store incomplete executions No;
+   Process data in order Yes; scheduling OFF; dry run del gestionale ON.
+7. Gestisci privatamente i vecchi incompleti senza Retry. Elimina il vecchio
+   collector solo dopo la verifica di quello nuovo, seguendo la guida.
+
+L'utility usa solo il riferimento alla Key, non il suo valore. Non usa rete
+né credenziali Vercel. Gli export privati non vanno condivisi o committati.
+Non importare/eseguire il template pubblico completo con auth ancora a zero.
+Per un aggiornamento futuro, riusa lo stesso piccolo export di riferimento:
+non reinserire il segreto e non modificare manualmente 36 moduli.

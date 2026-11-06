@@ -1,29 +1,23 @@
 {
-    "name": "SoKeto - Amazon EU - Ordini giornalieri - Collector FBM",
+    "name": "SoKeto - Amazon EU - Collector FBM - Make Keys",
     "flow": [
         {
             "id": 1,
-            "module": "http:ActionSendData",
+            "module": "http:ActionSendDataAPIKeyAuth",
             "version": 3,
             "parameters": {
                 "handleErrors": true,
-                "useNewZLibDeCompress": true
+                "useNewZLibDeCompress": true,
+                "auth": 0
             },
             "mapper": {
                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/import-window",
                 "serializeUrl": false,
                 "method": "get",
-                "headers": [
-                    {
-                        "name": "X-SoKeto-Amazon-Key",
-                        "value": "DA_CONFIGURARE"
-                    }
-                ],
+                "headers": [],
                 "qs": [],
                 "bodyType": "",
                 "parseResponse": true,
-                "authUser": "",
-                "authPass": "",
                 "timeout": "40",
                 "shareCookies": false,
                 "ca": "",
@@ -38,7 +32,15 @@
                 "designer": {
                     "x": 0,
                     "y": 0
-                }
+                },
+                "parameters": [
+                    {
+                        "name": "auth",
+                        "type": "keychain:apikeyauth",
+                        "label": "Credentials",
+                        "required": true
+                    }
+                ]
             }
         },
         {
@@ -107,21 +109,18 @@
                         },
                         {
                             "id": 4,
-                            "module": "http:ActionSendData",
+                            "module": "http:ActionSendDataAPIKeyAuth",
                             "version": 3,
                             "parameters": {
                                 "handleErrors": true,
-                                "useNewZLibDeCompress": true
+                                "useNewZLibDeCompress": true,
+                                "auth": 0
                             },
                             "mapper": {
                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-created",
                                 "serializeUrl": false,
                                 "method": "post",
                                 "headers": [
-                                    {
-                                        "name": "X-SoKeto-Amazon-Key",
-                                        "value": "DA_CONFIGURARE"
-                                    },
                                     {
                                         "name": "X-Amazon-Import-Run-Id",
                                         "value": "{{1.data.run_id}}"
@@ -150,8 +149,6 @@
                                 "qs": [],
                                 "bodyType": "raw",
                                 "parseResponse": false,
-                                "authUser": "",
-                                "authPass": "",
                                 "timeout": "40",
                                 "shareCookies": false,
                                 "ca": "",
@@ -168,7 +165,15 @@
                                 "designer": {
                                     "x": 400,
                                     "y": -200
-                                }
+                                },
+                                "parameters": [
+                                    {
+                                        "name": "auth",
+                                        "type": "keychain:apikeyauth",
+                                        "label": "Credentials",
+                                        "required": true
+                                    }
+                                ]
                             }
                         },
                         {
@@ -298,21 +303,18 @@
                                         },
                                         {
                                             "id": 31,
-                                            "module": "http:ActionSendData",
+                                            "module": "http:ActionSendDataAPIKeyAuth",
                                             "version": 3,
                                             "parameters": {
                                                 "handleErrors": true,
-                                                "useNewZLibDeCompress": true
+                                                "useNewZLibDeCompress": true,
+                                                "auth": 0
                                             },
                                             "mapper": {
                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-file",
                                                 "serializeUrl": false,
                                                 "method": "post",
                                                 "headers": [
-                                                    {
-                                                        "name": "X-SoKeto-Amazon-Key",
-                                                        "value": "DA_CONFIGURARE"
-                                                    },
                                                     {
                                                         "name": "X-Amazon-Import-Run-Id",
                                                         "value": "{{1.data.run_id}}"
@@ -361,8 +363,6 @@
                                                 "qs": [],
                                                 "bodyType": "raw",
                                                 "parseResponse": false,
-                                                "authUser": "",
-                                                "authPass": "",
                                                 "timeout": "40",
                                                 "shareCookies": false,
                                                 "ca": "",
@@ -379,7 +379,15 @@
                                                 "designer": {
                                                     "x": 1600,
                                                     "y": -350
-                                                }
+                                                },
+                                                "parameters": [
+                                                    {
+                                                        "name": "auth",
+                                                        "type": "keychain:apikeyauth",
+                                                        "label": "Credentials",
+                                                        "required": true
+                                                    }
+                                                ]
                                             }
                                         }
                                     ]
@@ -388,21 +396,18 @@
                                     "flow": [
                                         {
                                             "id": 33,
-                                            "module": "http:ActionSendData",
+                                            "module": "http:ActionSendDataAPIKeyAuth",
                                             "version": 3,
                                             "parameters": {
                                                 "handleErrors": true,
-                                                "useNewZLibDeCompress": true
+                                                "useNewZLibDeCompress": true,
+                                                "auth": 0
                                             },
                                             "mapper": {
                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                 "serializeUrl": false,
                                                 "method": "post",
                                                 "headers": [
-                                                    {
-                                                        "name": "X-SoKeto-Amazon-Key",
-                                                        "value": "DA_CONFIGURARE"
-                                                    },
                                                     {
                                                         "name": "X-Amazon-Import-Run-Id",
                                                         "value": "{{1.data.run_id}}"
@@ -439,8 +444,6 @@
                                                 "qs": [],
                                                 "bodyType": "raw",
                                                 "parseResponse": false,
-                                                "authUser": "",
-                                                "authPass": "",
                                                 "timeout": "40",
                                                 "shareCookies": false,
                                                 "ca": "",
@@ -457,7 +460,15 @@
                                                 "designer": {
                                                     "x": 1200,
                                                     "y": -150
-                                                }
+                                                },
+                                                "parameters": [
+                                                    {
+                                                        "name": "auth",
+                                                        "type": "keychain:apikeyauth",
+                                                        "label": "Credentials",
+                                                        "required": true
+                                                    }
+                                                ]
                                             },
                                             "filter": {
                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
@@ -478,21 +489,18 @@
                                     "flow": [
                                         {
                                             "id": 35,
-                                            "module": "http:ActionSendData",
+                                            "module": "http:ActionSendDataAPIKeyAuth",
                                             "version": 3,
                                             "parameters": {
                                                 "handleErrors": true,
-                                                "useNewZLibDeCompress": true
+                                                "useNewZLibDeCompress": true,
+                                                "auth": 0
                                             },
                                             "mapper": {
                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                 "serializeUrl": false,
                                                 "method": "post",
                                                 "headers": [
-                                                    {
-                                                        "name": "X-SoKeto-Amazon-Key",
-                                                        "value": "DA_CONFIGURARE"
-                                                    },
                                                     {
                                                         "name": "X-Amazon-Import-Run-Id",
                                                         "value": "{{1.data.run_id}}"
@@ -529,8 +537,6 @@
                                                 "qs": [],
                                                 "bodyType": "raw",
                                                 "parseResponse": false,
-                                                "authUser": "",
-                                                "authPass": "",
                                                 "timeout": "40",
                                                 "shareCookies": false,
                                                 "ca": "",
@@ -547,7 +553,15 @@
                                                 "designer": {
                                                     "x": 1200,
                                                     "y": 50
-                                                }
+                                                },
+                                                "parameters": [
+                                                    {
+                                                        "name": "auth",
+                                                        "type": "keychain:apikeyauth",
+                                                        "label": "Credentials",
+                                                        "required": true
+                                                    }
+                                                ]
                                             },
                                             "filter": {
                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
@@ -705,21 +719,18 @@
                                                         },
                                                         {
                                                             "id": 47,
-                                                            "module": "http:ActionSendData",
+                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                             "version": 3,
                                                             "parameters": {
                                                                 "handleErrors": true,
-                                                                "useNewZLibDeCompress": true
+                                                                "useNewZLibDeCompress": true,
+                                                                "auth": 0
                                                             },
                                                             "mapper": {
                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-file",
                                                                 "serializeUrl": false,
                                                                 "method": "post",
                                                                 "headers": [
-                                                                    {
-                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                        "value": "DA_CONFIGURARE"
-                                                                    },
                                                                     {
                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                         "value": "{{1.data.run_id}}"
@@ -768,8 +779,6 @@
                                                                 "qs": [],
                                                                 "bodyType": "raw",
                                                                 "parseResponse": false,
-                                                                "authUser": "",
-                                                                "authPass": "",
                                                                 "timeout": "40",
                                                                 "shareCookies": false,
                                                                 "ca": "",
@@ -786,7 +795,15 @@
                                                                 "designer": {
                                                                     "x": 2200,
                                                                     "y": 100
-                                                                }
+                                                                },
+                                                                "parameters": [
+                                                                    {
+                                                                        "name": "auth",
+                                                                        "type": "keychain:apikeyauth",
+                                                                        "label": "Credentials",
+                                                                        "required": true
+                                                                    }
+                                                                ]
                                                             }
                                                         }
                                                     ]
@@ -795,21 +812,18 @@
                                                     "flow": [
                                                         {
                                                             "id": 49,
-                                                            "module": "http:ActionSendData",
+                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                             "version": 3,
                                                             "parameters": {
                                                                 "handleErrors": true,
-                                                                "useNewZLibDeCompress": true
+                                                                "useNewZLibDeCompress": true,
+                                                                "auth": 0
                                                             },
                                                             "mapper": {
                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                 "serializeUrl": false,
                                                                 "method": "post",
                                                                 "headers": [
-                                                                    {
-                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                        "value": "DA_CONFIGURARE"
-                                                                    },
                                                                     {
                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                         "value": "{{1.data.run_id}}"
@@ -846,8 +860,6 @@
                                                                 "qs": [],
                                                                 "bodyType": "raw",
                                                                 "parseResponse": false,
-                                                                "authUser": "",
-                                                                "authPass": "",
                                                                 "timeout": "40",
                                                                 "shareCookies": false,
                                                                 "ca": "",
@@ -864,7 +876,15 @@
                                                                 "designer": {
                                                                     "x": 1800,
                                                                     "y": 300
-                                                                }
+                                                                },
+                                                                "parameters": [
+                                                                    {
+                                                                        "name": "auth",
+                                                                        "type": "keychain:apikeyauth",
+                                                                        "label": "Credentials",
+                                                                        "required": true
+                                                                    }
+                                                                ]
                                                             },
                                                             "filter": {
                                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
@@ -885,21 +905,18 @@
                                                     "flow": [
                                                         {
                                                             "id": 51,
-                                                            "module": "http:ActionSendData",
+                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                             "version": 3,
                                                             "parameters": {
                                                                 "handleErrors": true,
-                                                                "useNewZLibDeCompress": true
+                                                                "useNewZLibDeCompress": true,
+                                                                "auth": 0
                                                             },
                                                             "mapper": {
                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                 "serializeUrl": false,
                                                                 "method": "post",
                                                                 "headers": [
-                                                                    {
-                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                        "value": "DA_CONFIGURARE"
-                                                                    },
                                                                     {
                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                         "value": "{{1.data.run_id}}"
@@ -936,8 +953,6 @@
                                                                 "qs": [],
                                                                 "bodyType": "raw",
                                                                 "parseResponse": false,
-                                                                "authUser": "",
-                                                                "authPass": "",
                                                                 "timeout": "40",
                                                                 "shareCookies": false,
                                                                 "ca": "",
@@ -954,7 +969,15 @@
                                                                 "designer": {
                                                                     "x": 1800,
                                                                     "y": 500
-                                                                }
+                                                                },
+                                                                "parameters": [
+                                                                    {
+                                                                        "name": "auth",
+                                                                        "type": "keychain:apikeyauth",
+                                                                        "label": "Credentials",
+                                                                        "required": true
+                                                                    }
+                                                                ]
                                                             },
                                                             "filter": {
                                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
@@ -1112,21 +1135,18 @@
                                                                         },
                                                                         {
                                                                             "id": 63,
-                                                                            "module": "http:ActionSendData",
+                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                             "version": 3,
                                                                             "parameters": {
                                                                                 "handleErrors": true,
-                                                                                "useNewZLibDeCompress": true
+                                                                                "useNewZLibDeCompress": true,
+                                                                                "auth": 0
                                                                             },
                                                                             "mapper": {
                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-file",
                                                                                 "serializeUrl": false,
                                                                                 "method": "post",
                                                                                 "headers": [
-                                                                                    {
-                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                        "value": "DA_CONFIGURARE"
-                                                                                    },
                                                                                     {
                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                         "value": "{{1.data.run_id}}"
@@ -1175,8 +1195,6 @@
                                                                                 "qs": [],
                                                                                 "bodyType": "raw",
                                                                                 "parseResponse": false,
-                                                                                "authUser": "",
-                                                                                "authPass": "",
                                                                                 "timeout": "40",
                                                                                 "shareCookies": false,
                                                                                 "ca": "",
@@ -1193,7 +1211,15 @@
                                                                                 "designer": {
                                                                                     "x": 2800,
                                                                                     "y": 550
-                                                                                }
+                                                                                },
+                                                                                "parameters": [
+                                                                                    {
+                                                                                        "name": "auth",
+                                                                                        "type": "keychain:apikeyauth",
+                                                                                        "label": "Credentials",
+                                                                                        "required": true
+                                                                                    }
+                                                                                ]
                                                                             }
                                                                         }
                                                                     ]
@@ -1202,21 +1228,18 @@
                                                                     "flow": [
                                                                         {
                                                                             "id": 65,
-                                                                            "module": "http:ActionSendData",
+                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                             "version": 3,
                                                                             "parameters": {
                                                                                 "handleErrors": true,
-                                                                                "useNewZLibDeCompress": true
+                                                                                "useNewZLibDeCompress": true,
+                                                                                "auth": 0
                                                                             },
                                                                             "mapper": {
                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                                 "serializeUrl": false,
                                                                                 "method": "post",
                                                                                 "headers": [
-                                                                                    {
-                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                        "value": "DA_CONFIGURARE"
-                                                                                    },
                                                                                     {
                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                         "value": "{{1.data.run_id}}"
@@ -1253,8 +1276,6 @@
                                                                                 "qs": [],
                                                                                 "bodyType": "raw",
                                                                                 "parseResponse": false,
-                                                                                "authUser": "",
-                                                                                "authPass": "",
                                                                                 "timeout": "40",
                                                                                 "shareCookies": false,
                                                                                 "ca": "",
@@ -1271,7 +1292,15 @@
                                                                                 "designer": {
                                                                                     "x": 2400,
                                                                                     "y": 750
-                                                                                }
+                                                                                },
+                                                                                "parameters": [
+                                                                                    {
+                                                                                        "name": "auth",
+                                                                                        "type": "keychain:apikeyauth",
+                                                                                        "label": "Credentials",
+                                                                                        "required": true
+                                                                                    }
+                                                                                ]
                                                                             },
                                                                             "filter": {
                                                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
@@ -1292,21 +1321,18 @@
                                                                     "flow": [
                                                                         {
                                                                             "id": 67,
-                                                                            "module": "http:ActionSendData",
+                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                             "version": 3,
                                                                             "parameters": {
                                                                                 "handleErrors": true,
-                                                                                "useNewZLibDeCompress": true
+                                                                                "useNewZLibDeCompress": true,
+                                                                                "auth": 0
                                                                             },
                                                                             "mapper": {
                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                                 "serializeUrl": false,
                                                                                 "method": "post",
                                                                                 "headers": [
-                                                                                    {
-                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                        "value": "DA_CONFIGURARE"
-                                                                                    },
                                                                                     {
                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                         "value": "{{1.data.run_id}}"
@@ -1343,8 +1369,6 @@
                                                                                 "qs": [],
                                                                                 "bodyType": "raw",
                                                                                 "parseResponse": false,
-                                                                                "authUser": "",
-                                                                                "authPass": "",
                                                                                 "timeout": "40",
                                                                                 "shareCookies": false,
                                                                                 "ca": "",
@@ -1361,7 +1385,15 @@
                                                                                 "designer": {
                                                                                     "x": 2400,
                                                                                     "y": 950
-                                                                                }
+                                                                                },
+                                                                                "parameters": [
+                                                                                    {
+                                                                                        "name": "auth",
+                                                                                        "type": "keychain:apikeyauth",
+                                                                                        "label": "Credentials",
+                                                                                        "required": true
+                                                                                    }
+                                                                                ]
                                                                             },
                                                                             "filter": {
                                                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
@@ -1519,21 +1551,18 @@
                                                                                         },
                                                                                         {
                                                                                             "id": 79,
-                                                                                            "module": "http:ActionSendData",
+                                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                                             "version": 3,
                                                                                             "parameters": {
                                                                                                 "handleErrors": true,
-                                                                                                "useNewZLibDeCompress": true
+                                                                                                "useNewZLibDeCompress": true,
+                                                                                                "auth": 0
                                                                                             },
                                                                                             "mapper": {
                                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-file",
                                                                                                 "serializeUrl": false,
                                                                                                 "method": "post",
                                                                                                 "headers": [
-                                                                                                    {
-                                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                                        "value": "DA_CONFIGURARE"
-                                                                                                    },
                                                                                                     {
                                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                                         "value": "{{1.data.run_id}}"
@@ -1582,8 +1611,6 @@
                                                                                                 "qs": [],
                                                                                                 "bodyType": "raw",
                                                                                                 "parseResponse": false,
-                                                                                                "authUser": "",
-                                                                                                "authPass": "",
                                                                                                 "timeout": "40",
                                                                                                 "shareCookies": false,
                                                                                                 "ca": "",
@@ -1600,7 +1627,15 @@
                                                                                                 "designer": {
                                                                                                     "x": 3400,
                                                                                                     "y": 1000
-                                                                                                }
+                                                                                                },
+                                                                                                "parameters": [
+                                                                                                    {
+                                                                                                        "name": "auth",
+                                                                                                        "type": "keychain:apikeyauth",
+                                                                                                        "label": "Credentials",
+                                                                                                        "required": true
+                                                                                                    }
+                                                                                                ]
                                                                                             }
                                                                                         }
                                                                                     ]
@@ -1609,21 +1644,18 @@
                                                                                     "flow": [
                                                                                         {
                                                                                             "id": 81,
-                                                                                            "module": "http:ActionSendData",
+                                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                                             "version": 3,
                                                                                             "parameters": {
                                                                                                 "handleErrors": true,
-                                                                                                "useNewZLibDeCompress": true
+                                                                                                "useNewZLibDeCompress": true,
+                                                                                                "auth": 0
                                                                                             },
                                                                                             "mapper": {
                                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                                                 "serializeUrl": false,
                                                                                                 "method": "post",
                                                                                                 "headers": [
-                                                                                                    {
-                                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                                        "value": "DA_CONFIGURARE"
-                                                                                                    },
                                                                                                     {
                                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                                         "value": "{{1.data.run_id}}"
@@ -1660,8 +1692,6 @@
                                                                                                 "qs": [],
                                                                                                 "bodyType": "raw",
                                                                                                 "parseResponse": false,
-                                                                                                "authUser": "",
-                                                                                                "authPass": "",
                                                                                                 "timeout": "40",
                                                                                                 "shareCookies": false,
                                                                                                 "ca": "",
@@ -1678,7 +1708,15 @@
                                                                                                 "designer": {
                                                                                                     "x": 3000,
                                                                                                     "y": 1200
-                                                                                                }
+                                                                                                },
+                                                                                                "parameters": [
+                                                                                                    {
+                                                                                                        "name": "auth",
+                                                                                                        "type": "keychain:apikeyauth",
+                                                                                                        "label": "Credentials",
+                                                                                                        "required": true
+                                                                                                    }
+                                                                                                ]
                                                                                             },
                                                                                             "filter": {
                                                                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
@@ -1699,21 +1737,18 @@
                                                                                     "flow": [
                                                                                         {
                                                                                             "id": 83,
-                                                                                            "module": "http:ActionSendData",
+                                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                                             "version": 3,
                                                                                             "parameters": {
                                                                                                 "handleErrors": true,
-                                                                                                "useNewZLibDeCompress": true
+                                                                                                "useNewZLibDeCompress": true,
+                                                                                                "auth": 0
                                                                                             },
                                                                                             "mapper": {
                                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                                                 "serializeUrl": false,
                                                                                                 "method": "post",
                                                                                                 "headers": [
-                                                                                                    {
-                                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                                        "value": "DA_CONFIGURARE"
-                                                                                                    },
                                                                                                     {
                                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                                         "value": "{{1.data.run_id}}"
@@ -1750,8 +1785,6 @@
                                                                                                 "qs": [],
                                                                                                 "bodyType": "raw",
                                                                                                 "parseResponse": false,
-                                                                                                "authUser": "",
-                                                                                                "authPass": "",
                                                                                                 "timeout": "40",
                                                                                                 "shareCookies": false,
                                                                                                 "ca": "",
@@ -1768,7 +1801,15 @@
                                                                                                 "designer": {
                                                                                                     "x": 3000,
                                                                                                     "y": 1400
-                                                                                                }
+                                                                                                },
+                                                                                                "parameters": [
+                                                                                                    {
+                                                                                                        "name": "auth",
+                                                                                                        "type": "keychain:apikeyauth",
+                                                                                                        "label": "Credentials",
+                                                                                                        "required": true
+                                                                                                    }
+                                                                                                ]
                                                                                             },
                                                                                             "filter": {
                                                                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
@@ -1789,21 +1830,18 @@
                                                                                     "flow": [
                                                                                         {
                                                                                             "id": 87,
-                                                                                            "module": "http:ActionSendData",
+                                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                                             "version": 3,
                                                                                             "parameters": {
                                                                                                 "handleErrors": true,
-                                                                                                "useNewZLibDeCompress": true
+                                                                                                "useNewZLibDeCompress": true,
+                                                                                                "auth": 0
                                                                                             },
                                                                                             "mapper": {
                                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                                                 "serializeUrl": false,
                                                                                                 "method": "post",
                                                                                                 "headers": [
-                                                                                                    {
-                                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                                        "value": "DA_CONFIGURARE"
-                                                                                                    },
                                                                                                     {
                                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                                         "value": "{{1.data.run_id}}"
@@ -1840,8 +1878,6 @@
                                                                                                 "qs": [],
                                                                                                 "bodyType": "raw",
                                                                                                 "parseResponse": false,
-                                                                                                "authUser": "",
-                                                                                                "authPass": "",
                                                                                                 "timeout": "40",
                                                                                                 "shareCookies": false,
                                                                                                 "ca": "",
@@ -1858,7 +1894,15 @@
                                                                                                 "designer": {
                                                                                                     "x": 3000,
                                                                                                     "y": 1600
-                                                                                                }
+                                                                                                },
+                                                                                                "parameters": [
+                                                                                                    {
+                                                                                                        "name": "auth",
+                                                                                                        "type": "keychain:apikeyauth",
+                                                                                                        "label": "Credentials",
+                                                                                                        "required": true
+                                                                                                    }
+                                                                                                ]
                                                                                             },
                                                                                             "filter": {
                                                                                                 "name": "Ancora pending dopo quattro controlli: segnala",
@@ -1879,21 +1923,18 @@
                                                                                     "flow": [
                                                                                         {
                                                                                             "id": 85,
-                                                                                            "module": "http:ActionSendData",
+                                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                                             "version": 3,
                                                                                             "parameters": {
                                                                                                 "handleErrors": true,
-                                                                                                "useNewZLibDeCompress": true
+                                                                                                "useNewZLibDeCompress": true,
+                                                                                                "auth": 0
                                                                                             },
                                                                                             "mapper": {
                                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                                                 "serializeUrl": false,
                                                                                                 "method": "post",
                                                                                                 "headers": [
-                                                                                                    {
-                                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                                        "value": "DA_CONFIGURARE"
-                                                                                                    },
                                                                                                     {
                                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                                         "value": "{{1.data.run_id}}"
@@ -1930,8 +1971,6 @@
                                                                                                 "qs": [],
                                                                                                 "bodyType": "raw",
                                                                                                 "parseResponse": false,
-                                                                                                "authUser": "",
-                                                                                                "authPass": "",
                                                                                                 "timeout": "40",
                                                                                                 "shareCookies": false,
                                                                                                 "ca": "",
@@ -1948,7 +1987,15 @@
                                                                                                 "designer": {
                                                                                                     "x": 3000,
                                                                                                     "y": 1800
-                                                                                                }
+                                                                                                },
+                                                                                                "parameters": [
+                                                                                                    {
+                                                                                                        "name": "auth",
+                                                                                                        "type": "keychain:apikeyauth",
+                                                                                                        "label": "Credentials",
+                                                                                                        "required": true
+                                                                                                    }
+                                                                                                ]
                                                                                             },
                                                                                             "filter": {
                                                                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
@@ -1973,21 +2020,18 @@
                                                                     "flow": [
                                                                         {
                                                                             "id": 69,
-                                                                            "module": "http:ActionSendData",
+                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                             "version": 3,
                                                                             "parameters": {
                                                                                 "handleErrors": true,
-                                                                                "useNewZLibDeCompress": true
+                                                                                "useNewZLibDeCompress": true,
+                                                                                "auth": 0
                                                                             },
                                                                             "mapper": {
                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                                 "serializeUrl": false,
                                                                                 "method": "post",
                                                                                 "headers": [
-                                                                                    {
-                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                        "value": "DA_CONFIGURARE"
-                                                                                    },
                                                                                     {
                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                         "value": "{{1.data.run_id}}"
@@ -2024,8 +2068,6 @@
                                                                                 "qs": [],
                                                                                 "bodyType": "raw",
                                                                                 "parseResponse": false,
-                                                                                "authUser": "",
-                                                                                "authPass": "",
                                                                                 "timeout": "40",
                                                                                 "shareCookies": false,
                                                                                 "ca": "",
@@ -2042,7 +2084,15 @@
                                                                                 "designer": {
                                                                                     "x": 2400,
                                                                                     "y": 1350
-                                                                                }
+                                                                                },
+                                                                                "parameters": [
+                                                                                    {
+                                                                                        "name": "auth",
+                                                                                        "type": "keychain:apikeyauth",
+                                                                                        "label": "Credentials",
+                                                                                        "required": true
+                                                                                    }
+                                                                                ]
                                                                             },
                                                                             "filter": {
                                                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
@@ -2067,21 +2117,18 @@
                                                     "flow": [
                                                         {
                                                             "id": 53,
-                                                            "module": "http:ActionSendData",
+                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                             "version": 3,
                                                             "parameters": {
                                                                 "handleErrors": true,
-                                                                "useNewZLibDeCompress": true
+                                                                "useNewZLibDeCompress": true,
+                                                                "auth": 0
                                                             },
                                                             "mapper": {
                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                 "serializeUrl": false,
                                                                 "method": "post",
                                                                 "headers": [
-                                                                    {
-                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                        "value": "DA_CONFIGURARE"
-                                                                    },
                                                                     {
                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                         "value": "{{1.data.run_id}}"
@@ -2118,8 +2165,6 @@
                                                                 "qs": [],
                                                                 "bodyType": "raw",
                                                                 "parseResponse": false,
-                                                                "authUser": "",
-                                                                "authPass": "",
                                                                 "timeout": "40",
                                                                 "shareCookies": false,
                                                                 "ca": "",
@@ -2136,7 +2181,15 @@
                                                                 "designer": {
                                                                     "x": 1800,
                                                                     "y": 900
-                                                                }
+                                                                },
+                                                                "parameters": [
+                                                                    {
+                                                                        "name": "auth",
+                                                                        "type": "keychain:apikeyauth",
+                                                                        "label": "Credentials",
+                                                                        "required": true
+                                                                    }
+                                                                ]
                                                             },
                                                             "filter": {
                                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
@@ -2161,21 +2214,18 @@
                                     "flow": [
                                         {
                                             "id": 37,
-                                            "module": "http:ActionSendData",
+                                            "module": "http:ActionSendDataAPIKeyAuth",
                                             "version": 3,
                                             "parameters": {
                                                 "handleErrors": true,
-                                                "useNewZLibDeCompress": true
+                                                "useNewZLibDeCompress": true,
+                                                "auth": 0
                                             },
                                             "mapper": {
                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                 "serializeUrl": false,
                                                 "method": "post",
                                                 "headers": [
-                                                    {
-                                                        "name": "X-SoKeto-Amazon-Key",
-                                                        "value": "DA_CONFIGURARE"
-                                                    },
                                                     {
                                                         "name": "X-Amazon-Import-Run-Id",
                                                         "value": "{{1.data.run_id}}"
@@ -2212,8 +2262,6 @@
                                                 "qs": [],
                                                 "bodyType": "raw",
                                                 "parseResponse": false,
-                                                "authUser": "",
-                                                "authPass": "",
                                                 "timeout": "40",
                                                 "shareCookies": false,
                                                 "ca": "",
@@ -2230,7 +2278,15 @@
                                                 "designer": {
                                                     "x": 1200,
                                                     "y": 450
-                                                }
+                                                },
+                                                "parameters": [
+                                                    {
+                                                        "name": "auth",
+                                                        "type": "keychain:apikeyauth",
+                                                        "label": "Credentials",
+                                                        "required": true
+                                                    }
+                                                ]
                                             },
                                             "filter": {
                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
@@ -2392,21 +2448,18 @@
                                         },
                                         {
                                             "id": 97,
-                                            "module": "http:ActionSendData",
+                                            "module": "http:ActionSendDataAPIKeyAuth",
                                             "version": 3,
                                             "parameters": {
                                                 "handleErrors": true,
-                                                "useNewZLibDeCompress": true
+                                                "useNewZLibDeCompress": true,
+                                                "auth": 0
                                             },
                                             "mapper": {
                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-file",
                                                 "serializeUrl": false,
                                                 "method": "post",
                                                 "headers": [
-                                                    {
-                                                        "name": "X-SoKeto-Amazon-Key",
-                                                        "value": "DA_CONFIGURARE"
-                                                    },
                                                     {
                                                         "name": "X-Amazon-Import-Run-Id",
                                                         "value": "{{1.data.run_id}}"
@@ -2455,8 +2508,6 @@
                                                 "qs": [],
                                                 "bodyType": "raw",
                                                 "parseResponse": false,
-                                                "authUser": "",
-                                                "authPass": "",
                                                 "timeout": "40",
                                                 "shareCookies": false,
                                                 "ca": "",
@@ -2473,7 +2524,15 @@
                                                 "designer": {
                                                     "x": 1600,
                                                     "y": 50
-                                                }
+                                                },
+                                                "parameters": [
+                                                    {
+                                                        "name": "auth",
+                                                        "type": "keychain:apikeyauth",
+                                                        "label": "Credentials",
+                                                        "required": true
+                                                    }
+                                                ]
                                             }
                                         }
                                     ]
@@ -2482,21 +2541,18 @@
                                     "flow": [
                                         {
                                             "id": 99,
-                                            "module": "http:ActionSendData",
+                                            "module": "http:ActionSendDataAPIKeyAuth",
                                             "version": 3,
                                             "parameters": {
                                                 "handleErrors": true,
-                                                "useNewZLibDeCompress": true
+                                                "useNewZLibDeCompress": true,
+                                                "auth": 0
                                             },
                                             "mapper": {
                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                 "serializeUrl": false,
                                                 "method": "post",
                                                 "headers": [
-                                                    {
-                                                        "name": "X-SoKeto-Amazon-Key",
-                                                        "value": "DA_CONFIGURARE"
-                                                    },
                                                     {
                                                         "name": "X-Amazon-Import-Run-Id",
                                                         "value": "{{1.data.run_id}}"
@@ -2533,8 +2589,6 @@
                                                 "qs": [],
                                                 "bodyType": "raw",
                                                 "parseResponse": false,
-                                                "authUser": "",
-                                                "authPass": "",
                                                 "timeout": "40",
                                                 "shareCookies": false,
                                                 "ca": "",
@@ -2551,7 +2605,15 @@
                                                 "designer": {
                                                     "x": 1200,
                                                     "y": 250
-                                                }
+                                                },
+                                                "parameters": [
+                                                    {
+                                                        "name": "auth",
+                                                        "type": "keychain:apikeyauth",
+                                                        "label": "Credentials",
+                                                        "required": true
+                                                    }
+                                                ]
                                             },
                                             "filter": {
                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
@@ -2572,21 +2634,18 @@
                                     "flow": [
                                         {
                                             "id": 101,
-                                            "module": "http:ActionSendData",
+                                            "module": "http:ActionSendDataAPIKeyAuth",
                                             "version": 3,
                                             "parameters": {
                                                 "handleErrors": true,
-                                                "useNewZLibDeCompress": true
+                                                "useNewZLibDeCompress": true,
+                                                "auth": 0
                                             },
                                             "mapper": {
                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                 "serializeUrl": false,
                                                 "method": "post",
                                                 "headers": [
-                                                    {
-                                                        "name": "X-SoKeto-Amazon-Key",
-                                                        "value": "DA_CONFIGURARE"
-                                                    },
                                                     {
                                                         "name": "X-Amazon-Import-Run-Id",
                                                         "value": "{{1.data.run_id}}"
@@ -2623,8 +2682,6 @@
                                                 "qs": [],
                                                 "bodyType": "raw",
                                                 "parseResponse": false,
-                                                "authUser": "",
-                                                "authPass": "",
                                                 "timeout": "40",
                                                 "shareCookies": false,
                                                 "ca": "",
@@ -2641,7 +2698,15 @@
                                                 "designer": {
                                                     "x": 1200,
                                                     "y": 450
-                                                }
+                                                },
+                                                "parameters": [
+                                                    {
+                                                        "name": "auth",
+                                                        "type": "keychain:apikeyauth",
+                                                        "label": "Credentials",
+                                                        "required": true
+                                                    }
+                                                ]
                                             },
                                             "filter": {
                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
@@ -2799,21 +2864,18 @@
                                                         },
                                                         {
                                                             "id": 113,
-                                                            "module": "http:ActionSendData",
+                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                             "version": 3,
                                                             "parameters": {
                                                                 "handleErrors": true,
-                                                                "useNewZLibDeCompress": true
+                                                                "useNewZLibDeCompress": true,
+                                                                "auth": 0
                                                             },
                                                             "mapper": {
                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-file",
                                                                 "serializeUrl": false,
                                                                 "method": "post",
                                                                 "headers": [
-                                                                    {
-                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                        "value": "DA_CONFIGURARE"
-                                                                    },
                                                                     {
                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                         "value": "{{1.data.run_id}}"
@@ -2862,8 +2924,6 @@
                                                                 "qs": [],
                                                                 "bodyType": "raw",
                                                                 "parseResponse": false,
-                                                                "authUser": "",
-                                                                "authPass": "",
                                                                 "timeout": "40",
                                                                 "shareCookies": false,
                                                                 "ca": "",
@@ -2880,7 +2940,15 @@
                                                                 "designer": {
                                                                     "x": 2200,
                                                                     "y": 500
-                                                                }
+                                                                },
+                                                                "parameters": [
+                                                                    {
+                                                                        "name": "auth",
+                                                                        "type": "keychain:apikeyauth",
+                                                                        "label": "Credentials",
+                                                                        "required": true
+                                                                    }
+                                                                ]
                                                             }
                                                         }
                                                     ]
@@ -2889,21 +2957,18 @@
                                                     "flow": [
                                                         {
                                                             "id": 115,
-                                                            "module": "http:ActionSendData",
+                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                             "version": 3,
                                                             "parameters": {
                                                                 "handleErrors": true,
-                                                                "useNewZLibDeCompress": true
+                                                                "useNewZLibDeCompress": true,
+                                                                "auth": 0
                                                             },
                                                             "mapper": {
                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                 "serializeUrl": false,
                                                                 "method": "post",
                                                                 "headers": [
-                                                                    {
-                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                        "value": "DA_CONFIGURARE"
-                                                                    },
                                                                     {
                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                         "value": "{{1.data.run_id}}"
@@ -2940,8 +3005,6 @@
                                                                 "qs": [],
                                                                 "bodyType": "raw",
                                                                 "parseResponse": false,
-                                                                "authUser": "",
-                                                                "authPass": "",
                                                                 "timeout": "40",
                                                                 "shareCookies": false,
                                                                 "ca": "",
@@ -2958,7 +3021,15 @@
                                                                 "designer": {
                                                                     "x": 1800,
                                                                     "y": 700
-                                                                }
+                                                                },
+                                                                "parameters": [
+                                                                    {
+                                                                        "name": "auth",
+                                                                        "type": "keychain:apikeyauth",
+                                                                        "label": "Credentials",
+                                                                        "required": true
+                                                                    }
+                                                                ]
                                                             },
                                                             "filter": {
                                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
@@ -2979,21 +3050,18 @@
                                                     "flow": [
                                                         {
                                                             "id": 117,
-                                                            "module": "http:ActionSendData",
+                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                             "version": 3,
                                                             "parameters": {
                                                                 "handleErrors": true,
-                                                                "useNewZLibDeCompress": true
+                                                                "useNewZLibDeCompress": true,
+                                                                "auth": 0
                                                             },
                                                             "mapper": {
                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                 "serializeUrl": false,
                                                                 "method": "post",
                                                                 "headers": [
-                                                                    {
-                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                        "value": "DA_CONFIGURARE"
-                                                                    },
                                                                     {
                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                         "value": "{{1.data.run_id}}"
@@ -3030,8 +3098,6 @@
                                                                 "qs": [],
                                                                 "bodyType": "raw",
                                                                 "parseResponse": false,
-                                                                "authUser": "",
-                                                                "authPass": "",
                                                                 "timeout": "40",
                                                                 "shareCookies": false,
                                                                 "ca": "",
@@ -3048,7 +3114,15 @@
                                                                 "designer": {
                                                                     "x": 1800,
                                                                     "y": 900
-                                                                }
+                                                                },
+                                                                "parameters": [
+                                                                    {
+                                                                        "name": "auth",
+                                                                        "type": "keychain:apikeyauth",
+                                                                        "label": "Credentials",
+                                                                        "required": true
+                                                                    }
+                                                                ]
                                                             },
                                                             "filter": {
                                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
@@ -3206,21 +3280,18 @@
                                                                         },
                                                                         {
                                                                             "id": 129,
-                                                                            "module": "http:ActionSendData",
+                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                             "version": 3,
                                                                             "parameters": {
                                                                                 "handleErrors": true,
-                                                                                "useNewZLibDeCompress": true
+                                                                                "useNewZLibDeCompress": true,
+                                                                                "auth": 0
                                                                             },
                                                                             "mapper": {
                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-file",
                                                                                 "serializeUrl": false,
                                                                                 "method": "post",
                                                                                 "headers": [
-                                                                                    {
-                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                        "value": "DA_CONFIGURARE"
-                                                                                    },
                                                                                     {
                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                         "value": "{{1.data.run_id}}"
@@ -3269,8 +3340,6 @@
                                                                                 "qs": [],
                                                                                 "bodyType": "raw",
                                                                                 "parseResponse": false,
-                                                                                "authUser": "",
-                                                                                "authPass": "",
                                                                                 "timeout": "40",
                                                                                 "shareCookies": false,
                                                                                 "ca": "",
@@ -3287,7 +3356,15 @@
                                                                                 "designer": {
                                                                                     "x": 2800,
                                                                                     "y": 950
-                                                                                }
+                                                                                },
+                                                                                "parameters": [
+                                                                                    {
+                                                                                        "name": "auth",
+                                                                                        "type": "keychain:apikeyauth",
+                                                                                        "label": "Credentials",
+                                                                                        "required": true
+                                                                                    }
+                                                                                ]
                                                                             }
                                                                         }
                                                                     ]
@@ -3296,21 +3373,18 @@
                                                                     "flow": [
                                                                         {
                                                                             "id": 131,
-                                                                            "module": "http:ActionSendData",
+                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                             "version": 3,
                                                                             "parameters": {
                                                                                 "handleErrors": true,
-                                                                                "useNewZLibDeCompress": true
+                                                                                "useNewZLibDeCompress": true,
+                                                                                "auth": 0
                                                                             },
                                                                             "mapper": {
                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                                 "serializeUrl": false,
                                                                                 "method": "post",
                                                                                 "headers": [
-                                                                                    {
-                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                        "value": "DA_CONFIGURARE"
-                                                                                    },
                                                                                     {
                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                         "value": "{{1.data.run_id}}"
@@ -3347,8 +3421,6 @@
                                                                                 "qs": [],
                                                                                 "bodyType": "raw",
                                                                                 "parseResponse": false,
-                                                                                "authUser": "",
-                                                                                "authPass": "",
                                                                                 "timeout": "40",
                                                                                 "shareCookies": false,
                                                                                 "ca": "",
@@ -3365,7 +3437,15 @@
                                                                                 "designer": {
                                                                                     "x": 2400,
                                                                                     "y": 1150
-                                                                                }
+                                                                                },
+                                                                                "parameters": [
+                                                                                    {
+                                                                                        "name": "auth",
+                                                                                        "type": "keychain:apikeyauth",
+                                                                                        "label": "Credentials",
+                                                                                        "required": true
+                                                                                    }
+                                                                                ]
                                                                             },
                                                                             "filter": {
                                                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
@@ -3386,21 +3466,18 @@
                                                                     "flow": [
                                                                         {
                                                                             "id": 133,
-                                                                            "module": "http:ActionSendData",
+                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                             "version": 3,
                                                                             "parameters": {
                                                                                 "handleErrors": true,
-                                                                                "useNewZLibDeCompress": true
+                                                                                "useNewZLibDeCompress": true,
+                                                                                "auth": 0
                                                                             },
                                                                             "mapper": {
                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                                 "serializeUrl": false,
                                                                                 "method": "post",
                                                                                 "headers": [
-                                                                                    {
-                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                        "value": "DA_CONFIGURARE"
-                                                                                    },
                                                                                     {
                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                         "value": "{{1.data.run_id}}"
@@ -3437,8 +3514,6 @@
                                                                                 "qs": [],
                                                                                 "bodyType": "raw",
                                                                                 "parseResponse": false,
-                                                                                "authUser": "",
-                                                                                "authPass": "",
                                                                                 "timeout": "40",
                                                                                 "shareCookies": false,
                                                                                 "ca": "",
@@ -3455,7 +3530,15 @@
                                                                                 "designer": {
                                                                                     "x": 2400,
                                                                                     "y": 1350
-                                                                                }
+                                                                                },
+                                                                                "parameters": [
+                                                                                    {
+                                                                                        "name": "auth",
+                                                                                        "type": "keychain:apikeyauth",
+                                                                                        "label": "Credentials",
+                                                                                        "required": true
+                                                                                    }
+                                                                                ]
                                                                             },
                                                                             "filter": {
                                                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
@@ -3613,21 +3696,18 @@
                                                                                         },
                                                                                         {
                                                                                             "id": 145,
-                                                                                            "module": "http:ActionSendData",
+                                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                                             "version": 3,
                                                                                             "parameters": {
                                                                                                 "handleErrors": true,
-                                                                                                "useNewZLibDeCompress": true
+                                                                                                "useNewZLibDeCompress": true,
+                                                                                                "auth": 0
                                                                                             },
                                                                                             "mapper": {
                                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-file",
                                                                                                 "serializeUrl": false,
                                                                                                 "method": "post",
                                                                                                 "headers": [
-                                                                                                    {
-                                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                                        "value": "DA_CONFIGURARE"
-                                                                                                    },
                                                                                                     {
                                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                                         "value": "{{1.data.run_id}}"
@@ -3676,8 +3756,6 @@
                                                                                                 "qs": [],
                                                                                                 "bodyType": "raw",
                                                                                                 "parseResponse": false,
-                                                                                                "authUser": "",
-                                                                                                "authPass": "",
                                                                                                 "timeout": "40",
                                                                                                 "shareCookies": false,
                                                                                                 "ca": "",
@@ -3694,7 +3772,15 @@
                                                                                                 "designer": {
                                                                                                     "x": 3400,
                                                                                                     "y": 1400
-                                                                                                }
+                                                                                                },
+                                                                                                "parameters": [
+                                                                                                    {
+                                                                                                        "name": "auth",
+                                                                                                        "type": "keychain:apikeyauth",
+                                                                                                        "label": "Credentials",
+                                                                                                        "required": true
+                                                                                                    }
+                                                                                                ]
                                                                                             }
                                                                                         }
                                                                                     ]
@@ -3703,21 +3789,18 @@
                                                                                     "flow": [
                                                                                         {
                                                                                             "id": 147,
-                                                                                            "module": "http:ActionSendData",
+                                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                                             "version": 3,
                                                                                             "parameters": {
                                                                                                 "handleErrors": true,
-                                                                                                "useNewZLibDeCompress": true
+                                                                                                "useNewZLibDeCompress": true,
+                                                                                                "auth": 0
                                                                                             },
                                                                                             "mapper": {
                                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                                                 "serializeUrl": false,
                                                                                                 "method": "post",
                                                                                                 "headers": [
-                                                                                                    {
-                                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                                        "value": "DA_CONFIGURARE"
-                                                                                                    },
                                                                                                     {
                                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                                         "value": "{{1.data.run_id}}"
@@ -3754,8 +3837,6 @@
                                                                                                 "qs": [],
                                                                                                 "bodyType": "raw",
                                                                                                 "parseResponse": false,
-                                                                                                "authUser": "",
-                                                                                                "authPass": "",
                                                                                                 "timeout": "40",
                                                                                                 "shareCookies": false,
                                                                                                 "ca": "",
@@ -3772,7 +3853,15 @@
                                                                                                 "designer": {
                                                                                                     "x": 3000,
                                                                                                     "y": 1600
-                                                                                                }
+                                                                                                },
+                                                                                                "parameters": [
+                                                                                                    {
+                                                                                                        "name": "auth",
+                                                                                                        "type": "keychain:apikeyauth",
+                                                                                                        "label": "Credentials",
+                                                                                                        "required": true
+                                                                                                    }
+                                                                                                ]
                                                                                             },
                                                                                             "filter": {
                                                                                                 "name": "CANCELLED: segnala, non presumere zero vendite",
@@ -3793,21 +3882,18 @@
                                                                                     "flow": [
                                                                                         {
                                                                                             "id": 149,
-                                                                                            "module": "http:ActionSendData",
+                                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                                             "version": 3,
                                                                                             "parameters": {
                                                                                                 "handleErrors": true,
-                                                                                                "useNewZLibDeCompress": true
+                                                                                                "useNewZLibDeCompress": true,
+                                                                                                "auth": 0
                                                                                             },
                                                                                             "mapper": {
                                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                                                 "serializeUrl": false,
                                                                                                 "method": "post",
                                                                                                 "headers": [
-                                                                                                    {
-                                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                                        "value": "DA_CONFIGURARE"
-                                                                                                    },
                                                                                                     {
                                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                                         "value": "{{1.data.run_id}}"
@@ -3844,8 +3930,6 @@
                                                                                                 "qs": [],
                                                                                                 "bodyType": "raw",
                                                                                                 "parseResponse": false,
-                                                                                                "authUser": "",
-                                                                                                "authPass": "",
                                                                                                 "timeout": "40",
                                                                                                 "shareCookies": false,
                                                                                                 "ca": "",
@@ -3862,7 +3946,15 @@
                                                                                                 "designer": {
                                                                                                     "x": 3000,
                                                                                                     "y": 1800
-                                                                                                }
+                                                                                                },
+                                                                                                "parameters": [
+                                                                                                    {
+                                                                                                        "name": "auth",
+                                                                                                        "type": "keychain:apikeyauth",
+                                                                                                        "label": "Credentials",
+                                                                                                        "required": true
+                                                                                                    }
+                                                                                                ]
                                                                                             },
                                                                                             "filter": {
                                                                                                 "name": "FATAL: segnala, non avanzare il checkpoint",
@@ -3883,21 +3975,18 @@
                                                                                     "flow": [
                                                                                         {
                                                                                             "id": 153,
-                                                                                            "module": "http:ActionSendData",
+                                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                                             "version": 3,
                                                                                             "parameters": {
                                                                                                 "handleErrors": true,
-                                                                                                "useNewZLibDeCompress": true
+                                                                                                "useNewZLibDeCompress": true,
+                                                                                                "auth": 0
                                                                                             },
                                                                                             "mapper": {
                                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                                                 "serializeUrl": false,
                                                                                                 "method": "post",
                                                                                                 "headers": [
-                                                                                                    {
-                                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                                        "value": "DA_CONFIGURARE"
-                                                                                                    },
                                                                                                     {
                                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                                         "value": "{{1.data.run_id}}"
@@ -3934,8 +4023,6 @@
                                                                                                 "qs": [],
                                                                                                 "bodyType": "raw",
                                                                                                 "parseResponse": false,
-                                                                                                "authUser": "",
-                                                                                                "authPass": "",
                                                                                                 "timeout": "40",
                                                                                                 "shareCookies": false,
                                                                                                 "ca": "",
@@ -3952,7 +4039,15 @@
                                                                                                 "designer": {
                                                                                                     "x": 3000,
                                                                                                     "y": 2000
-                                                                                                }
+                                                                                                },
+                                                                                                "parameters": [
+                                                                                                    {
+                                                                                                        "name": "auth",
+                                                                                                        "type": "keychain:apikeyauth",
+                                                                                                        "label": "Credentials",
+                                                                                                        "required": true
+                                                                                                    }
+                                                                                                ]
                                                                                             },
                                                                                             "filter": {
                                                                                                 "name": "Ancora pending dopo quattro controlli: segnala",
@@ -3973,21 +4068,18 @@
                                                                                     "flow": [
                                                                                         {
                                                                                             "id": 151,
-                                                                                            "module": "http:ActionSendData",
+                                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                                             "version": 3,
                                                                                             "parameters": {
                                                                                                 "handleErrors": true,
-                                                                                                "useNewZLibDeCompress": true
+                                                                                                "useNewZLibDeCompress": true,
+                                                                                                "auth": 0
                                                                                             },
                                                                                             "mapper": {
                                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                                                 "serializeUrl": false,
                                                                                                 "method": "post",
                                                                                                 "headers": [
-                                                                                                    {
-                                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                                        "value": "DA_CONFIGURARE"
-                                                                                                    },
                                                                                                     {
                                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                                         "value": "{{1.data.run_id}}"
@@ -4024,8 +4116,6 @@
                                                                                                 "qs": [],
                                                                                                 "bodyType": "raw",
                                                                                                 "parseResponse": false,
-                                                                                                "authUser": "",
-                                                                                                "authPass": "",
                                                                                                 "timeout": "40",
                                                                                                 "shareCookies": false,
                                                                                                 "ca": "",
@@ -4042,7 +4132,15 @@
                                                                                                 "designer": {
                                                                                                     "x": 3000,
                                                                                                     "y": 2200
-                                                                                                }
+                                                                                                },
+                                                                                                "parameters": [
+                                                                                                    {
+                                                                                                        "name": "auth",
+                                                                                                        "type": "keychain:apikeyauth",
+                                                                                                        "label": "Credentials",
+                                                                                                        "required": true
+                                                                                                    }
+                                                                                                ]
                                                                                             },
                                                                                             "filter": {
                                                                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
@@ -4067,21 +4165,18 @@
                                                                     "flow": [
                                                                         {
                                                                             "id": 135,
-                                                                            "module": "http:ActionSendData",
+                                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                                             "version": 3,
                                                                             "parameters": {
                                                                                 "handleErrors": true,
-                                                                                "useNewZLibDeCompress": true
+                                                                                "useNewZLibDeCompress": true,
+                                                                                "auth": 0
                                                                             },
                                                                             "mapper": {
                                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                                 "serializeUrl": false,
                                                                                 "method": "post",
                                                                                 "headers": [
-                                                                                    {
-                                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                                        "value": "DA_CONFIGURARE"
-                                                                                    },
                                                                                     {
                                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                                         "value": "{{1.data.run_id}}"
@@ -4118,8 +4213,6 @@
                                                                                 "qs": [],
                                                                                 "bodyType": "raw",
                                                                                 "parseResponse": false,
-                                                                                "authUser": "",
-                                                                                "authPass": "",
                                                                                 "timeout": "40",
                                                                                 "shareCookies": false,
                                                                                 "ca": "",
@@ -4136,7 +4229,15 @@
                                                                                 "designer": {
                                                                                     "x": 2400,
                                                                                     "y": 1750
-                                                                                }
+                                                                                },
+                                                                                "parameters": [
+                                                                                    {
+                                                                                        "name": "auth",
+                                                                                        "type": "keychain:apikeyauth",
+                                                                                        "label": "Credentials",
+                                                                                        "required": true
+                                                                                    }
+                                                                                ]
                                                                             },
                                                                             "filter": {
                                                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
@@ -4161,21 +4262,18 @@
                                                     "flow": [
                                                         {
                                                             "id": 119,
-                                                            "module": "http:ActionSendData",
+                                                            "module": "http:ActionSendDataAPIKeyAuth",
                                                             "version": 3,
                                                             "parameters": {
                                                                 "handleErrors": true,
-                                                                "useNewZLibDeCompress": true
+                                                                "useNewZLibDeCompress": true,
+                                                                "auth": 0
                                                             },
                                                             "mapper": {
                                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                                 "serializeUrl": false,
                                                                 "method": "post",
                                                                 "headers": [
-                                                                    {
-                                                                        "name": "X-SoKeto-Amazon-Key",
-                                                                        "value": "DA_CONFIGURARE"
-                                                                    },
                                                                     {
                                                                         "name": "X-Amazon-Import-Run-Id",
                                                                         "value": "{{1.data.run_id}}"
@@ -4212,8 +4310,6 @@
                                                                 "qs": [],
                                                                 "bodyType": "raw",
                                                                 "parseResponse": false,
-                                                                "authUser": "",
-                                                                "authPass": "",
                                                                 "timeout": "40",
                                                                 "shareCookies": false,
                                                                 "ca": "",
@@ -4230,7 +4326,15 @@
                                                                 "designer": {
                                                                     "x": 1800,
                                                                     "y": 1300
-                                                                }
+                                                                },
+                                                                "parameters": [
+                                                                    {
+                                                                        "name": "auth",
+                                                                        "type": "keychain:apikeyauth",
+                                                                        "label": "Credentials",
+                                                                        "required": true
+                                                                    }
+                                                                ]
                                                             },
                                                             "filter": {
                                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",
@@ -4255,21 +4359,18 @@
                                     "flow": [
                                         {
                                             "id": 103,
-                                            "module": "http:ActionSendData",
+                                            "module": "http:ActionSendDataAPIKeyAuth",
                                             "version": 3,
                                             "parameters": {
                                                 "handleErrors": true,
-                                                "useNewZLibDeCompress": true
+                                                "useNewZLibDeCompress": true,
+                                                "auth": 0
                                             },
                                             "mapper": {
                                                 "url": "https://gestionale.soketo.it/api/marketplace/amazon/report-status",
                                                 "serializeUrl": false,
                                                 "method": "post",
                                                 "headers": [
-                                                    {
-                                                        "name": "X-SoKeto-Amazon-Key",
-                                                        "value": "DA_CONFIGURARE"
-                                                    },
                                                     {
                                                         "name": "X-Amazon-Import-Run-Id",
                                                         "value": "{{1.data.run_id}}"
@@ -4306,8 +4407,6 @@
                                                 "qs": [],
                                                 "bodyType": "raw",
                                                 "parseResponse": false,
-                                                "authUser": "",
-                                                "authPass": "",
                                                 "timeout": "40",
                                                 "shareCookies": false,
                                                 "ca": "",
@@ -4324,7 +4423,15 @@
                                                 "designer": {
                                                     "x": 1200,
                                                     "y": 850
-                                                }
+                                                },
+                                                "parameters": [
+                                                    {
+                                                        "name": "auth",
+                                                        "type": "keychain:apikeyauth",
+                                                        "label": "Credentials",
+                                                        "required": true
+                                                    }
+                                                ]
                                             },
                                             "filter": {
                                                 "name": "Stato assente o inatteso: segnala, nessuno scarico",

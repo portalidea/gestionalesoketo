@@ -5,6 +5,7 @@ eseguono formule Make né sostituiscono i test del parser o il collaudo live.
 """
 from pathlib import Path
 import collections
+import copy
 import gzip
 import hashlib
 import json
@@ -48,6 +49,22 @@ def digest(value):
 
 def headers(module):
     return {h["name"]: h["value"] for h in module["mapper"]["headers"]}
+
+
+def legacy_view(data):
+    """Undo only the documented Keys changes to compare against the old flow."""
+    result = copy.deepcopy(data)
+    result["name"] = "SoKeto - Amazon EU - Ordini giornalieri - Collector FBM"
+    for item in dictionaries(result):
+        if item.get("module") != "http:ActionSendDataAPIKeyAuth":
+            continue
+        item["module"] = "http:ActionSendData"
+        del item["parameters"]["auth"]
+        del item["metadata"]["parameters"]
+        item["mapper"]["authUser"] = ""
+        item["mapper"]["authPass"] = ""
+        item["mapper"]["headers"].insert(0, {"name": "X-SoKeto-Amazon-Key", "value": "DA_CONFIGURARE"})
+    return result
 
 
 def transport_issues97(context, body):
@@ -115,6 +132,8 @@ class RecoveryWithoutRetryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.data = json.loads(BLUEPRINT.read_text())
+        cls.legacy = legacy_view(cls.data)
+        cls.legacy_modules = {n["id"]: n for n in dictionaries(cls.legacy) if "module" in n}
         cls.nodes = list(dictionaries(cls.data))
         cls.modules = {n["id"]: n for n in cls.nodes if "module" in n}
         cls.tsv = b"amazon-order-id\torder-item-id\titem-status\tfulfillment-channel\n"
@@ -145,28 +164,30 @@ class RecoveryWithoutRetryTests(unittest.TestCase):
     def test_all_78_normal_ids_are_preserved_without_invented_modules(self):
         self.assertEqual(sorted(self.modules), NORMAL_IDS)
         self.assertEqual(collections.Counter(n["module"] for n in self.modules.values()),
-                         {"http:ActionSendData": 36, "builtin:BasicRouter": 9,
+                         {"http:ActionSendDataAPIKeyAuth": 36, "builtin:BasicRouter": 9,
                           "amazon-seller-central:createReport": 1,
                           "util:FunctionSleep": 8, "amazon-seller-central:universal": 16,
                           "http:ActionGetFile": 8})
 
     def test_normal_flow_equals_nativefilters_source_minus_onerror(self):
-        self.assertEqual(digest(self.data["flow"]), FLOW_SHA256)
+        self.assertEqual(digest(self.legacy["flow"]), FLOW_SHA256)
 
     def test_complete_public_blueprint_matches_expected_normalization(self):
-        self.assertEqual(digest(self.data), BLUEPRINT_SHA256)
+        self.assertEqual(digest(self.legacy), BLUEPRINT_SHA256)
 
     def test_all_header_arrays_are_byte_semantically_unchanged(self):
-        values = {str(i): self.modules[i]["mapper"]["headers"] for i in HTTP_IDS}
+        values = {str(i): self.legacy_modules[i]["mapper"]["headers"] for i in HTTP_IDS}
         self.assertEqual(digest(values), HEADERS_SHA256)
 
-    def test_36_keys_remain_only_public_placeholders(self):
-        calls = [n for n in self.modules.values() if n["module"] == "http:ActionSendData"]
+    def test_36_credentials_are_unbound_references_without_literal_secrets(self):
+        calls = [n for n in self.modules.values() if n["module"] == "http:ActionSendDataAPIKeyAuth"]
         self.assertEqual(sorted(n["id"] for n in calls), HTTP_IDS)
         for module in calls:
-            values = module["mapper"]["headers"]
-            keys = [h for h in values if h["name"] == "X-SoKeto-Amazon-Key"]
-            self.assertEqual(keys, [{"name": "X-SoKeto-Amazon-Key", "value": "DA_CONFIGURARE"}])
+            self.assertEqual(module["parameters"]["auth"], 0)
+            self.assertNotIn("X-SoKeto-Amazon-Key", headers(module))
+            self.assertNotIn("authUser", module["mapper"])
+            self.assertNotIn("authPass", module["mapper"])
+            self.assertEqual(module["metadata"]["parameters"], [{"name": "auth", "type": "keychain:apikeyauth", "label": "Credentials", "required": True}])
 
     def test_http_errors_are_not_silently_ignored(self):
         for n in self.modules.values():
@@ -213,7 +234,7 @@ class RecoveryWithoutRetryTests(unittest.TestCase):
         self.assertFalse(mapper["gzip"])
         self.assertEqual(mapper["data"], "{{95.data}}")
         h = headers(module)
-        self.assertEqual(len(h), 12)
+        self.assertEqual(len(h), 11)
         self.assertEqual(h["X-Amazon-Import-Run-Id"], "{{1.data.run_id}}")
         self.assertEqual(h["X-Amazon-Report-Id"], "{{1.data.report_id}}")
         self.assertEqual(h["X-Amazon-Processing-Status"], "{{90.body.processingStatus}}")
@@ -225,7 +246,7 @@ class RecoveryWithoutRetryTests(unittest.TestCase):
 
     def test_signed_download_url_is_not_sent_to_server(self):
         for n in self.modules.values():
-            if n["module"] == "http:ActionSendData":
+            if n["module"] == "http:ActionSendDataAPIKeyAuth":
                 text = json.dumps(n["mapper"])
                 self.assertNotRegex(text, r"\{\{\d+\.body\.url\}\}")
                 self.assertNotIn("X-Amz-Signature", text)
