@@ -5,6 +5,7 @@ import { EKETO_COMPANY_ID } from "../../shared/const";
 import {
   amazonImportConfigs,
   amazonImportRuns,
+  amazonImportDocuments,
   amazonImportRowObservations,
   amazonStockAllocations,
   channelVariants,
@@ -62,7 +63,7 @@ interface Snapshot {
   frozenMapping?: Mapping;
 }
 const message = (error: unknown) => amazonImportError(error).message;
-async function database(): Promise<Database> {
+export async function database(): Promise<Database> {
   const db = await getDb();
   if (!db) throw new AmazonImportError("DATABASE_UNAVAILABLE");
   return db;
@@ -71,7 +72,7 @@ async function database(): Promise<Database> {
 /** Config is the serialization point shared by receipts, workers and manual edits.
  * No company/browser scope argument is accepted; the trusted constant is verified.
  */
-async function lockConfig(
+export async function lockConfig(
   tx: Transaction,
   storeId: string
 ): Promise<AmazonImportConfig> {
@@ -107,7 +108,7 @@ async function lockConfig(
   return config;
 }
 
-async function runSummary(
+export async function runSummary(
   tx: Transaction,
   runId: string
 ): Promise<AmazonImportSummary> {
@@ -130,7 +131,7 @@ async function runSummary(
     completed: pending === 0,
   };
 }
-async function finishRun(
+export async function finishRun(
   tx: Transaction,
   config: AmazonImportConfig,
   runId: string
@@ -148,6 +149,21 @@ async function finishRun(
     .for("update");
   if (!run) throw new AmazonImportError("RUN_NOT_FOUND");
   const summary = await runSummary(tx, runId);
+  const [document] = await tx
+    .select({
+      ingestedRows: amazonImportDocuments.ingestedRows,
+      totalRows: amazonImportDocuments.totalRows,
+      ingestCompletedAt: amazonImportDocuments.ingestCompletedAt,
+    })
+    .from(amazonImportDocuments)
+    .where(eq(amazonImportDocuments.runId, runId))
+    .limit(1)
+    .for("update");
+  if (
+    document &&
+    (document.ingestedRows < document.totalRows || !document.ingestCompletedAt)
+  )
+    return { ...summary, completed: false };
   if (!run.documentSha256 || ["fatal", "cancelled"].includes(run.status))
     return { ...summary, completed: false };
   await tx
@@ -158,6 +174,14 @@ async function finishRun(
       updatedAt: new Date(),
     })
     .where(eq(amazonImportRuns.id, runId));
+  if (summary.completed && document)
+    await tx
+      .update(amazonImportDocuments)
+      .set({
+        processingCompletedAt: sql`coalesce(${amazonImportDocuments.processingCompletedAt}, now())`,
+        lastError: null,
+      })
+      .where(eq(amazonImportDocuments.runId, runId));
   if (summary.completed)
     await tx
       .update(amazonImportConfigs)
@@ -275,6 +299,7 @@ export async function ingestAmazonReport(input: {
   const digest = createHash("sha256").update(input.body).digest("hex");
   const db = await database();
   return db.transaction(async tx => {
+    await setAmazonTransactionTimeouts(tx);
     const config = await lockConfig(tx, input.storeId);
     if (!config.enabled) throw new AmazonImportError("STORE_DISABLED");
     const [run] = await tx
@@ -298,7 +323,13 @@ export async function ingestAmazonReport(input: {
         run.reportDocumentId !== input.reportDocumentId
       )
         throw new AmazonImportError("DOCUMENT_REPLAY_MISMATCH");
-      return runSummary(tx, run.id);
+      const summary = await runSummary(tx, run.id);
+      return {
+        ...summary,
+        completed:
+          summary.completed &&
+          !(await hasIncompleteAmazonDocument(tx, input.storeId)),
+      };
     }
     if (!["requested", "pending", "processing"].includes(run.status))
       throw new AmazonImportError("EXECUTION_STATE");
@@ -314,326 +345,404 @@ export async function ingestAmazonReport(input: {
         updatedAt: new Date(),
       })
       .where(eq(amazonImportRuns.id, run.id));
-    const touchedOrders = new Set<string>();
-    for (const row of rows) {
-      // Le righe già gestite a mano non diventano vendite marketplace importate:
-      // restano soltanto nell'audit del report, anche se ripetute/annullate.
-      let beforeCutoff = false;
-      if (row.source["purchase-date"]) {
-        try {
-          beforeCutoff =
-            amazonRomeDate(parseAmazonTimestamp(row.source["purchase-date"])) <
-            config.purchaseCutoff;
-        } catch {
-          // Invalid dates are row review, never the epoch placeholder's cutoff.
-        }
-      }
-      if (beforeCutoff) {
-        await observe(
-          tx,
-          run.id,
-          row,
-          null,
-          "pre_cutoff",
-          "pre-cutoff, già gestite a mano"
-        );
-        continue;
-      }
-      if (row.quarantineReason) {
-        const [known] =
-          row.orderId && row.orderItemId
-            ? await tx
-                .select()
-                .from(marketplaceOrderItems)
-                .where(
-                  and(
-                    eq(
-                      marketplaceOrderItems.amazonSellerAccountId,
-                      config.sellerAccountId
-                    ),
-                    eq(marketplaceOrderItems.amazonOrderId, row.orderId),
-                    eq(marketplaceOrderItems.amazonOrderItemId, row.orderItemId)
-                  )
-                )
-                .limit(1)
-                .for("update")
-            : [];
-        if (
-          known &&
-          row.updatedAt.getTime() >= known.amazonUpdatedAt!.getTime()
-        ) {
-          const outcome = stockFrozen(known)
-            ? "post_stock_alert"
-            : "review_required";
-          await tx
-            .update(marketplaceOrderItems)
-            .set({
-              amazonStockStatus: outcome,
-              amazonStockReason: row.quarantineReason,
-              amazonUpdatedAt: row.updatedAt,
-              amazonLastRunId: run.id,
-            })
-            .where(eq(marketplaceOrderItems.id, known.id));
-          await tx
-            .update(amazonImportRowObservations)
-            .set({ outcome, reason: row.quarantineReason })
+    await ingestAmazonRows(tx, config, run.id, rows);
+    return finishRun(tx, config, run.id);
+  });
+}
+
+/** Internal shared row writer; caller owns config/run/document locks and cursor TX. */
+async function ingestAmazonRow(
+  tx: Transaction,
+  config: AmazonImportConfig,
+  runId: string,
+  row: AmazonReportRow,
+  rows: AmazonReportRow[],
+  touchedOrders: Set<string>
+): Promise<void> {
+  // Le righe già gestite a mano non diventano vendite marketplace importate:
+  // restano soltanto nell'audit del report, anche se ripetute/annullate.
+  let beforeCutoff = false;
+  if (row.source["purchase-date"]) {
+    try {
+      beforeCutoff =
+        amazonRomeDate(parseAmazonTimestamp(row.source["purchase-date"])) <
+        config.purchaseCutoff;
+    } catch {
+      // Invalid dates are row review, never the epoch placeholder's cutoff.
+    }
+  }
+  if (beforeCutoff) {
+    await observe(
+      tx,
+      runId,
+      row,
+      null,
+      "pre_cutoff",
+      "pre-cutoff, già gestite a mano"
+    );
+    return;
+  }
+  if (row.quarantineReason) {
+    const [known] =
+      row.orderId && row.orderItemId
+        ? await tx
+            .select()
+            .from(marketplaceOrderItems)
             .where(
               and(
-                eq(amazonImportRowObservations.itemId, known.id),
-                eq(amazonImportRowObservations.outcome, "pending")
+                eq(
+                  marketplaceOrderItems.amazonSellerAccountId,
+                  config.sellerAccountId
+                ),
+                eq(marketplaceOrderItems.amazonOrderId, row.orderId),
+                eq(marketplaceOrderItems.amazonOrderItemId, row.orderItemId)
               )
-            );
-          touchedOrders.add(known.marketplaceOrderId);
-          await observe(
-            tx,
-            run.id,
-            row,
-            known.id,
-            outcome,
-            row.quarantineReason
-          );
-        } else
-          await observe(
-            tx,
-            run.id,
-            row,
-            known?.id ?? null,
-            "review_required",
-            row.quarantineReason
-          );
-        continue;
-      }
-      const [existing] = await tx
-        .select()
-        .from(marketplaceOrderItems)
-        .where(
-          and(
-            eq(
-              marketplaceOrderItems.amazonSellerAccountId,
-              config.sellerAccountId
-            ),
-            eq(marketplaceOrderItems.amazonOrderId, row.orderId),
-            eq(marketplaceOrderItems.amazonOrderItemId, row.orderItemId)
-          )
-        )
-        .limit(1)
-        .for("update");
-      const classification = rowClassification(row, config);
-      if (!existing) {
-        const [order] = await tx
-          .insert(marketplaceOrders)
-          .values({
-            storeId: input.storeId,
-            channelOrderId: row.orderId,
-            channelOrderNumber: row.orderId,
-            orderDate: row.purchaseDate,
-            currency:
-              row.source.currency ||
-              rows.find(
-                candidate =>
-                  candidate.orderId === row.orderId &&
-                  ["EUR", "GBP"].includes(candidate.source.currency)
-              )?.source.currency ||
-              "EUR",
-            stockProcessingStatus: "amazon_item_managed",
-          })
-          .onConflictDoUpdate({
-            target: [
-              marketplaceOrders.storeId,
-              marketplaceOrders.channelOrderId,
-            ],
-            set: { channelOrderNumber: row.orderId },
-          })
-          .returning({
-            id: marketplaceOrders.id,
-            currency: marketplaceOrders.currency,
-          });
-        if (row.source.currency && row.source.currency !== order.currency) {
-          await observe(
-            tx,
-            run.id,
-            row,
-            null,
-            "review_required",
-            "order_currency_mismatch"
-          );
-          continue;
-        }
-        const [item] = await tx
-          .insert(marketplaceOrderItems)
-          .values({
-            marketplaceOrderId: order.id,
-            channelSku: row.sku,
-            channelQuantity: row.quantity,
-            piecesQuantity: 0,
-            unitPrice: row.unitPrice,
-            lineTotal: row.lineTotal,
-            amazonSellerAccountId: config.sellerAccountId,
-            amazonOrderId: row.orderId,
-            amazonOrderItemId: row.orderItemId,
-            amazonPurchaseDate: row.purchaseDate,
-            amazonUpdatedAt: row.updatedAt,
-            amazonItemStatus: row.itemStatus,
-            amazonOrderStatus: row.orderStatus,
-            amazonFulfillmentChannel: row.fulfillmentChannel,
-            amazonStockStatus: classification.status,
-            amazonStockReason: classification.reason,
-            amazonSourceSnapshot: { source: row.source } satisfies Snapshot,
-            amazonLastRunId: run.id,
-          })
-          .returning({ id: marketplaceOrderItems.id });
-        await observe(
-          tx,
-          run.id,
-          row,
-          item.id,
-          classification.status,
-          classification.reason
-        );
-        touchedOrders.add(order.id);
-        continue;
-      }
-      touchedOrders.add(existing.marketplaceOrderId);
-      const age = row.updatedAt.getTime() - existing.amazonUpdatedAt!.getTime();
-      if (age < 0) {
-        await observe(
-          tx,
-          run.id,
-          row,
-          existing.id,
-          "stale_snapshot",
-          "older_amazon_update"
-        );
-        continue;
-      }
-      if (
-        row.source.currency &&
-        row.source.currency !==
-          (existing.amazonSourceSnapshot as Snapshot)?.source.currency
-      ) {
-        const outcome = stockFrozen(existing)
-          ? "post_stock_alert"
-          : "review_required";
-        await publishOutcome(tx, existing, outcome, "order_currency_mismatch");
-        await observe(
-          tx,
-          run.id,
-          row,
-          existing.id,
-          outcome,
-          "order_currency_mismatch"
-        );
-        continue;
-      }
-      const changed = statusConflict(existing, row);
-      if (!age && !changed) {
-        const outcome =
-          existing.amazonStockStatus === "dry_run" && !config.dryRun
-            ? "pending"
-            : existing.amazonStockStatus!;
-        await observe(
-          tx,
-          run.id,
-          row,
-          existing.id,
-          outcome,
-          existing.amazonStockReason,
-          existing.amazonFefoPreview as AmazonFefoAllocation[]
-        );
-        continue;
-      }
-      let status = classification.status;
-      let reason = classification.reason;
-      const frozen = stockFrozen(existing);
-      if (frozen) {
-        status =
-          changed || existing.amazonStockStatus === "post_stock_alert"
-            ? "post_stock_alert"
-            : "processed";
-        reason =
-          status === "post_stock_alert"
-            ? "amazon_changed_after_stock_no_reversal"
-            : null;
-      } else if (!age && changed) {
-        status = "review_required";
-        reason = "equal_timestamp_conflict";
-      } else if (
-        existing.amazonStockStatus === "review_required" &&
-        status === "pending"
-      ) {
-        status = "review_required";
-        reason = existing.amazonStockReason ?? "explicit_admin_retry_required";
-      } else if (
-        existing.amazonStockStatus === "cancelled" &&
-        status === "pending"
-      ) {
-        status = "review_required";
-        reason = "shipped_after_cancellation_requires_review";
-      }
-      // At equal conflicting timestamps, preserve an observed cancellation in
-      // the authoritative current snapshot, regardless of report row order.
-      const keepCancellation =
-        age === 0 &&
-        (existing.amazonOrderStatus === "Cancelled" ||
-          existing.amazonItemStatus === "Cancelled");
-      const previousSnapshot = existing.amazonSourceSnapshot as Snapshot | null;
+            )
+            .limit(1)
+            .for("update")
+        : [];
+    if (known && row.updatedAt.getTime() >= known.amazonUpdatedAt!.getTime()) {
+      const outcome = stockFrozen(known)
+        ? "post_stock_alert"
+        : "review_required";
       await tx
         .update(marketplaceOrderItems)
         .set({
-          ...(!frozen && classification.status !== "cancelled"
-            ? {
-                channelSku: row.sku,
-                channelQuantity: row.quantity,
-                unitPrice: row.unitPrice,
-                lineTotal: row.lineTotal,
-                productId: null,
-                channelVariantId: null,
-                piecesQuantity: 0,
-                amazonFefoPreview: [],
-              }
-            : {}),
-          amazonPurchaseDate: row.purchaseDate,
+          amazonStockStatus: outcome,
+          amazonStockReason: row.quarantineReason,
           amazonUpdatedAt: row.updatedAt,
-          amazonItemStatus: keepCancellation
-            ? existing.amazonItemStatus
-            : row.itemStatus,
-          amazonOrderStatus: keepCancellation
-            ? existing.amazonOrderStatus
-            : row.orderStatus,
-          amazonFulfillmentChannel: keepCancellation
-            ? existing.amazonFulfillmentChannel
-            : row.fulfillmentChannel,
-          amazonStockStatus: status,
-          amazonStockReason: reason,
-          amazonLastRunId: run.id,
-          amazonSourceSnapshot: {
-            source: keepCancellation
-              ? (previousSnapshot?.source ?? row.source)
-              : row.source,
-            ...(previousSnapshot?.frozenMapping
-              ? { frozenMapping: previousSnapshot.frozenMapping }
-              : {}),
-          } satisfies Snapshot,
+          amazonLastRunId: runId,
         })
-        .where(eq(marketplaceOrderItems.id, existing.id));
-      // Pending rows in this or an earlier receipt cannot consume a snapshot
-      // which a later row in the same atomic receipt cancelled/quarantined.
-      if (status !== "pending")
-        await tx
-          .update(amazonImportRowObservations)
-          .set({ outcome: status, reason })
-          .where(
-            and(
-              eq(amazonImportRowObservations.itemId, existing.id),
-              eq(amazonImportRowObservations.outcome, "pending")
-            )
-          );
-      await observe(tx, run.id, row, existing.id, status, reason);
+        .where(eq(marketplaceOrderItems.id, known.id));
+      await tx
+        .update(amazonImportRowObservations)
+        .set({ outcome, reason: row.quarantineReason })
+        .where(
+          and(
+            eq(amazonImportRowObservations.itemId, known.id),
+            eq(amazonImportRowObservations.outcome, "pending")
+          )
+        );
+      touchedOrders.add(known.marketplaceOrderId);
+      await observe(tx, runId, row, known.id, outcome, row.quarantineReason);
+    } else
+      await observe(
+        tx,
+        runId,
+        row,
+        known?.id ?? null,
+        "review_required",
+        row.quarantineReason
+      );
+    return;
+  }
+  const [existing] = await tx
+    .select()
+    .from(marketplaceOrderItems)
+    .where(
+      and(
+        eq(marketplaceOrderItems.amazonSellerAccountId, config.sellerAccountId),
+        eq(marketplaceOrderItems.amazonOrderId, row.orderId),
+        eq(marketplaceOrderItems.amazonOrderItemId, row.orderItemId)
+      )
+    )
+    .limit(1)
+    .for("update");
+  const classification = rowClassification(row, config);
+  if (!existing) {
+    const [order] = await tx
+      .insert(marketplaceOrders)
+      .values({
+        storeId: config.storeId,
+        channelOrderId: row.orderId,
+        channelOrderNumber: row.orderId,
+        orderDate: row.purchaseDate,
+        currency:
+          row.source.currency ||
+          rows.find(
+            candidate =>
+              candidate.orderId === row.orderId &&
+              ["EUR", "GBP"].includes(candidate.source.currency)
+          )?.source.currency ||
+          "EUR",
+        stockProcessingStatus: "amazon_item_managed",
+      })
+      .onConflictDoUpdate({
+        target: [marketplaceOrders.storeId, marketplaceOrders.channelOrderId],
+        set: { channelOrderNumber: row.orderId },
+      })
+      .returning({
+        id: marketplaceOrders.id,
+        currency: marketplaceOrders.currency,
+      });
+    if (row.source.currency && row.source.currency !== order.currency) {
+      await observe(
+        tx,
+        runId,
+        row,
+        null,
+        "review_required",
+        "order_currency_mismatch"
+      );
+      return;
     }
-    for (const orderId of Array.from(touchedOrders))
-      await reconcileOrder(tx, orderId);
-    return finishRun(tx, config, run.id);
-  });
+    const [item] = await tx
+      .insert(marketplaceOrderItems)
+      .values({
+        marketplaceOrderId: order.id,
+        channelSku: row.sku,
+        channelQuantity: row.quantity,
+        piecesQuantity: 0,
+        unitPrice: row.unitPrice,
+        lineTotal: row.lineTotal,
+        amazonSellerAccountId: config.sellerAccountId,
+        amazonOrderId: row.orderId,
+        amazonOrderItemId: row.orderItemId,
+        amazonPurchaseDate: row.purchaseDate,
+        amazonUpdatedAt: row.updatedAt,
+        amazonItemStatus: row.itemStatus,
+        amazonOrderStatus: row.orderStatus,
+        amazonFulfillmentChannel: row.fulfillmentChannel,
+        amazonStockStatus: classification.status,
+        amazonStockReason: classification.reason,
+        amazonSourceSnapshot: { source: row.source } satisfies Snapshot,
+        amazonLastRunId: runId,
+      })
+      .returning({ id: marketplaceOrderItems.id });
+    await observe(
+      tx,
+      runId,
+      row,
+      item.id,
+      classification.status,
+      classification.reason
+    );
+    touchedOrders.add(order.id);
+    return;
+  }
+  touchedOrders.add(existing.marketplaceOrderId);
+  const age = row.updatedAt.getTime() - existing.amazonUpdatedAt!.getTime();
+  if (age < 0) {
+    await observe(
+      tx,
+      runId,
+      row,
+      existing.id,
+      "stale_snapshot",
+      "older_amazon_update"
+    );
+    return;
+  }
+  if (
+    row.source.currency &&
+    row.source.currency !==
+      (existing.amazonSourceSnapshot as Snapshot)?.source.currency
+  ) {
+    const outcome = stockFrozen(existing)
+      ? "post_stock_alert"
+      : "review_required";
+    await publishOutcome(tx, existing, outcome, "order_currency_mismatch");
+    await observe(
+      tx,
+      runId,
+      row,
+      existing.id,
+      outcome,
+      "order_currency_mismatch"
+    );
+    return;
+  }
+  const changed = statusConflict(existing, row);
+  if (!age && !changed) {
+    const outcome =
+      existing.amazonStockStatus === "dry_run" && !config.dryRun
+        ? "pending"
+        : existing.amazonStockStatus!;
+    await observe(
+      tx,
+      runId,
+      row,
+      existing.id,
+      outcome,
+      existing.amazonStockReason,
+      existing.amazonFefoPreview as AmazonFefoAllocation[]
+    );
+    return;
+  }
+  let status = classification.status;
+  let reason = classification.reason;
+  const frozen = stockFrozen(existing);
+  if (frozen) {
+    status =
+      changed || existing.amazonStockStatus === "post_stock_alert"
+        ? "post_stock_alert"
+        : "processed";
+    reason =
+      status === "post_stock_alert"
+        ? "amazon_changed_after_stock_no_reversal"
+        : null;
+  } else if (!age && changed) {
+    status = "review_required";
+    reason = "equal_timestamp_conflict";
+  } else if (
+    existing.amazonStockStatus === "review_required" &&
+    status === "pending"
+  ) {
+    status = "review_required";
+    reason = existing.amazonStockReason ?? "explicit_admin_retry_required";
+  } else if (
+    existing.amazonStockStatus === "cancelled" &&
+    status === "pending"
+  ) {
+    status = "review_required";
+    reason = "shipped_after_cancellation_requires_review";
+  }
+  // At equal conflicting timestamps, preserve an observed cancellation in
+  // the authoritative current snapshot, regardless of report row order.
+  const keepCancellation =
+    age === 0 &&
+    (existing.amazonOrderStatus === "Cancelled" ||
+      existing.amazonItemStatus === "Cancelled");
+  const previousSnapshot = existing.amazonSourceSnapshot as Snapshot | null;
+  await tx
+    .update(marketplaceOrderItems)
+    .set({
+      ...(!frozen && classification.status !== "cancelled"
+        ? {
+            channelSku: row.sku,
+            channelQuantity: row.quantity,
+            unitPrice: row.unitPrice,
+            lineTotal: row.lineTotal,
+            productId: null,
+            channelVariantId: null,
+            piecesQuantity: 0,
+            amazonFefoPreview: [],
+          }
+        : {}),
+      amazonPurchaseDate: row.purchaseDate,
+      amazonUpdatedAt: row.updatedAt,
+      amazonItemStatus: keepCancellation
+        ? existing.amazonItemStatus
+        : row.itemStatus,
+      amazonOrderStatus: keepCancellation
+        ? existing.amazonOrderStatus
+        : row.orderStatus,
+      amazonFulfillmentChannel: keepCancellation
+        ? existing.amazonFulfillmentChannel
+        : row.fulfillmentChannel,
+      amazonStockStatus: status,
+      amazonStockReason: reason,
+      amazonLastRunId: runId,
+      amazonSourceSnapshot: {
+        source: keepCancellation
+          ? (previousSnapshot?.source ?? row.source)
+          : row.source,
+        ...(previousSnapshot?.frozenMapping
+          ? { frozenMapping: previousSnapshot.frozenMapping }
+          : {}),
+      } satisfies Snapshot,
+    })
+    .where(eq(marketplaceOrderItems.id, existing.id));
+  // Pending rows in this or an earlier receipt cannot consume a snapshot
+  // which a later row in the same atomic receipt cancelled/quarantined.
+  if (status !== "pending")
+    await tx
+      .update(amazonImportRowObservations)
+      .set({ outcome: status, reason })
+      .where(
+        and(
+          eq(amazonImportRowObservations.itemId, existing.id),
+          eq(amazonImportRowObservations.outcome, "pending")
+        )
+      );
+  await observe(tx, runId, row, existing.id, status, reason);
+}
+
+/** Short per-query timeouts plus a deadline checked before every row/item.
+ * Transaction-local settings are safe with prepare:false / transaction poolers.
+ */
+export async function setAmazonTransactionTimeouts(
+  tx: Transaction,
+  remainingMs = 4000
+) {
+  await tx.execute(
+    sql`select set_config('lock_timeout', '750ms', true), set_config('statement_timeout', ${`${Math.max(1, Math.min(4000, Math.floor(remainingMs)))}ms`}, true)`
+  );
+}
+
+/** Prevent ALL stock for the store while any acquired receipt remains incomplete.
+ * Called under the config lock in both candidate selection and every item TX.
+ */
+export async function hasIncompleteAmazonDocument(
+  tx: Transaction,
+  storeId: string
+): Promise<boolean> {
+  const [document] = await tx
+    .select({ runId: amazonImportDocuments.runId })
+    .from(amazonImportDocuments)
+    .innerJoin(
+      amazonImportRuns,
+      eq(amazonImportRuns.id, amazonImportDocuments.runId)
+    )
+    .where(
+      and(
+        eq(amazonImportRuns.storeId, storeId),
+        sql`${amazonImportDocuments.ingestedRows} < ${amazonImportDocuments.totalRows}`
+      )
+    )
+    .limit(1);
+  return Boolean(document);
+}
+
+/** Savepoint isolation makes an unexpected row constraint terminal quarantine,
+ * not a poison row that rolls back the cursor forever. Infrastructure/timeouts
+ * roll back the chunk and may safely retry from the unchanged committed cursor.
+ */
+export async function ingestAmazonRows(
+  tx: Transaction,
+  config: AmazonImportConfig,
+  runId: string,
+  rows: AmazonReportRow[],
+  startIndex = 0,
+  rowLimit = rows.length,
+  deadline = Infinity
+): Promise<number> {
+  let ingested = 0;
+  for (const row of rows.slice(startIndex, startIndex + rowLimit)) {
+    if (Date.now() >= deadline) break;
+    await setAmazonTransactionTimeouts(tx, deadline - Date.now());
+    const touchedOrders = new Set<string>();
+    try {
+      await tx.transaction(async rowTx => {
+        await ingestAmazonRow(rowTx, config, runId, row, rows, touchedOrders);
+        for (const orderId of Array.from(touchedOrders))
+          await reconcileOrder(rowTx, orderId);
+      });
+    } catch (error) {
+      let cause: unknown = error;
+      let state = "";
+      for (let i = 0; i < 4 && cause && typeof cause === "object"; i++) {
+        const entry = cause as { code?: unknown; cause?: unknown };
+        if (typeof entry.code === "string" && /^[A-Z0-9]{5}$/.test(entry.code))
+          state = entry.code;
+        cause = entry.cause;
+      }
+      if (!state.startsWith("23") && !state.startsWith("22")) throw error;
+      touchedOrders.clear();
+      await ingestAmazonRow(
+        tx,
+        config,
+        runId,
+        { ...row, quarantineReason: "document_row_transaction_failed" },
+        rows,
+        touchedOrders
+      );
+      for (const orderId of Array.from(touchedOrders))
+        await reconcileOrder(tx, orderId);
+    }
+    ingested++;
+  }
+  return ingested;
 }
 
 async function mappingForItem(
@@ -750,10 +859,22 @@ async function publishOutcome(
  */
 export async function processPendingAmazonItems(
   storeId: string,
-  limit = 50
+  limit = 50,
+  options: { timeBudgetMs?: number; deadline?: number } = {}
 ): Promise<AmazonWorkerSummary> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 200)
-    throw new Error("Amazon worker limit must be 1..200");
+    throw new AmazonImportError("INVALID_INPUT");
+  if (
+    options.timeBudgetMs !== undefined &&
+    (!Number.isInteger(options.timeBudgetMs) ||
+      options.timeBudgetMs < 1000 ||
+      options.timeBudgetMs > 12000)
+  )
+    throw new AmazonImportError("INVALID_INPUT");
+  const deadline = Math.min(
+    options.deadline ?? Infinity,
+    Date.now() + (options.timeBudgetMs ?? 12000)
+  );
   const db = await database();
   const summary: AmazonWorkerSummary = {
     attempted: 0,
@@ -764,8 +885,10 @@ export async function processPendingAmazonItems(
     errors: [],
   };
   const candidates = await db.transaction(async tx => {
+    await setAmazonTransactionTimeouts(tx, deadline - Date.now());
     const config = await lockConfig(tx, storeId);
-    if (!config.enabled) return [];
+    if (!config.enabled || (await hasIncompleteAmazonDocument(tx, storeId)))
+      return [];
     return tx
       .select({ id: marketplaceOrderItems.id })
       .from(marketplaceOrderItems)
@@ -793,11 +916,14 @@ export async function processPendingAmazonItems(
       .limit(limit);
   });
   for (const candidate of candidates) {
+    if (Date.now() >= deadline) break;
     summary.attempted++;
     try {
       const status = await db.transaction(async tx => {
+        await setAmazonTransactionTimeouts(tx, deadline - Date.now());
         const config = await lockConfig(tx, storeId);
-        if (!config.enabled) return "skipped";
+        if (!config.enabled || (await hasIncompleteAmazonDocument(tx, storeId)))
+          return "skipped";
         const [item] = await tx
           .select()
           .from(marketplaceOrderItems)
@@ -1062,7 +1188,13 @@ export async function processPendingAmazonItems(
       summary.errors.push({ itemId: candidate.id, message: message(error) });
       try {
         await db.transaction(async tx => {
+          await setAmazonTransactionTimeouts(tx, deadline - Date.now());
           const config = await lockConfig(tx, storeId);
+          if (
+            !config.enabled ||
+            (await hasIncompleteAmazonDocument(tx, storeId))
+          )
+            return;
           const [item] = await tx
             .select()
             .from(marketplaceOrderItems)

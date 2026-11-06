@@ -109,6 +109,13 @@ async function main() {
 
   // T1: catalogo e dettaglio restano disponibili senza esporre quantità, stati o lotti.
   const catalog = await caller.catalogList({ limit: 10, offset: 0 });
+  // Altre suite possono aggiungere prodotti prima della fixture nell'ordinamento.
+  // La visibilità si verifica su tutto il catalogo paginato, non sui primi dieci.
+  for (let offset = 10; offset < catalog.totalCount; offset += 10) {
+    const page = await caller.catalogList({ limit: 10, offset });
+    if (!page.products.length) break;
+    catalog.products.push(...page.products);
+  }
   const catalogProduct = catalog.products.find((product) => product.productId === TEST_IDS.productBoxes);
   assert(catalogProduct, "Il prodotto a giacenza zero deve restare nel catalogo retailer.");
   assert(!("availableStock" in catalogProduct), "Il catalogo retailer non deve esporre availableStock.");

@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   check,
   date,
@@ -1512,6 +1513,31 @@ export const amazonImportRuns = pgTable("amazon_import_runs", {
   index("amazon_import_runs_store_created").on(t.storeId, t.createdAt.desc()),
 ]);
 export type AmazonImportRun = typeof amazonImportRuns.$inferSelect;
+
+// Migration 0052 also enforces payload immutability and enables backend-only RLS.
+export const amazonImportDocuments = pgTable("amazon_import_documents", {
+  runId: uuid("run_id").primaryKey().references(() => amazonImportRuns.id, { onDelete: "restrict" }),
+  bodyBase64: text("body_base64").notNull(),
+  compression: text("compression").$type<"NONE" | "GZIP">().notNull(),
+  totalRows: integer("total_rows").notNull(),
+  ingestedRows: integer("ingested_rows").notNull().default(0),
+  acquiredAt: timestamp("acquired_at", { withTimezone: true }).notNull().defaultNow(),
+  ingestStartedAt: timestamp("ingest_started_at", { withTimezone: true }),
+  ingestCompletedAt: timestamp("ingest_completed_at", { withTimezone: true }),
+  processingCompletedAt: timestamp("processing_completed_at", { withTimezone: true }),
+  processingMs: bigint("processing_ms", { mode: "number" }).notNull().default(0),
+  lastError: text("last_error"),
+}, (t) => [
+  check("amazon_import_documents_compression_check", sql`${t.compression} IN ('NONE','GZIP')`),
+  check("amazon_import_documents_total_rows_check", sql`${t.totalRows} BETWEEN 0 AND 2000`),
+  check("amazon_import_documents_cursor_valid", sql`${t.ingestedRows} BETWEEN 0 AND ${t.totalRows}`),
+  check("amazon_import_documents_body_bounded", sql`octet_length(${t.bodyBase64}) BETWEEN 4 AND 11184812 AND ${t.bodyBase64} ~ '^[A-Za-z0-9+/]*={0,2}$' AND octet_length(decode(${t.bodyBase64}, 'base64')) <= 8388608`),
+  check("amazon_import_documents_processing_ms_check", sql`${t.processingMs} >= 0`),
+  check("amazon_import_documents_last_error_check", sql`${t.lastError} IS NULL OR ${t.lastError} ~ '^[A-Z][A-Z0-9_]{0,63}$'`),
+  check("amazon_import_documents_ingest_complete_valid", sql`${t.ingestCompletedAt} IS NULL OR ${t.ingestedRows} = ${t.totalRows}`),
+  check("amazon_import_documents_processing_complete_valid", sql`${t.processingCompletedAt} IS NULL OR ${t.ingestCompletedAt} IS NOT NULL`),
+]);
+export type AmazonImportDocument = typeof amazonImportDocuments.$inferSelect;
 
 /**
  * Channel variants — mapping tra SKU canale e prodotto interno.

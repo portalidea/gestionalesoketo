@@ -59,7 +59,11 @@ async function main() {
   });
   const config = await getProspectSimulatorConfig(db);
   const catalog = await getPublicProspectCatalog(db);
-  assert.equal(catalog.length, 2, "Catalogo pubblico deve escludere prodotto hidden");
+  // Le altre suite mantengono fixture valide visibili: non assumere che il
+  // catalogo globale contenga soltanto i due prodotti di questo test.
+  assert(catalog.some(product => product.id === food10.id), "Prodotto test IVA 10% visibile");
+  assert(catalog.some(product => product.id === beer22.id), "Prodotto test IVA 22% visibile");
+  assert(!catalog.some(product => product.id === hidden.id), "Catalogo pubblico deve escludere prodotto hidden");
 
   for (const [qty, expected] of [[853, "starter"], [854, "partner"], [1411, "partner"], [1412, "premium"], [1878, "premium"], [1879, "elite"]] as const) {
     const calculated = calculateProspectSimulation(config, catalog, [{ productId: food10.id, quantity: qty }]);

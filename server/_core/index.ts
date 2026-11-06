@@ -11,9 +11,10 @@ import { cronRoutes } from "../cron-monthly-report";
 import { cronAlertRoutes } from "../cron-alerts";
 import { resendWebhookHandler } from "../resend-webhook-routes";
 import amazonImportRoutes from "../amazon-import-routes";
+import { amazonProcessingCron } from "../amazon-processing-cron";
 
 function isPortAvailable(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const server = net.createServer();
     server.listen(port, () => {
       server.close(() => resolve(true));
@@ -36,7 +37,12 @@ async function startServer() {
   const server = createServer(app);
   // Deve precedere express.json(): Svix firma il body raw byte-per-byte.
   // È intenzionalmente limitato alla route Resend per non intercettare tRPC.
-  app.post("/api/webhooks/resend", express.raw({ type: "application/json" }), resendWebhookHandler);
+  app.post(
+    "/api/webhooks/resend",
+    express.raw({ type: "application/json" }),
+    resendWebhookHandler
+  );
+  app.use("/api/cron", amazonProcessingCron);
   app.use("/api/marketplace/amazon", amazonImportRoutes);
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -51,7 +57,7 @@ async function startServer() {
     createExpressMiddleware({
       router: appRouter,
       createContext,
-    }),
+    })
   );
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
