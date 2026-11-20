@@ -122,8 +122,9 @@ export default function DdtImportDetail() {
   // --- Dialog creazione prodotto inline ---
   const [createProductOpen, setCreateProductOpen] = useState(false);
   const [newProductName, setNewProductName] = useState("");
+  const [newProductSku, setNewProductSku] = useState("");
   const [newProductPrice, setNewProductPrice] = useState("");
-  const [newProductIva, setNewProductIva] = useState("10");
+  const [newProductIva, setNewProductIva] = useState("10.00");
   const [createForItemId, setCreateForItemId] = useState<string | null>(null);
 
   const createProductMutation = trpc.products.create.useMutation({
@@ -138,8 +139,9 @@ export default function DdtImportDetail() {
       }
       setCreateProductOpen(false);
       setNewProductName("");
+      setNewProductSku("");
       setNewProductPrice("");
-      setNewProductIva("10");
+      setNewProductIva("10.00");
       setCreateForItemId(null);
       utils.products.list.invalidate();
     },
@@ -345,9 +347,10 @@ export default function DdtImportDetail() {
                     }
                     onRemove={() => removeItemMutation.mutate({ itemId: item.id })}
                     isReview={ddtImport.status === "review"}
-                    onCreateProduct={(itemId, extractedName) => {
+                    onCreateProduct={(itemId, extractedName, extractedCode) => {
                       setCreateForItemId(itemId);
                       setNewProductName(extractedName);
+                      setNewProductSku(extractedCode?.trim() || "");
                       setCreateProductOpen(true);
                     }}
                   />
@@ -376,6 +379,17 @@ export default function DdtImportDetail() {
                   placeholder="es. Brioche Proteica al Cacao"
                 />
               </div>
+              <div className="space-y-2">
+                <Label>SKU</Label>
+                <Input
+                  value={newProductSku}
+                  onChange={(e) => setNewProductSku(e.target.value)}
+                  placeholder="es. 044.145 (codice del fornitore)"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Precompilato con il codice letto dal DDT. Deve essere univoco.
+                </p>
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Prezzo unitario (€)</Label>
@@ -394,9 +408,10 @@ export default function DdtImportDetail() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="4">4%</SelectItem>
-                      <SelectItem value="10">10%</SelectItem>
-                      <SelectItem value="22">22%</SelectItem>
+                      <SelectItem value="4.00">4%</SelectItem>
+                      <SelectItem value="5.00">5%</SelectItem>
+                      <SelectItem value="10.00">10%</SelectItem>
+                      <SelectItem value="22.00">22%</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -408,13 +423,19 @@ export default function DdtImportDetail() {
               </Button>
               <Button
                 onClick={() => {
+                  const price = Number.parseFloat(newProductPrice.replace(",", "."));
                   createProductMutation.mutate({
-                    name: newProductName,
-                    unitPrice: parseFloat(newProductPrice) || 0,
-                    vatRate: parseInt(newProductIva),
-                  } as any);
+                    sku: newProductSku.trim(),
+                    name: newProductName.trim(),
+                    unitPrice: Number.isFinite(price) && price >= 0 ? price.toFixed(2) : undefined,
+                    vatRate: newProductIva as "4.00" | "5.00" | "10.00" | "22.00",
+                  });
                 }}
-                disabled={!newProductName.trim() || createProductMutation.isPending}
+                disabled={
+                  !newProductName.trim() ||
+                  !newProductSku.trim() ||
+                  createProductMutation.isPending
+                }
               >
                 {createProductMutation.isPending ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -534,7 +555,11 @@ function DdtItemRow({
   }) => void;
   onRemove: () => void;
   isReview: boolean;
-  onCreateProduct?: (itemId: string, extractedName: string) => void;
+  onCreateProduct?: (
+    itemId: string,
+    extractedName: string,
+    extractedCode: string | null,
+  ) => void;
 }) {
   const [editProductId, setEditProductId] = useState(item.productMatchedId ?? "");
   const [editBatch, setEditBatch] = useState(item.batchNumber ?? "");
@@ -669,7 +694,9 @@ function DdtItemRow({
                 size="sm"
                 variant="outline"
                 className="h-6 px-2 text-xs"
-                onClick={() => onCreateProduct(item.id, item.productNameExtracted)}
+                onClick={() =>
+                  onCreateProduct(item.id, item.productNameExtracted, item.productCodeExtracted)
+                }
               >
                 <Plus className="h-3 w-3 mr-1" />
                 Crea
