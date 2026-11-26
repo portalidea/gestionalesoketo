@@ -211,7 +211,8 @@ const exportEventSchema = z.object({
   source: z.enum(["coupon", "card_purchase", "card_voucher"]),
   source_id: z.coerce.number().int().positive(),
   store_id: z.coerce.number().int().positive(),
-  occurred_at: z.string().min(10),
+  // FoodApps4All restituisce null se la data salvata non è valida: la riga si scarta.
+  occurred_at: z.string().min(10).nullable(),
   label: z.string().nullable().optional(),
   campaign_key: z.string().nullable().optional(),
   purchase_gross: moneyString,
@@ -266,7 +267,7 @@ export async function fetchFoodappsStores(fetcher: PartnerExportFetcher = defaul
   const tomorrow = romeToday(new Date(romeMidnightUtc(today).getTime() + 36 * 3_600_000));
   const parsed = partnerExportSchema.parse(await fetcher({ from: today, to: tomorrow }));
   return parsed.stores
-    .map((s) => ({ storeId: s.store_id, name: s.name ?? `Negozio ${s.store_id}`, city: s.city ?? null }))
+    .map((s) => ({ storeId: s.store_id, name: s.name?.trim() || `Negozio ${s.store_id}`, city: s.city?.trim() || null }))
     .sort((a, b) => a.name.localeCompare(b.name, "it"));
 }
 
@@ -296,14 +297,17 @@ export async function syncPartnerProgramEvents(input: {
 
   try {
     const payload = partnerExportSchema.parse(await fetcher({ from, to }));
-    const storeNames = new Map(payload.stores.map((s) => [s.store_id, s.name ?? null]));
+    const storeNames = new Map(payload.stores.map((s) => [s.store_id, s.name?.trim() || null]));
     const syncedAt = new Date();
-    const rows = payload.events.map((e) => ({
+    const valid = payload.events.filter((e) => e.occurred_at);
+    const skipped = payload.events.length - valid.length;
+    if (skipped > 0) console.warn(`[partnerProgram.sync] ${skipped} convalide senza data valida scartate`);
+    const rows = valid.map((e) => ({
       source: e.source,
       sourceId: e.source_id,
       foodappsStoreId: e.store_id,
       storeName: storeNames.get(e.store_id) ?? null,
-      occurredAt: parseDate(e.occurred_at, "occurred_at"),
+      occurredAt: parseDate(e.occurred_at!, "occurred_at"),
       label: e.label ?? null,
       campaignKey: e.campaign_key ?? null,
       purchaseGross: e.purchase_gross,
