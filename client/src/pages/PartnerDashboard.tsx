@@ -7,6 +7,7 @@
  * - Suggerimenti riordino (F17)
  */
 import PartnerLayout from "@/components/PartnerLayout";
+import { PartnerWalletBadge } from "@/components/PartnerProgramPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -168,6 +169,8 @@ export default function PartnerDashboard() {
             </CardContent>
           </Card>
         )}
+
+        <PartnerWalletBadge />
 
         {/* F17: Alert Scadenze */}
         {(expiredCount > 0 || expiringCount > 0) && (

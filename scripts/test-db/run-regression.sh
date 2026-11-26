@@ -33,6 +33,7 @@ pnpm run testdb:intercompany:report
 pnpm run testdb:intercompany:manual
 pnpm run testdb:shopify
 pnpm run testdb:prospect-simulator
+pnpm run testdb:partner-program
 # L'audit fulfillment è append-only e mantiene FK sugli ordini: viene quindi
 # eseguito per ultimo, dopo ogni fixture che ricrea gli stessi ordini test.
 pnpm run testdb:order-confirm-delivery

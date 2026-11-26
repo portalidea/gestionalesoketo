@@ -1,3 +1,4 @@
+import { releasePartnerWalletForOrder } from "./partnerProgramService";
 import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../db";
@@ -257,6 +258,11 @@ export async function cancelOrderWithTransferReversal(input: {
     await reverseAllowanceConsumptionsForOrder(tx, {
       orderId: order.id,
       createdBy: input.actorUserId,
+      reason: "Ordine annullato",
+    });
+    await releasePartnerWalletForOrder(tx, {
+      orderId: order.id,
+      actorUserId: input.actorUserId,
       reason: "Ordine annullato",
     });
     await revokePromotionBonusForOrder(tx, { orderId: order.id, actorUserId: input.actorUserId });

@@ -40,6 +40,8 @@ import PartnerCheckout from "./pages/PartnerCheckout";
 import PartnerOrders from "./pages/PartnerOrders";
 import PartnerOrderDetail from "./pages/PartnerOrderDetail";
 import PartnerOrderEdit from "./pages/PartnerOrderEdit";
+import PartnerPromo from "./pages/PartnerPromo";
+import PartnerProgramAdmin from "./pages/PartnerProgramAdmin";
 import PartnerProductDetail from "./pages/PartnerProductDetail";
 import AffiliatesList from "./pages/AffiliatesList";
 import AffiliateForm from "./pages/AffiliateForm";
@@ -160,6 +162,11 @@ function Router() {
           <PartnerOrderDetail />
         </RequireRole>
       </Route>
+      <Route path="/partner-portal/promo">
+        <RequireRole allowedRoles={RETAILER_ROLES}>
+          <PartnerPromo />
+        </RequireRole>
+      </Route>
 
       {/* ═══════════════════════════════════════════════════════════
           Admin/Operator routes — only admin / operator / viewer
@@ -245,6 +252,9 @@ function Router() {
       </Route>
       <Route path="/reports/marketplace">
         <RequireRole allowedRoles={ADMIN_ROLES}><MarketplaceReport /></RequireRole>
+      </Route>
+      <Route path="/partner-program">
+        <RequireRole allowedRoles={ADMIN_ROLES}><PartnerProgramAdmin /></RequireRole>
       </Route>
       <Route path="/reports/promozioni">
         <RequireRole allowedRoles={["admin"]}><PromozioniReport /></RequireRole>

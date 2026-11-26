@@ -10,6 +10,7 @@
  * 6. orders.updateStatus — transizione status con validazione FSM
  * 7. orders.generateProforma — genera proforma FiC e salva riferimento
  */
+import { applyPartnerWalletToOrder, releasePartnerWalletForOrder } from "./services/partnerProgramService";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { adminProcedure, staffProcedure, writerProcedure, router } from "./_core/trpc";
@@ -734,8 +735,14 @@ export const ordersRouter = router({
           pricing: lockedPricing,
           orderItemIdsByPricingLine: insertedItems.map((item) => item.id),
         });
+        await applyPartnerWalletToOrder(tx, { orderId: order.id, actorUserId: ctx.user!.id });
+        const [totals] = await tx
+          .select({ totalGross: orders.totalGross })
+          .from(orders)
+          .where(eq(orders.id, order.id))
+          .limit(1);
 
-        return { order, pricing: lockedPricing };
+        return { order, pricing: { ...lockedPricing, totalGross: totals?.totalGross ?? lockedPricing.totalGross } };
       });
 
       return {
@@ -826,6 +833,11 @@ export const ordersRouter = router({
       }));
 
       const result = await db.transaction(async (tx) => {
+        await releasePartnerWalletForOrder(tx, {
+          orderId: input.orderId,
+          actorUserId: ctx.user!.id,
+          reason: "Modifica righe ordine",
+        });
         if (pricing.allowance) {
           await reverseAllowanceConsumptionsForOrder(tx, {
             orderId: input.orderId,
@@ -946,7 +958,13 @@ export const ordersRouter = router({
             orderItemIdsByPricingLine: insertedItems.map((item) => item.id),
           });
         }
-        return lockedPricing;
+        await applyPartnerWalletToOrder(tx, { orderId: input.orderId, actorUserId: ctx.user!.id });
+        const [totals] = await tx
+          .select({ totalGross: orders.totalGross })
+          .from(orders)
+          .where(eq(orders.id, input.orderId))
+          .limit(1);
+        return { ...lockedPricing, totalGross: totals?.totalGross ?? lockedPricing.totalGross };
       });
 
       return {

@@ -27,6 +27,7 @@ import {
 import { useIsMobile } from "@/hooks/useMobile";
 import {
   FileText,
+  Gift,
   LayoutDashboard,
   LogOut,
   Package,
@@ -46,6 +47,7 @@ const partnerMenuItems = [
   { icon: Package, label: "Catalogo", path: "/partner-portal/catalog" },
   { icon: ShoppingCart, label: "Carrello", path: "/partner-portal/cart" },
   { icon: FileText, label: "Ordini", path: "/partner-portal/orders" },
+  { icon: Gift, label: "Promo e Card", path: "/partner-portal/promo" },
   { icon: Warehouse, label: "Magazzino", path: "/partner-portal/magazzino", placeholder: true },
   { icon: User, label: "Profilo", path: "/partner-portal/profilo", placeholder: true },
 ];

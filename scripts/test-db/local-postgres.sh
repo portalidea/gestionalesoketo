@@ -112,6 +112,7 @@ reset_database() {
     drizzle/migrations/0050_order_item_partial_fulfillment_exception.sql
     drizzle/migrations/0051_amazon_daily_order_import.sql
     drizzle/migrations/0052_amazon_durable_report_processing.sql
+    drizzle/migrations/0053_partner_program_wallet.sql
   )
 
   for file in "${files[@]}"; do

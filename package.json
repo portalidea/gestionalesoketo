@@ -36,6 +36,7 @@
     "testdb:intercompany:report": "tsx scripts/test-intercompany-transfers-report.ts",
     "testdb:intercompany:manual": "tsx scripts/test-manual-intercompany-transfer.ts",
     "testdb:prospect-simulator": "tsx scripts/test-prospect-pricing-simulator.ts",
+    "testdb:partner-program": "tsx scripts/test-partner-program-wallet.ts",
     "testdb:regression": "bash scripts/test-db/run-regression.sh"
   },
   "dependencies": {

@@ -9,6 +9,7 @@
  * registerPayment() / cancelPayment() handle axis 2.
  * modifyOrderItems() remains unchanged (operates on pending orders).
  */
+import { applyPartnerWalletToOrder, releasePartnerWalletForOrder } from "./partnerProgramService";
 import { TRPCError } from "@trpc/server";
 import { eq, and, sql } from "drizzle-orm";
 import { getDb } from "../db";
@@ -656,6 +657,11 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
   // 3. Transaction: replace rows using the same selective FEFO allocation as backoffice.
   await db.transaction(async (tx) => {
     if (!isEventOrder) {
+      await releasePartnerWalletForOrder(tx, {
+        orderId: input.orderId,
+        actorUserId: input.actorUserId,
+        reason: "Ordine modificato",
+      });
       await reverseAllowanceConsumptionsForOrder(tx, {
         orderId: input.orderId,
         createdBy: input.actorUserId,
@@ -767,6 +773,10 @@ export async function modifyOrderItems(input: ModifyOrderItemsInput): Promise<Mo
         updatedAt: new Date(),
       })
       .where(eq(orders.id, input.orderId));
+
+    if (!isEventOrder) {
+      await applyPartnerWalletToOrder(tx, { orderId: input.orderId, actorUserId: input.actorUserId });
+    }
   });
 
   let ficUpdated = false;

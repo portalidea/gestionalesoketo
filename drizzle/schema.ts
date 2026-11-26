@@ -11,6 +11,7 @@ import {
   numeric,
   pgEnum,
   pgTable,
+  smallint,
   text,
   timestamp,
   unique,
@@ -198,6 +199,8 @@ export const retailers = pgTable("retailers", {
   // M13: alert scadenze rivenditori
   isActive: boolean("isActive").default(true).notNull(),
   expiryAlertOptOut: boolean("expiryAlertOptOut").default(false).notNull(),
+  // 0053: punto vendita FoodApps4All (tbl_store_location.id) per il Programma Partner
+  foodappsStoreId: integer("foodapps_store_id"),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -1279,6 +1282,7 @@ export const orderServiceLines = pgTable("order_service_lines", {
   vatRate: numeric("vat_rate", { precision: 5, scale: 2 }).notNull(),
   lineTotalNet: numeric("line_total_net", { precision: 12, scale: 2 }).notNull(),
   lineTotalGross: numeric("line_total_gross", { precision: 12, scale: 2 }).notNull(),
+  partnerProgramStatementId: uuid("partner_program_statement_id").references(() => partnerProgramStatements.id, { onDelete: "restrict" }),
   createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index("idx_order_service_lines_order").on(t.orderId), index("idx_order_service_lines_company").on(t.companyId, t.createdAt)]);
 export type OrderServiceLine = typeof orderServiceLines.$inferSelect;
@@ -1359,6 +1363,84 @@ export const orderPromotionBonuses = pgTable("order_promotion_bonuses", {
   updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index("idx_order_promotion_bonuses_company_status").on(t.companyId, t.status, t.createdAt), index("idx_order_promotion_bonuses_retailer").on(t.retailerId, t.createdAt)]);
 export type OrderPromotionBonus = typeof orderPromotionBonuses.$inferSelect;
+
+// 0053 — Programma Partner SoKeto: borsellino promo app (FoodApps4All).
+export const partnerProgramSettings = pgTable("partner_program_settings", {
+  id: smallint("id").primaryKey().default(1),
+  billingCompanyId: uuid("billing_company_id").notNull().references(() => companies.id, { onDelete: "restrict" }),
+  creditVatRate: numeric("credit_vat_rate", { precision: 5, scale: 2 }).default("10.00").notNull(),
+  contributionVatRate: numeric("contribution_vat_rate", { precision: 5, scale: 2 }).default("10.00").notNull(),
+  importStartDate: date("import_start_date").notNull(),
+  lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
+  lastSyncError: text("last_sync_error"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const partnerProgramStatements = pgTable("partner_program_statements", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  retailerId: uuid("retailer_id").notNull().references(() => retailers.id, { onDelete: "restrict" }),
+  billingCompanyId: uuid("billing_company_id").notNull().references(() => companies.id, { onDelete: "restrict" }),
+  periodMonth: date("period_month").notNull(),
+  eventCount: integer("event_count").default(0).notNull(),
+  creditGross: numeric("credit_gross", { precision: 12, scale: 2 }).default("0").notNull(),
+  contributionGross: numeric("contribution_gross", { precision: 12, scale: 2 }).default("0").notNull(),
+  adjustmentGross: numeric("adjustment_gross", { precision: 12, scale: 2 }).default("0").notNull(),
+  creditVatRate: numeric("credit_vat_rate", { precision: 5, scale: 2 }).notNull(),
+  contributionVatRate: numeric("contribution_vat_rate", { precision: 5, scale: 2 }).notNull(),
+  creditNet: numeric("credit_net", { precision: 12, scale: 2 }).default("0").notNull(),
+  contributionNet: numeric("contribution_net", { precision: 12, scale: 2 }).default("0").notNull(),
+  validUntil: date("valid_until").notNull(),
+  status: text("status").default("open").notNull(),
+  closedAt: timestamp("closed_at", { withTimezone: true }).defaultNow().notNull(),
+  settledAt: timestamp("settled_at", { withTimezone: true }),
+  expiredAt: timestamp("expired_at", { withTimezone: true }),
+  contributionFicDocumentId: text("contribution_fic_document_id"),
+}, (t) => [
+  unique("partner_program_statements_period_unique").on(t.retailerId, t.periodMonth),
+  index("idx_partner_program_statements_retailer_status").on(t.retailerId, t.status, t.validUntil),
+]);
+export type PartnerProgramStatement = typeof partnerProgramStatements.$inferSelect;
+
+export const partnerProgramEvents = pgTable("partner_program_events", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  source: text("source").notNull(),
+  sourceId: bigint("source_id", { mode: "number" }).notNull(),
+  foodappsStoreId: integer("foodapps_store_id").notNull(),
+  storeName: text("store_name"),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+  label: text("label"),
+  campaignKey: text("campaign_key"),
+  purchaseGross: numeric("purchase_gross", { precision: 12, scale: 2 }).default("0").notNull(),
+  discountGross: numeric("discount_gross", { precision: 12, scale: 2 }).default("0").notNull(),
+  creditGross: numeric("credit_gross", { precision: 12, scale: 2 }).default("0").notNull(),
+  contributionGross: numeric("contribution_gross", { precision: 12, scale: 2 }).default("0").notNull(),
+  cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+  statementId: uuid("statement_id").references(() => partnerProgramStatements.id, { onDelete: "restrict" }),
+  adjustedInStatementId: uuid("adjusted_in_statement_id").references(() => partnerProgramStatements.id, { onDelete: "restrict" }),
+  firstSyncedAt: timestamp("first_synced_at", { withTimezone: true }).defaultNow().notNull(),
+  lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  unique("partner_program_events_source_unique").on(t.source, t.sourceId),
+  index("idx_partner_program_events_store_time").on(t.foodappsStoreId, t.occurredAt),
+  index("idx_partner_program_events_statement").on(t.statementId),
+]);
+export type PartnerProgramEvent = typeof partnerProgramEvents.$inferSelect;
+
+export const partnerProgramApplications = pgTable("partner_program_applications", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  statementId: uuid("statement_id").notNull().references(() => partnerProgramStatements.id, { onDelete: "restrict" }),
+  orderId: uuid("order_id").notNull().references(() => orders.id, { onDelete: "restrict" }),
+  entryType: text("entry_type").default("apply").notNull(),
+  reversesApplicationId: uuid("reverses_application_id"),
+  creditNetApplied: numeric("credit_net_applied", { precision: 12, scale: 2 }).default("0").notNull(),
+  contributionNetCharged: numeric("contribution_net_charged", { precision: 12, scale: 2 }).default("0").notNull(),
+  reversalReason: text("reversal_reason"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("idx_partner_program_applications_statement").on(t.statementId, t.createdAt),
+  index("idx_partner_program_applications_order").on(t.orderId),
+]);
 
 // M7-A — Affiliates module
 export const affiliateStatusEnum = pgEnum("affiliate_status", ["active", "inactive"]);

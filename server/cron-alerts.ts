@@ -7,6 +7,7 @@
  *
  * Auth: Bearer token matching CRON_SECRET env var (or no auth in dev)
  */
+import { runPartnerProgramDaily } from "./services/partnerProgramService";
 import { Router, Request, Response } from "express";
 import { eq, and, sql, lt, gte } from "drizzle-orm";
 import { getDb } from "./db";
@@ -41,6 +42,7 @@ export type ScheduledDispatcherResult = {
     companies: number;
     results: Array<Awaited<ReturnType<typeof runExpiryAlertForCompany>>>;
   };
+  partnerProgram: { ok: boolean; result?: Awaited<ReturnType<typeof runPartnerProgramDaily>>; error?: string };
   shopifyOrderSync: {
     scheduled: boolean;
     stores: number;
@@ -359,10 +361,21 @@ export async function runScheduledDispatcher(input: {
     results: shopifySync.stores,
   };
 
+  // Programma Partner: copia convalide FoodApps4All, chiusura mese precedente
+  // (idempotente) e scadenza crediti. Un errore qui non blocca gli altri job.
+  let partnerProgram: ScheduledDispatcherResult["partnerProgram"];
+  try {
+    partnerProgram = { ok: true, result: await runPartnerProgramDaily({ now }) };
+  } catch (err: any) {
+    console.error("[cron/dispatcher] partnerProgram failed:", err);
+    partnerProgram = { ok: false, error: String(err?.message ?? err) };
+  }
+
   return {
     date: now.toISOString().slice(0, 10),
     tierEvaluation,
     expiryAlerts,
+    partnerProgram,
     shopifyOrderSync,
   };
 }

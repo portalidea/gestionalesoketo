@@ -81,6 +81,7 @@ const baseMenuItems: MenuItem[] = [
   { icon: ShoppingCart, label: "Ordini", path: "/orders" },
   { icon: Handshake, label: "Affiliati", path: "/affiliates" },
   { icon: Euro, label: "Commissioni", path: "/affiliates/commissions" },
+  { icon: Gift, label: "Promo app partner", path: "/partner-program" },
   { icon: Plug, label: "Marketplace — Shopify", path: "/marketplace/shopify" },
   { icon: AlertTriangle, label: "Alert", path: "/alerts" },
   { icon: Download, label: "Export Magazzino", path: "/inventory/export" },

@@ -1,4 +1,6 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { PartnerProgramRetailerSection } from "@/components/PartnerProgramPanel";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -101,6 +103,7 @@ export default function RetailerDetail() {
   const [, setLocation] = useLocation();
   const retailerId = params?.id ?? "";
   const utils = trpc.useUtils();
+  const { user } = useAuth();
 
   const { data, isLoading } = trpc.retailers.getDetails.useQuery(
     { id: retailerId },
@@ -654,6 +657,8 @@ export default function RetailerDetail() {
             </div>
           </CardContent>
         </Card>
+
+        <PartnerProgramRetailerSection retailerId={retailerId} canEdit={user?.role === "admin"} />
 
         {allowanceQuery.data?.allowance && (
           <Card className="border-[#7AB648]/40 bg-[#7AB648]/5">

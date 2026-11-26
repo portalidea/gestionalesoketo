@@ -30,6 +30,7 @@ import {
 } from "./fic-integration";
 import { ddtImportsRouter } from "./ddt-imports-router";
 import { retailerPortalRouter } from "./retailer-portal-router";
+import { partnerProgramRouter } from "./partner-program-router";
 import { ordersRouter } from "./orders-router";
 import { catalogPortalRouter } from "./catalog-portal-router";
 import { retailerCheckoutRouter } from "./retailer-checkout-router";
@@ -2250,6 +2251,8 @@ export const appRouter = router({
   promotions: promotionsRouter,
   // ============= M13 — EXPIRY ALERTS =============
   expiryAlerts: expiryAlertsRouter,
+  // ============= 0053 — PROGRAMMA PARTNER (promo app) =============
+  partnerProgram: partnerProgramRouter,
 });
 
 export type AppRouter = typeof appRouter;

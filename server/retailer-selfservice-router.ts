@@ -33,6 +33,7 @@ import {
   reverseAllowanceConsumptionsForOrder,
 } from "./services/retailerAllowanceService";
 import { cancelOrderWithTransferReversal } from "./services/orderTransferReversal";
+import { applyPartnerWalletToOrder, releasePartnerWalletForOrder } from "./services/partnerProgramService";
 import { sendEmail } from "./email";
 import { ENV } from "./_core/env";
 import { uuidSchema } from "../shared/schemas";
@@ -409,8 +410,15 @@ export const retailerSelfServiceRouter = router({
           pricing,
           orderItemIdsByPricingLine: insertedItems.map((item) => item.id),
         });
+        // Programma Partner: abbuono e contributo del mese precedente.
+        await applyPartnerWalletToOrder(tx, { orderId: order.id, actorUserId: ctx.user.id });
+        const [totals] = await tx
+          .select({ subtotalNet: orders.subtotalNet, vatAmount: orders.vatAmount, totalGross: orders.totalGross })
+          .from(orders)
+          .where(eq(orders.id, order.id))
+          .limit(1);
 
-        return { order, pricing };
+        return { order, pricing: { ...pricing, ...totals } };
       });
 
       // Send order summary email to retailer
@@ -750,6 +758,11 @@ export const retailerSelfServiceRouter = router({
 
       // Update in transaction
       const pricing = await database.transaction(async (tx) => {
+        await releasePartnerWalletForOrder(tx, {
+          orderId: input.orderId,
+          actorUserId: ctx.user.id,
+          reason: "Ordine modificato",
+        });
         await reverseAllowanceConsumptionsForOrder(tx, {
           orderId: input.orderId,
           createdBy: ctx.user.id,
@@ -795,7 +808,13 @@ export const retailerSelfServiceRouter = router({
           pricing: nextPricing,
           orderItemIdsByPricingLine: insertedItems.map((item) => item.id),
         });
-        return nextPricing;
+        await applyPartnerWalletToOrder(tx, { orderId: input.orderId, actorUserId: ctx.user.id });
+        const [totals] = await tx
+          .select({ totalGross: orders.totalGross })
+          .from(orders)
+          .where(eq(orders.id, input.orderId))
+          .limit(1);
+        return { ...nextPricing, totalGross: totals?.totalGross ?? nextPricing.totalGross };
       });
 
       // Send email notification
